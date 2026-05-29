@@ -45,28 +45,34 @@ One-to-one with `User`. The public-facing profile.
 
 ---
 
+### `musicians.Instrument` + `musicians.Genre` (Phase 1 — 1.3 ✅)
+
+**App:** `apps/musicians` | **Migration:** `0002_*`
+Seeded via `python manage.py seed_music_data` (44 instruments, 31 genres). Idempotent.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `name` | CharField(100) | Unique |
+| `slug` | SlugField(100) | Unique. Auto-derived from name on save. |
+
+`MusicianProfile.instruments` — M2M through `MusicianInstrument` (with `proficiency`).
+`MusicianProfile.genres` — plain M2M.
+
+### `musicians.MusicianInstrument` (through model, Phase 1 — 1.3 ✅)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `profile` | ForeignKey → MusicianProfile | Cascade delete |
+| `instrument` | ForeignKey → Instrument | Cascade delete |
+| `proficiency` | CharField | `beginner` / `intermediate` / `advanced` |
+
+Unique constraint on `(profile, instrument)`.
+
+---
+
 ## Planned models (Phase 1)
-
-### `musicians.Instrument`
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | UUIDField (PK) | UUIDv7 |
-| `name` | CharField(100) | Unique. e.g. "Electric Guitar", "Tabla" |
-| `slug` | SlugField | Unique. For filtering. |
-
-### `musicians.Genre`
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | UUIDField (PK) | UUIDv7 |
-| `name` | CharField(100) | Unique. e.g. "Jazz", "Carnatic", "Metal" |
-| `slug` | SlugField | Unique. For filtering. |
-
-### `musicians.MusicianProfile` M2M relations
-
-- `instruments` → M2M to `Instrument` (through table with `proficiency` level)
-- `genres` → M2M to `Genre`
 
 ---
 
