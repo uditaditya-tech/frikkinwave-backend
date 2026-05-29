@@ -16,7 +16,7 @@ A global, profile-centric social network for musicians and live-shows industry p
 
 | Layer | Choice | Why |
 |---|---|---|
-| Framework | Django 4.x + DRF | Three-layer architecture fits naturally; battle-tested |
+| Framework | Django 6.x + DRF | Three-layer architecture fits naturally; battle-tested |
 | Auth | simplejwt + blacklist app | Refresh token rotation with blacklisting |
 | Database | PostgreSQL + pgvector | One store for relational data AND embeddings |
 | Background jobs | Celery + Redis | Async embedding generation on profile save |
