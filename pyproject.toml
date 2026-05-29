@@ -30,6 +30,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "*/migrations/*.py" = ["E501", "RUF012"]
 "*/settings/*.py" = ["F403", "F405"]  # star imports in settings files
+"*/admin.py" = ["RUF012"]             # Django admin class attrs are framework convention
+"*/serializers.py" = ["RUF012"]       # ModelSerializer.Meta.fields — django-stubs plugin crashes on ClassVar here
 
 [tool.ruff.format]
 quote-style = "double"
@@ -44,6 +46,12 @@ strict = true
 plugins = ["mypy_django_plugin.main"]
 
 # Packages without type stubs
+[[tool.mypy.overrides]]
+# Django admin classes (ModelAdmin[T]) are generic in stubs but not subscriptable
+# at runtime — skip type-arg errors in all admin modules.
+module = ["apps.*.admin"]
+disable_error_code = ["type-arg"]
+
 [[tool.mypy.overrides]]
 module = [
     "environ.*",

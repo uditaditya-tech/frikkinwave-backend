@@ -18,6 +18,8 @@ urlpatterns = [
     path("api/auth/", include("apps.users.urls")),
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token-obtain-pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    # Musicians
+    path("api/musicians/", include("apps.musicians.urls")),
     # OpenAPI schema + docs (local / staging only — gated in production via SPECTACULAR_SETTINGS)
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),

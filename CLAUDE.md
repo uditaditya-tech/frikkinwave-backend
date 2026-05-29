@@ -182,7 +182,12 @@ Manual run: `pre-commit run --all-files`
 ## Known gotchas
 
 - **mypy + django-stubs version pins:** `mypy<2.0` and `django-stubs<6.0`. mypy 2.0 + django-stubs 6.x are incompatible. Do not upgrade.
-- **RUF012 vs DRF views:** DRF stubs declare `authentication_classes` / `permission_classes` as instance variables. Adding `ClassVar` makes mypy error. Use `# noqa: RUF012` on those lines instead of `ClassVar`.
+- **RUF012 — where ClassVar applies and where it doesn't:**
+  - ✅ Use `ClassVar` on model `Meta.ordering`, `Meta.constraints`, `REQUIRED_FIELDS` — genuine class-level attributes the django-stubs plugin understands.
+  - ❌ Do NOT use `ClassVar` on `ModelSerializer.Meta.fields` — the django-stubs plugin crashes. Suppressed via `*/serializers.py = ["RUF012"]` in pyproject.toml.
+  - ❌ Do NOT use `ClassVar` on DRF view `authentication_classes` / `permission_classes` — stubs declare them as instance vars; use `# noqa: RUF012` on those two lines.
+  - ❌ Do NOT use `ClassVar` on Django admin attributes — suppressed via `*/admin.py = ["RUF012"]` in pyproject.toml. Also: `ModelAdmin[T]` generic is stubs-only — not subscriptable at runtime; suppressed via `disable_error_code = ["type-arg"]` mypy override for `apps.*.admin`.
+- **Cross-app type references in services:** Import concrete model types under `TYPE_CHECKING` guard only (`if TYPE_CHECKING: from apps.users.models import User`). Use the type in annotations freely — no runtime coupling. In views, use `cast(User, request.user)` since `IsAuthenticated` guarantees a concrete user.
 - **environ missing stubs:** `django-environ` has no type stubs. Add `environ.*` to `ignore_missing_imports` in pyproject.toml.
 - **M2M with through model — model ordering:** Define the through model (e.g. `MusicianInstrument`) *before* the model that declares the M2M field. Use a string FK (`"MusicianProfile"`) in the through model to avoid a circular reference. This lets the M2M field use a direct `through=MusicianInstrument` reference and mypy resolves the type cleanly — no `Any` needed.
 - **`Model.save()` override + django-stubs:** Overriding `save()` with `*args, **kwargs` causes `arg-type` errors because django-stubs types `save()` with concrete keyword parameters. Avoid save() overrides where possible — set slugs / defaults explicitly in serializers and management commands instead.
