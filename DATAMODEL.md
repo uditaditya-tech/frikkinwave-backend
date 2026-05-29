@@ -72,24 +72,26 @@ Unique constraint on `(profile, instrument)`.
 
 ---
 
-## Planned models (Phase 1 — remaining)
+### `connections.ContactRequest` (Phase 1 — 1.7 ✅)
 
-### `connections.ContactRequest` (sub-step 1.7)
-
-New app: `apps/connections`
+A one-directional request from one user to connect with another.
+**App:** `apps/connections` | **Migration:** `0001_initial`
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
-| `sender` | ForeignKey → User | String ref to avoid cross-app model import |
-| `recipient` | ForeignKey → User | String ref |
+| `sender` | ForeignKey → `AUTH_USER_MODEL` | `related_name="sent_contact_requests"`. String ref — no cross-app model import. |
+| `recipient` | ForeignKey → `AUTH_USER_MODEL` | `related_name="received_contact_requests"`. String ref. |
 | `message` | TextField | Optional intro message (blank=True) |
-| `status` | CharField | `pending` / `accepted` / `declined` |
+| `status` | CharField(10) | `pending` / `accepted` / `declined`. Default `pending`. |
 | `created_at` | DateTimeField | `auto_now_add` |
 | `updated_at` | DateTimeField | `auto_now` |
 
 Unique constraint on `(sender, recipient)`.
-Flow: send → email notification → accept/decline → contact info revealed.
+Self-requests rejected in the service layer.
+Username → user resolution goes through `apps.users.services.get_user_by_username` (no model import).
+Flow: send → accept/decline → contact email revealed to both parties once accepted.
+**Email notification on send/accept is deferred to Phase 2** (handled by a Celery task once the worker + broker land).
 
 ---
 

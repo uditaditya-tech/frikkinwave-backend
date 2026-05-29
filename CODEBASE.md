@@ -19,7 +19,7 @@ frikkinwave-backend/
 │   │   │   └── 0001_initial.py
 │   │   ├── models.py              # User (UUIDv7 PK, email login, username slug)
 │   │   ├── serializers.py         # RegisterSerializer
-│   │   ├── services.py            # register_user()
+│   │   ├── services.py            # register_user(), get_user_by_username()
 │   │   ├── urls.py                # /register/, /logout/
 │   │   ├── views.py               # RegisterView, LogoutView
 │   │   └── tests/
@@ -27,24 +27,38 @@ frikkinwave-backend/
 │   │       ├── conftest.py        # users-app-specific fixtures (currently empty)
 │   │       └── test_auth.py       # 15 tests: register, login, refresh, logout
 │   │
-│   └── musicians/                 # Musician profiles, instruments, genres
+│   ├── musicians/                 # Musician profiles, instruments, genres
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.musicians", label="musicians"
+│   │   ├── migrations/
+│   │   │   ├── 0001_initial.py    # MusicianProfile
+│   │   │   └── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
+│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
+│   │   ├── serializers.py         # Read + Write serializers for profiles
+│   │   ├── services.py            # create_profile(), update_profile(), list_profiles(), get_public_profile()
+│   │   ├── urls.py                # /profiles/, /profiles/<username>/, /profile/, /profile/me/
+│   │   ├── views.py               # ProfileListView, ProfilePublicView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
+│   │   ├── management/
+│   │   │   └── commands/
+│   │   │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py        # instrument, genre, profile fixtures
+│   │       └── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
+│   │
+│   └── connections/               # Contact requests between users (send → accept/decline → reveal)
 │       ├── admin.py
-│       ├── apps.py                # name="apps.musicians", label="musicians"
+│       ├── apps.py                # name="apps.connections", label="connections"
 │       ├── migrations/
-│       │   ├── 0001_initial.py    # MusicianProfile
-│       │   └── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
-│       ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
-│       ├── serializers.py         # Read + Write serializers for profiles
-│       ├── services.py            # create_profile(), update_profile(), list_profiles(), get_public_profile()
-│       ├── urls.py                # /profiles/, /profiles/<username>/, /profile/, /profile/me/
-│       ├── views.py               # ProfileListView, ProfilePublicView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
-│       ├── management/
-│       │   └── commands/
-│       │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
+│       │   └── 0001_initial.py    # ContactRequest
+│       ├── models.py              # ContactRequest (sender/recipient FKs via AUTH_USER_MODEL string ref)
+│       ├── serializers.py         # Read (conditional contact_email reveal) + Create
+│       ├── services.py            # send / list / get / accept / decline; calls users.services for username lookup
+│       ├── urls.py                # /requests/, /requests/<id>/, /requests/<id>/accept/, /decline/
+│       ├── views.py               # ListCreate, Detail, Accept, Decline views
 │       └── tests/
 │           ├── __init__.py
-│           ├── conftest.py        # instrument, genre, profile fixtures
-│           └── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
+│           └── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py
@@ -95,6 +109,11 @@ frikkinwave-backend/
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |
 | GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile |
 | PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile |
+| POST | `/api/connections/requests/` | Bearer | Send a contact request (by recipient username) |
+| GET | `/api/connections/requests/` | Bearer | List own requests (`?box=incoming\|outgoing`) |
+| GET | `/api/connections/requests/<id>/` | Bearer | Retrieve a request you are party to |
+| POST | `/api/connections/requests/<id>/accept/` | Bearer | Recipient accepts (reveals contact email) |
+| POST | `/api/connections/requests/<id>/decline/` | Bearer | Recipient declines |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 

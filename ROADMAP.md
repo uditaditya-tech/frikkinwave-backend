@@ -34,7 +34,7 @@ Stop here = shippable v1 on frikkinwave.com
 | 1.4 Profile create / update / retrieve endpoints + tests | ✅ |
 | 1.5 Browse + filter profiles (city, country, instrument, genre) + tests | ✅ |
 | 1.6 Public profile view (unauthenticated) + tests | ✅ |
-| 1.7 ContactRequest flow (send → email → accept/decline → reveal) + tests | ⬜ |
+| 1.7 ContactRequest flow (send → accept/decline → reveal) + tests | ✅ (email → Phase 2 w/ Celery) |
 | 1.8 Dockerfile (multi-stage, collectstatic baked in) | ⬜ |
 | 1.9 ECR repo + push script; ECS task definition + Fargate service + ALB | ⬜ |
 | 1.10 RDS Postgres + secrets in SSM/Secrets Manager | ⬜ |
@@ -48,6 +48,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 
 - pgvector extension + ProfileEmbedding model
 - Celery worker + Redis broker
+- Contact request email notifications (send → notify recipient; accept → notify sender) — deferred here from 1.7, wired as Celery tasks
 - Embedding pipeline: profile save → Celery task → OpenAI text-embedding-3-small → pgvector store
 - Semantic search endpoint: natural language query → embedding → nearest-neighbor retrieval
 - Compatibility blurb: gpt-4o-mini generates "Why you might click" per profile pair, cached

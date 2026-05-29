@@ -22,3 +22,13 @@ def register_user(*, email: str, username: str, password: str) -> User:
     user = User.objects.create_user(email=email, username=username, password=password)
     logger.info("user_registered", extra={"user_id": str(user.id), "email": user.email})
     return user
+
+
+def get_user_by_username(*, username: str) -> User | None:
+    """
+    Return the user with the given username (case-insensitive), or None.
+
+    Public cross-app entry point: other apps resolve a username to a user
+    through this function rather than importing the User model directly.
+    """
+    return User.objects.filter(username__iexact=username).first()
