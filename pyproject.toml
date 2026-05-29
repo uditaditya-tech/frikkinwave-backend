@@ -23,15 +23,14 @@ select = [
     "RUF", # ruff-specific
 ]
 ignore = [
-    "E501",  # line too long — handled by formatter
-    "B008",  # do not perform function call in default arguments
+    "E501",   # line too long — handled by formatter
+    "B008",   # do not perform function call in default arguments
+    "RUF012", # mutable class defaults — fires on Django Meta / DRF view / admin / serializer attrs, which are framework-defined slots, not accidental shared state
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"*/migrations/*.py" = ["E501", "RUF012"]
+"*/migrations/*.py" = ["E501"]
 "*/settings/*.py" = ["F403", "F405"]  # star imports in settings files
-"*/admin.py" = ["RUF012"]             # Django admin class attrs are framework convention
-"*/serializers.py" = ["RUF012"]       # ModelSerializer.Meta.fields — django-stubs plugin crashes on ClassVar here
 
 [tool.ruff.format]
 quote-style = "double"

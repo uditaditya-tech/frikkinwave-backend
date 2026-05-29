@@ -141,8 +141,8 @@ Pattern: **URL → View → Serializer → Service → Model**
 All endpoints require JWT by default (`REST_FRAMEWORK` in `base.py`).
 To make an endpoint public, explicitly set BOTH on the view:
 ```python
-authentication_classes = [JWTAuthentication]  # noqa: RUF012
-permission_classes = [AllowAny]               # noqa: RUF012
+authentication_classes = [JWTAuthentication]
+permission_classes = [AllowAny]
 ```
 (See CLAUDE.md for the 401→403 gotcha explanation.)
 

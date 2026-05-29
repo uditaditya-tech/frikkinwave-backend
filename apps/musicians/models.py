@@ -21,7 +21,6 @@ Design decisions:
 """
 
 import uuid
-from typing import ClassVar
 
 import uuid6
 from django.conf import settings
@@ -47,7 +46,7 @@ class Instrument(models.Model):
     slug = models.SlugField(max_length=100, unique=True)
 
     class Meta:
-        ordering: ClassVar[list[str]] = ["name"]
+        ordering = ["name"]
 
     def __str__(self) -> str:
         return self.name
@@ -59,7 +58,7 @@ class Genre(models.Model):
     slug = models.SlugField(max_length=100, unique=True)
 
     class Meta:
-        ordering: ClassVar[list[str]] = ["name"]
+        ordering = ["name"]
 
     def __str__(self) -> str:
         return self.name
@@ -98,8 +97,8 @@ class MusicianInstrument(models.Model):
     )
 
     class Meta:
-        ordering: ClassVar[list[str]] = ["instrument__name"]
-        constraints: ClassVar[list[models.BaseConstraint]] = [
+        ordering = ["instrument__name"]
+        constraints = [
             models.UniqueConstraint(
                 fields=["profile", "instrument"],
                 name="unique_musician_instrument",
@@ -144,7 +143,7 @@ class MusicianProfile(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering: ClassVar[list[str]] = ["-created_at"]
+        ordering = ["-created_at"]
 
     def __str__(self) -> str:
         return f"MusicianProfile({self.user_id})"

@@ -9,7 +9,6 @@ Design decisions:
 """
 
 import uuid
-from typing import ClassVar
 
 import uuid6
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
@@ -66,14 +65,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS: ClassVar[list[str]] = ["username"]
+    REQUIRED_FIELDS = ["username"]
 
     objects: UserManager = UserManager()
 
     class Meta:
         verbose_name = "user"
         verbose_name_plural = "users"
-        ordering: ClassVar[list[str]] = ["-date_joined"]
+        ordering = ["-date_joined"]
 
     def __str__(self) -> str:
         return self.email

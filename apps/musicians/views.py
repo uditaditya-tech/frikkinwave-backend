@@ -31,8 +31,8 @@ class ProfileCreateView(APIView):
     Returns 409 if a profile already exists.
     """
 
-    authentication_classes = [JWTAuthentication]  # noqa: RUF012
-    permission_classes = [IsAuthenticated]  # noqa: RUF012
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = MusicianProfileWriteSerializer(data=request.data)
@@ -56,8 +56,8 @@ class ProfileMeView(APIView):
     PATCH /api/musicians/profile/me/ — partial update own profile
     """
 
-    authentication_classes = [JWTAuthentication]  # noqa: RUF012
-    permission_classes = [IsAuthenticated]  # noqa: RUF012
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def _get_profile(self, request: Request) -> MusicianProfile | None:
         return (

@@ -32,8 +32,8 @@ class RegisterView(APIView):
     demotion on AllowAny views.
     """
 
-    authentication_classes = [JWTAuthentication]  # noqa: RUF012
-    permission_classes = [AllowAny]  # noqa: RUF012
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
 
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = RegisterSerializer(data=request.data)
@@ -62,8 +62,8 @@ class LogoutView(APIView):
     Body: {"refresh": "<refresh_token>"}
     """
 
-    authentication_classes = [JWTAuthentication]  # noqa: RUF012
-    permission_classes = [IsAuthenticated]  # noqa: RUF012
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         refresh_token: Any = request.data.get("refresh")
