@@ -36,7 +36,7 @@ frikkinwave-backend/
 │       ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
 │       ├── serializers.py         # Read + Write serializers for profiles
 │       ├── services.py            # create_profile(), update_profile()
-│       ├── urls.py                # /profile/, /profile/me/
+│       ├── urls.py                # /profiles/, /profile/, /profile/me/
 │       ├── views.py               # ProfileCreateView, ProfileMeView
 │       ├── management/
 │       │   └── commands/
@@ -90,6 +90,7 @@ frikkinwave-backend/
 | POST | `/api/auth/token/` | None | Login, returns token pair |
 | POST | `/api/auth/token/refresh/` | Refresh token | Rotate refresh token |
 | POST | `/api/auth/logout/` | Bearer | Blacklist refresh token |
+| GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated) |
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |
 | GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile |
 | PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile |

@@ -9,7 +9,8 @@ import logging
 from typing import Any, cast
 
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import CursorPagination
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,10 +18,22 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.musicians.models import MusicianProfile
 from apps.musicians.serializers import MusicianProfileReadSerializer, MusicianProfileWriteSerializer
-from apps.musicians.services import ProfileAlreadyExistsError, create_profile, update_profile
+from apps.musicians.services import (
+    ProfileAlreadyExistsError,
+    create_profile,
+    list_profiles,
+    update_profile,
+)
 from apps.users.models import User
 
 logger = logging.getLogger(__name__)
+
+
+class ProfileCursorPagination(CursorPagination):
+    """Cursor pagination for the public profile feed — no COUNT(*), stable under inserts."""
+
+    page_size = 20
+    ordering = "-created_at"
 
 
 class ProfileCreateView(APIView):
@@ -48,6 +61,35 @@ class ProfileCreateView(APIView):
             MusicianProfileReadSerializer(profile).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class ProfileListView(APIView):
+    """
+    GET /api/musicians/profiles/
+
+    Public discovery feed. Unauthenticated access allowed.
+    Optional, combinable query params: ?city= ?country= ?instrument=<slug>
+    ?genre=<slug> ?available=true. Cursor-paginated.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        params = request.query_params
+        filters: dict[str, Any] = {}
+        for key in ("city", "country", "instrument", "genre"):
+            if value := params.get(key):
+                filters[key] = value
+        if "available" in params:
+            filters["available"] = params.get("available", "").lower() == "true"
+
+        queryset = list_profiles(filters=filters)
+
+        paginator = ProfileCursorPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        data = MusicianProfileReadSerializer(page, many=True).data
+        return paginator.get_paginated_response(data)
 
 
 class ProfileMeView(APIView):

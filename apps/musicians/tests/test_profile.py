@@ -9,11 +9,12 @@ Coverage:
 import pytest
 from rest_framework.test import APIClient
 
-from apps.musicians.models import Genre, Instrument, MusicianProfile
+from apps.musicians.models import Genre, Instrument, MusicianInstrument, MusicianProfile
 from apps.users.models import User
 
 PROFILE_URL = "/api/musicians/profile/"
 PROFILE_ME_URL = "/api/musicians/profile/me/"
+PROFILES_URL = "/api/musicians/profiles/"
 
 
 def _auth(api_client: APIClient, user: User) -> APIClient:
@@ -24,6 +25,35 @@ def _auth(api_client: APIClient, user: User) -> APIClient:
     )
     api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
     return api_client
+
+
+def _make_profile(
+    suffix: str,
+    *,
+    city: str = "Mumbai",
+    country: str = "India",
+    is_available: bool = True,
+    instruments: list[Instrument] | None = None,
+    genres: list[Genre] | None = None,
+) -> MusicianProfile:
+    """Create a user + profile with a unique identity for list/filter tests."""
+    owner = User.objects.create_user(
+        email=f"{suffix}@example.com",
+        username=f"user-{suffix}",
+        password="StrongPass123!",
+    )
+    profile = MusicianProfile.objects.create(
+        user=owner,
+        bio=f"bio {suffix}",
+        city=city,
+        country=country,
+        is_available=is_available,
+    )
+    for inst in instruments or []:
+        MusicianInstrument.objects.create(profile=profile, instrument=inst)
+    if genres:
+        profile.genres.set(genres)
+    return profile
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +181,6 @@ class TestUpdateProfile:
         instrument: Instrument,
     ) -> None:
         """PATCH without 'instruments' key must not clear existing instruments."""
-        from apps.musicians.models import MusicianInstrument
-
         MusicianInstrument.objects.create(
             profile=profile,
             instrument=instrument,
@@ -172,3 +200,81 @@ class TestUpdateProfile:
     def test_unauthenticated_returns_401(self, api_client: APIClient) -> None:
         response = api_client.patch(PROFILE_ME_URL, {"bio": "Updated"})
         assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# List + filter (public discovery feed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestListProfiles:
+    def test_unauthenticated_allowed(self, api_client: APIClient) -> None:
+        _make_profile("a")
+        response = api_client.get(PROFILES_URL)
+        assert response.status_code == 200
+
+    def test_unfiltered_returns_all(self, api_client: APIClient) -> None:
+        _make_profile("a")
+        _make_profile("b")
+        response = api_client.get(PROFILES_URL)
+        assert response.status_code == 200
+        assert len(response.data["results"]) == 2
+
+    def test_filter_by_city_case_insensitive(self, api_client: APIClient) -> None:
+        _make_profile("delhi", city="Delhi")
+        _make_profile("mumbai", city="Mumbai")
+        response = api_client.get(PROFILES_URL, {"city": "delhi"})
+        assert response.status_code == 200
+        assert len(response.data["results"]) == 1
+        assert response.data["results"][0]["city"] == "Delhi"
+
+    def test_filter_by_country(self, api_client: APIClient) -> None:
+        _make_profile("in", country="India")
+        _make_profile("us", country="USA")
+        response = api_client.get(PROFILES_URL, {"country": "USA"})
+        assert len(response.data["results"]) == 1
+        assert response.data["results"][0]["country"] == "USA"
+
+    def test_filter_by_instrument_slug(self, api_client: APIClient, instrument: Instrument) -> None:
+        other = Instrument.objects.create(name="Drums", slug="drums")
+        _make_profile("guitarist", instruments=[instrument])
+        _make_profile("drummer", instruments=[other])
+        response = api_client.get(PROFILES_URL, {"instrument": instrument.slug})
+        assert len(response.data["results"]) == 1
+
+    def test_filter_by_genre_slug(self, api_client: APIClient, genre: Genre) -> None:
+        other = Genre.objects.create(name="Rock", slug="rock")
+        _make_profile("jazzcat", genres=[genre])
+        _make_profile("rocker", genres=[other])
+        response = api_client.get(PROFILES_URL, {"genre": genre.slug})
+        assert len(response.data["results"]) == 1
+
+    def test_filter_by_available(self, api_client: APIClient) -> None:
+        _make_profile("free", is_available=True)
+        _make_profile("busy", is_available=False)
+        response = api_client.get(PROFILES_URL, {"available": "true"})
+        assert len(response.data["results"]) == 1
+        assert response.data["results"][0]["is_available"] is True
+
+    def test_combined_city_and_instrument(
+        self, api_client: APIClient, instrument: Instrument
+    ) -> None:
+        # Matches both filters.
+        _make_profile("match", city="Pune", instruments=[instrument])
+        # Right city, wrong instrument.
+        other = Instrument.objects.create(name="Bass", slug="bass")
+        _make_profile("wrong-inst", city="Pune", instruments=[other])
+        # Right instrument, wrong city.
+        _make_profile("wrong-city", city="Delhi", instruments=[instrument])
+        response = api_client.get(PROFILES_URL, {"city": "Pune", "instrument": instrument.slug})
+        assert len(response.data["results"]) == 1
+        assert response.data["results"][0]["city"] == "Pune"
+
+    def test_pagination_next_cursor_present(self, api_client: APIClient) -> None:
+        for i in range(21):  # page_size is 20
+            _make_profile(f"p{i}")
+        response = api_client.get(PROFILES_URL)
+        assert response.status_code == 200
+        assert len(response.data["results"]) == 20
+        assert response.data["next"] is not None

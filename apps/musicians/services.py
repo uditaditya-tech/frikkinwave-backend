@@ -11,6 +11,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from django.db.models import QuerySet
+
     from apps.users.models import User
 
 from apps.musicians.models import Genre, MusicianInstrument, MusicianProfile
@@ -71,6 +73,45 @@ def update_profile(*, profile: MusicianProfile, data: dict[str, Any]) -> Musicia
 
     logger.info("profile_updated", extra={"profile_id": str(profile.id)})
     return profile
+
+
+def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
+    """
+    Return the public discovery queryset, narrowed by the provided filters.
+
+    All filter keys are optional and combinable. Only keys present in `filters`
+    are applied. Recognised keys:
+      - city      → case-insensitive exact match
+      - country   → case-insensitive exact match
+      - instrument→ instrument slug
+      - genre     → genre slug
+      - available → True restricts to is_available=True; any other value is ignored
+
+    Ordering is left to the caller's paginator (CursorPagination orders by
+    -created_at). The queryset prefetches related rows to keep the nested
+    serializer free of N+1 queries.
+    """
+    queryset = MusicianProfile.objects.prefetch_related(
+        "musician_instruments__instrument",
+        "genres",
+    )
+
+    if city := filters.get("city"):
+        queryset = queryset.filter(city__iexact=city)
+    if country := filters.get("country"):
+        queryset = queryset.filter(country__iexact=country)
+    if instrument := filters.get("instrument"):
+        queryset = queryset.filter(instruments__slug=instrument)
+    if genre := filters.get("genre"):
+        queryset = queryset.filter(genres__slug=genre)
+    if filters.get("available") is True:
+        queryset = queryset.filter(is_available=True)
+
+    # M2M filters can duplicate rows across joins.
+    queryset = queryset.distinct()
+
+    logger.info("profiles_listed", extra={"filter_keys": sorted(filters.keys())})
+    return queryset
 
 
 # ---------------------------------------------------------------------------
