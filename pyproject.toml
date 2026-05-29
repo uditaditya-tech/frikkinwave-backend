@@ -1,0 +1,69 @@
+[project]
+name = "frikkinwave-backend"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+# ---------------------------------------------------------------------------
+# Ruff — linter + formatter (replaces flake8, isort, black)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "DJ",  # flake8-django
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+    "B008",  # do not perform function call in default arguments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/migrations/*.py" = ["E501", "RUF012"]
+"*/settings/*.py" = ["F403", "F405"]  # star imports in settings files
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Mypy — strict type checking
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["mypy_django_plugin.main"]
+
+# Packages without type stubs
+[[tool.mypy.overrides]]
+module = [
+    "factory.*",
+    "boto3.*",
+    "botocore.*",
+    "drf_spectacular.*",
+    "uuid6.*",
+    "pythonjsonlogger.*",
+]
+ignore_missing_imports = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings.local"
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.local"
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--strict-markers -v"
