@@ -4,22 +4,28 @@ Models for the musicians app.
 MusicianProfile extends the User with music-specific data.
 User → MusicianProfile is a one-to-one relationship created at profile setup time.
 
+Model order matters for forward references:
+  Instrument → Genre → MusicianInstrument → MusicianProfile
+MusicianInstrument references MusicianProfile as a string FK so it can be
+defined before MusicianProfile, allowing MusicianProfile.instruments to use
+a direct (non-string) through= reference.
+
 Design decisions:
-- city/country as free-text for Phase 1 simplicity; can normalise to lookup table
-  later via a migration if geo-search demands it.
+- city/country as free-text for Phase 1; normalise later if geo-search demands it.
 - is_available signals jam-partner availability — the Phase 1 anchor feature.
 - Reference AUTH_USER_MODEL via settings string to avoid cross-app model imports.
-- MusicianInstrument is an explicit through model so we can store proficiency level.
-- Genre is a plain M2M — no extra attributes needed on the join.
+- MusicianInstrument is an explicit through model to store proficiency level.
+- Slug on Instrument/Genre is set explicitly by the caller (serializer / management
+  command) — no save() override needed, which avoids fighting django-stubs' typed
+  Model.save() signature.
 """
 
 import uuid
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import uuid6
 from django.conf import settings
 from django.db import models
-from django.utils.text import slugify
 
 
 def _new_uuid() -> uuid.UUID:
@@ -46,11 +52,6 @@ class Instrument(models.Model):
     def __str__(self) -> str:
         return self.name
 
-    def save(self, *args: object, **kwargs: object) -> None:
-        if not self.slug:
-            self.slug = slugify(self.name)
-        super().save(*args, **kwargs)  # type: ignore[arg-type]
-
 
 class Genre(models.Model):
     id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
@@ -63,56 +64,10 @@ class Genre(models.Model):
     def __str__(self) -> str:
         return self.name
 
-    def save(self, *args: object, **kwargs: object) -> None:
-        if not self.slug:
-            self.slug = slugify(self.name)
-        super().save(*args, **kwargs)  # type: ignore[arg-type]
-
 
 # ---------------------------------------------------------------------------
-# Profile
-# ---------------------------------------------------------------------------
-
-
-class MusicianProfile(models.Model):
-    id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="musician_profile",
-    )
-
-    bio = models.TextField(blank=True)
-    city = models.CharField(max_length=100, blank=True)
-    country = models.CharField(max_length=100, blank=True)
-    is_available = models.BooleanField(default=True)
-
-    # Any annotation required: MusicianInstrument is defined after this class, so mypy
-    # cannot resolve the forward-referenced through model — known django-stubs limitation.
-    instruments: Any = models.ManyToManyField(
-        Instrument,
-        through="MusicianInstrument",
-        blank=True,
-        related_name="profiles",
-    )
-    genres = models.ManyToManyField(
-        Genre,
-        blank=True,
-        related_name="profiles",
-    )
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering: ClassVar[list[str]] = ["-created_at"]
-
-    def __str__(self) -> str:
-        return f"MusicianProfile({self.user_id})"
-
-
-# ---------------------------------------------------------------------------
-# Through model
+# Through model (defined before MusicianProfile so the M2M field can
+# reference it directly instead of via a forward-reference string)
 # ---------------------------------------------------------------------------
 
 
@@ -125,8 +80,9 @@ class MusicianInstrument(models.Model):
         ADVANCED = "advanced", "Advanced"
 
     id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
+    # String FK — MusicianProfile is defined after this class.
     profile = models.ForeignKey(
-        MusicianProfile,
+        "MusicianProfile",
         on_delete=models.CASCADE,
         related_name="musician_instruments",
     )
@@ -152,3 +108,43 @@ class MusicianInstrument(models.Model):
 
     def __str__(self) -> str:
         return f"{self.profile} — {self.instrument} ({self.proficiency})"
+
+
+# ---------------------------------------------------------------------------
+# Profile
+# ---------------------------------------------------------------------------
+
+
+class MusicianProfile(models.Model):
+    id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="musician_profile",
+    )
+
+    bio = models.TextField(blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+    is_available = models.BooleanField(default=True)
+
+    instruments = models.ManyToManyField(
+        Instrument,
+        through=MusicianInstrument,
+        blank=True,
+        related_name="profiles",
+    )
+    genres = models.ManyToManyField(
+        Genre,
+        blank=True,
+        related_name="profiles",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering: ClassVar[list[str]] = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"MusicianProfile({self.user_id})"

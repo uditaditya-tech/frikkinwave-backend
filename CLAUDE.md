@@ -184,8 +184,8 @@ Manual run: `pre-commit run --all-files`
 - **mypy + django-stubs version pins:** `mypy<2.0` and `django-stubs<6.0`. mypy 2.0 + django-stubs 6.x are incompatible. Do not upgrade.
 - **RUF012 vs DRF views:** DRF stubs declare `authentication_classes` / `permission_classes` as instance variables. Adding `ClassVar` makes mypy error. Use `# noqa: RUF012` on those lines instead of `ClassVar`.
 - **environ missing stubs:** `django-environ` has no type stubs. Add `environ.*` to `ignore_missing_imports` in pyproject.toml.
-- **M2M with forward-referenced through model:** If `MusicianInstrument` is defined after `MusicianProfile`, mypy can't resolve the through= type. Annotate as `Any` with an explanatory comment — do not use `# type: ignore` as the comment text, mypy will try to parse it.
-- **`Model.save()` override + django-stubs:** Overriding `save()` with `*args, **kwargs` causes `arg-type` on the `super().save()` call. Add `# type: ignore[arg-type]` to the super() line only.
+- **M2M with through model — model ordering:** Define the through model (e.g. `MusicianInstrument`) *before* the model that declares the M2M field. Use a string FK (`"MusicianProfile"`) in the through model to avoid a circular reference. This lets the M2M field use a direct `through=MusicianInstrument` reference and mypy resolves the type cleanly — no `Any` needed.
+- **`Model.save()` override + django-stubs:** Overriding `save()` with `*args, **kwargs` causes `arg-type` errors because django-stubs types `save()` with concrete keyword parameters. Avoid save() overrides where possible — set slugs / defaults explicitly in serializers and management commands instead.
 - **factory-boy + mypy strict:** Use typed wrapper helpers with `cast()` — bare factory calls fail strict mode.
 - **DRF 401→403:** See architecture conventions above.
 - **URL ordering:** Specific paths before catch-alls always.
