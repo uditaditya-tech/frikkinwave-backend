@@ -19,10 +19,10 @@ PASSWORD_HASHERS = [
 
 # Django Debug Toolbar (optional — only if installed)
 try:
-    import debug_toolbar  # type: ignore[import-untyped]  # noqa: F401
+    import debug_toolbar  # type: ignore[import-not-found]  # noqa: F401
 
-    INSTALLED_APPS = [*INSTALLED_APPS, "debug_toolbar"]  # type: ignore[name-defined]
-    MIDDLEWARE = ["debug_toolbar.middleware.DebugToolbarMiddleware", *MIDDLEWARE]  # type: ignore[name-defined]
+    INSTALLED_APPS = [*INSTALLED_APPS, "debug_toolbar"]
+    MIDDLEWARE = ["debug_toolbar.middleware.DebugToolbarMiddleware", *MIDDLEWARE]
     INTERNAL_IPS = ["127.0.0.1"]
 except ImportError:
     pass

@@ -182,6 +182,8 @@ Manual run: `pre-commit run --all-files`
 ## Known gotchas
 
 - **mypy + django-stubs version pins:** `mypy<2.0` and `django-stubs<6.0`. mypy 2.0 + django-stubs 6.x are incompatible. Do not upgrade.
+- **RUF012 vs DRF views:** DRF stubs declare `authentication_classes` / `permission_classes` as instance variables. Adding `ClassVar` makes mypy error. Use `# noqa: RUF012` on those lines instead of `ClassVar`.
+- **environ missing stubs:** `django-environ` has no type stubs. Add `environ.*` to `ignore_missing_imports` in pyproject.toml.
 - **factory-boy + mypy strict:** Use typed wrapper helpers with `cast()` — bare factory calls fail strict mode.
 - **DRF 401→403:** See architecture conventions above.
 - **URL ordering:** Specific paths before catch-alls always.

@@ -46,6 +46,7 @@ plugins = ["mypy_django_plugin.main"]
 # Packages without type stubs
 [[tool.mypy.overrides]]
 module = [
+    "environ.*",
     "factory.*",
     "boto3.*",
     "botocore.*",
