@@ -1,5 +1,5 @@
 """
-Production settings (Fly.io).
+Production settings (AWS ECS + Fargate).
 All secrets come from environment variables — never hardcoded here.
 """
 
@@ -12,7 +12,7 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 
 # HTTPS enforcement
 SECURE_SSL_REDIRECT = True
-SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]  # Fly.io internal health check
+SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]  # AWS ALB health check
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True

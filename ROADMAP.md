@@ -16,7 +16,7 @@ CI green, dev stack running, zero feature code.
 | 0.4 ruff + mypy strict + pre-commit hooks | ✅ |
 | 0.5 GitHub Actions CI (lint, type-check, migrate, pytest) | ✅ |
 | 0.6 docker-compose (Postgres 16 + Redis 7) | ✅ |
-| 0.7 drf-spectacular wired — /api/schema/ returns valid OpenAPI doc | ⬜ (needs live DB verify) |
+| 0.7 drf-spectacular wired — /api/schema/ returns valid OpenAPI doc | ✅ |
 | 0.8 Frontend repo — Next.js 14, TypeScript strict, ESLint, Prettier, shadcn/ui | ⬜ |
 | 0.9 Frontend CI + openapi-typescript script pointing at backend schema | ⬜ |
 
