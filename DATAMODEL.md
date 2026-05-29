@@ -123,24 +123,6 @@ Unique constraint on `(profile_a, profile_b)`.
 
 ---
 
-## Planned models (Phase 1 — contact system)
-
-### `connections.ContactRequest`
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | UUIDField (PK) | UUIDv7 |
-| `sender` | ForeignKey → User | |
-| `recipient` | ForeignKey → User | |
-| `message` | TextField | Optional intro message |
-| `status` | CharField | `pending` / `accepted` / `declined` |
-| `created_at` | DateTimeField | `auto_now_add` |
-| `updated_at` | DateTimeField | `auto_now` |
-
-Unique constraint on `(sender, recipient)`.
-
----
-
 ## Planned models (Phase 3 — gigs & auditions)
 
 ### `listings.Listing`

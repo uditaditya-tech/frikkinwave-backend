@@ -35,16 +35,16 @@ frikkinwave-backend/
 │       │   └── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
 │       ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
 │       ├── serializers.py         # Read + Write serializers for profiles
-│       ├── services.py            # create_profile(), update_profile()
+│       ├── services.py            # create_profile(), update_profile(), list_profiles()
 │       ├── urls.py                # /profiles/, /profile/, /profile/me/
-│       ├── views.py               # ProfileCreateView, ProfileMeView
+│       ├── views.py               # ProfileListView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
 │       ├── management/
 │       │   └── commands/
 │       │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
 │       └── tests/
 │           ├── __init__.py
 │           ├── conftest.py        # instrument, genre, profile fixtures
-│           └── test_profile.py    # 13 tests: create, retrieve, update
+│           └── test_profile.py    # 22 tests: create, retrieve, update, list + filter
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py
