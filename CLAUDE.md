@@ -31,8 +31,9 @@ See `CODEBASE.md` for directory structure and where things live.
 1. Draft a commit message and show it to the user.
 2. Wait for the user to approve or edit it.
 3. Only then run `git commit`.
-4. Never use `--amend` unless the user explicitly asks.
-5. Never use `--no-verify`.
+4. **"Commit" means commit + push.** When the user approves a commit, run `git commit` then `git push` automatically — no need to ask separately.
+5. Never use `--amend` unless the user explicitly asks.
+6. Never use `--no-verify`.
 
 ---
 
