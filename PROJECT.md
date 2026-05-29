@@ -21,7 +21,7 @@ A global, profile-centric social network for musicians and live-shows industry p
 | Database | PostgreSQL + pgvector | One store for relational data AND embeddings |
 | Background jobs | Celery + Redis | Async embedding generation on profile save |
 | AI | OpenAI text-embedding-3-small + gpt-4o-mini | Cheapest capable models; swap-able behind a service interface |
-| API contract | drf-spectacular → OpenAPI schema | Frontend auto-generates typed client via openapi-typescript |
+| API contract | drf-spectacular → OpenAPI schema | Contract-first; schema exposed at /api/schema/ |
 | Deployment | AWS ECS + Fargate (EKS migration path later) | Container-based; same Docker image retargets to EKS |
 | CI | GitHub Actions | Lint + type-check + migrate + pytest on every push |
 
@@ -54,11 +54,4 @@ GitHub → CI (Actions) → ECR (Docker image)
                     ALB → api.frikkinwave.com
 ```
 
-Frontend: Vercel → frikkinwave.com
-DNS split: apex → Vercel, `api.*` → AWS ALB
-
----
-
-## Companion repo
-
-Frontend: `frikkinwave-frontend` (Next.js 14 App Router, TypeScript strict, Vercel)
+Frontend lives in a separate repo and is out of scope for this codebase.

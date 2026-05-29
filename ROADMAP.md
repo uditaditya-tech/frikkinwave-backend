@@ -6,7 +6,7 @@ Each phase is independently shippable. "Stop here" = the product is usable at th
 
 ## Phase 0 — Scaffold
 **Status: ✅ Complete**
-CI green, dev stack running, zero feature code.
+CI green, dev stack running, zero feature code. Frontend deferred until backend is release-ready.
 
 | Sub-step | Status |
 |---|---|
@@ -17,27 +17,28 @@ CI green, dev stack running, zero feature code.
 | 0.5 GitHub Actions CI (lint, type-check, migrate, pytest) | ✅ |
 | 0.6 docker-compose (Postgres 16 + Redis 7) | ✅ |
 | 0.7 drf-spectacular wired — /api/schema/ returns valid OpenAPI doc | ✅ |
-| 0.8 Frontend repo — Next.js 14, TypeScript strict, ESLint, Prettier, shadcn/ui | ⬜ |
-| 0.9 Frontend CI + openapi-typescript script pointing at backend schema | ⬜ |
+| 0.8 ~~Frontend~~ — out of scope for this repo | N/A |
+| 0.9 ~~Frontend CI~~ — out of scope for this repo | N/A |
 
 ---
 
 ## Phase 1 — Musician profiles + jam partner discovery
-**Status: ⬜ Not started**
+**Status: 🔄 In progress**
 Stop here = shippable v1 on frikkinwave.com
 
-Sub-steps (to be detailed when Phase 0 closes):
-- MusicianProfile model (instruments, genres, city/country, bio, availability toggle)
-- Instrument + Genre seed data
-- Profile create/update/retrieve endpoints
-- Browse + filter (by city, country, instrument, genre)
-- View a public profile
-- Contact request flow (send → email notification → accept/decline → contact info revealed)
-- Auth endpoints (register, login, refresh, logout)
-- Dockerfile + ECR push
-- ECS task definition + Fargate service + ALB
-- DNS: api.frikkinwave.com → ALB
-- Vercel frontend deploy + frikkinwave.com DNS
+| Sub-step | Status |
+|---|---|
+| 1.1 Auth endpoints — register, login, refresh, logout + tests | ⬜ |
+| 1.2 MusicianProfile model (bio, city, country, availability) + migration | ⬜ |
+| 1.3 Instrument + Genre models + seed data (management command) | ⬜ |
+| 1.4 Profile create / update / retrieve endpoints + tests | ⬜ |
+| 1.5 Browse + filter profiles (city, country, instrument, genre) + tests | ⬜ |
+| 1.6 Public profile view (unauthenticated) + tests | ⬜ |
+| 1.7 ContactRequest flow (send → email → accept/decline → reveal) + tests | ⬜ |
+| 1.8 Dockerfile (multi-stage, collectstatic baked in) | ⬜ |
+| 1.9 ECR repo + push script; ECS task definition + Fargate service + ALB | ⬜ |
+| 1.10 RDS Postgres + secrets in SSM/Secrets Manager | ⬜ |
+| 1.11 DNS: api.frikkinwave.com → ALB | ⬜ |
 
 ---
 
@@ -83,14 +84,13 @@ Stop here = AI on the tin, portfolio centerpiece live
 
 ---
 
-## Deployment targets
+## Deployment targets (backend only)
 
 | Service | Platform | Status |
 |---|---|---|
 | Backend API | AWS ECS + Fargate | ⬜ Phase 1 |
-| Database | AWS RDS (Postgres) | ⬜ Phase 1 |
+| Database | AWS RDS (Postgres 16) | ⬜ Phase 1 |
 | Cache / broker | AWS ElastiCache (Redis) | ⬜ Phase 2 |
 | Container registry | AWS ECR | ⬜ Phase 1 |
-| Frontend | Vercel | ⬜ Phase 1 |
-| DNS | frikkinwave.com (custom) | ⬜ Phase 1 |
+| DNS | api.frikkinwave.com → ALB | ⬜ Phase 1 |
 | Future | AWS EKS | Phase 4+ |
