@@ -114,6 +114,25 @@ def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
     return queryset
 
 
+def get_public_profile(*, username: str) -> MusicianProfile | None:
+    """
+    Return a single public profile by its owner's username, or None if absent.
+
+    Username match is case-insensitive. Related rows are prefetched so the
+    nested serializer stays free of N+1 queries.
+    """
+    profile = (
+        MusicianProfile.objects.prefetch_related(
+            "musician_instruments__instrument",
+            "genres",
+        )
+        .filter(user__username__iexact=username)
+        .first()
+    )
+    logger.info("public_profile_viewed", extra={"username": username, "found": profile is not None})
+    return profile
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

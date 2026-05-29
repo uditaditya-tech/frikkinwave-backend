@@ -21,6 +21,7 @@ from apps.musicians.serializers import MusicianProfileReadSerializer, MusicianPr
 from apps.musicians.services import (
     ProfileAlreadyExistsError,
     create_profile,
+    get_public_profile,
     list_profiles,
     update_profile,
 )
@@ -90,6 +91,24 @@ class ProfileListView(APIView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = MusicianProfileReadSerializer(page, many=True).data
         return paginator.get_paginated_response(data)
+
+
+class ProfilePublicView(APIView):
+    """
+    GET /api/musicians/profiles/<username>/
+
+    Public single-profile view. Unauthenticated access allowed.
+    Returns 404 if no profile exists for that username.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
+        profile = get_public_profile(username=username)
+        if profile is None:
+            return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(MusicianProfileReadSerializer(profile).data)
 
 
 class ProfileMeView(APIView):

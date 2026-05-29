@@ -17,6 +17,10 @@ PROFILE_ME_URL = "/api/musicians/profile/me/"
 PROFILES_URL = "/api/musicians/profiles/"
 
 
+def _public_url(username: str) -> str:
+    return f"/api/musicians/profiles/{username}/"
+
+
 def _auth(api_client: APIClient, user: User) -> APIClient:
     """Log in and attach Bearer token to the client."""
     resp = api_client.post(
@@ -278,3 +282,37 @@ class TestListProfiles:
         assert response.status_code == 200
         assert len(response.data["results"]) == 20
         assert response.data["next"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Public single profile view
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestPublicProfile:
+    def test_success_returns_profile(
+        self, api_client: APIClient, instrument: Instrument, genre: Genre
+    ) -> None:
+        profile = _make_profile("nina", instruments=[instrument], genres=[genre])
+        response = api_client.get(_public_url("user-nina"))
+        assert response.status_code == 200
+        assert str(response.data["id"]) == str(profile.id)
+        assert response.data["city"] == "Mumbai"
+        assert len(response.data["instruments"]) == 1
+        assert len(response.data["genres"]) == 1
+
+    def test_unknown_username_returns_404(self, api_client: APIClient) -> None:
+        response = api_client.get(_public_url("nobody"))
+        assert response.status_code == 404
+
+    def test_unauthenticated_allowed(self, api_client: APIClient) -> None:
+        _make_profile("nina")
+        response = api_client.get(_public_url("user-nina"))
+        assert response.status_code == 200
+
+    def test_username_match_case_insensitive(self, api_client: APIClient) -> None:
+        _make_profile("nina")
+        response = api_client.get(_public_url("USER-NINA"))
+        assert response.status_code == 200
+        assert response.data["user_id"] is not None

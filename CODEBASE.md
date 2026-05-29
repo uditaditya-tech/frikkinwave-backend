@@ -35,16 +35,16 @@ frikkinwave-backend/
 │       │   └── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
 │       ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
 │       ├── serializers.py         # Read + Write serializers for profiles
-│       ├── services.py            # create_profile(), update_profile(), list_profiles()
-│       ├── urls.py                # /profiles/, /profile/, /profile/me/
-│       ├── views.py               # ProfileListView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
+│       ├── services.py            # create_profile(), update_profile(), list_profiles(), get_public_profile()
+│       ├── urls.py                # /profiles/, /profiles/<username>/, /profile/, /profile/me/
+│       ├── views.py               # ProfileListView, ProfilePublicView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
 │       ├── management/
 │       │   └── commands/
 │       │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
 │       └── tests/
 │           ├── __init__.py
 │           ├── conftest.py        # instrument, genre, profile fixtures
-│           └── test_profile.py    # 22 tests: create, retrieve, update, list + filter
+│           └── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py
@@ -91,6 +91,7 @@ frikkinwave-backend/
 | POST | `/api/auth/token/refresh/` | Refresh token | Rotate refresh token |
 | POST | `/api/auth/logout/` | Bearer | Blacklist refresh token |
 | GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated) |
+| GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username |
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |
 | GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile |
 | PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile |
