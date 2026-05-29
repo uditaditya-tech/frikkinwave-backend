@@ -5,7 +5,7 @@ Models are data-shape only — business logic lives in services.
 
 ---
 
-## Current models (Phase 0 / Phase 1)
+## Current models
 
 ### `users.User` (custom auth model)
 
@@ -27,27 +27,25 @@ Models are data-shape only — business logic lives in services.
 
 ---
 
-## Planned models (Phase 1)
-
-### `musicians.MusicianProfile`
+### `musicians.MusicianProfile` (Phase 1 — 1.2 ✅)
 
 One-to-one with `User`. The public-facing profile.
+**App:** `apps/musicians` | **Migration:** `0001_initial`
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
-| `user` | OneToOneField → User | Cascade delete |
-| `display_name` | CharField(100) | Public name (can differ from username) |
-| `bio` | TextField | Free-form. Fed into embedding. |
-| `city` | CharField(100) | Indexed. Used for discovery filtering. |
-| `country` | CharField(100) | Indexed. ISO country name or code. |
-| `latitude` | FloatField | Optional. Reserved for future radius search. |
-| `longitude` | FloatField | Optional. Reserved for future radius search. |
-| `is_open_to_jam` | BooleanField | Toggles visibility in jam finder. |
-| `avatar_url` | URLField | Optional. S3 URL. |
-| `website_url` | URLField | Optional. |
+| `user` | OneToOneField → `AUTH_USER_MODEL` | Cascade delete |
+| `bio` | TextField | Free-form. Blank allowed. Fed into embedding (Phase 2). |
+| `city` | CharField(100) | Free-text for Phase 1; normalise later if geo-search demands it. |
+| `country` | CharField(100) | Free-text for Phase 1. |
+| `is_available` | BooleanField | Default True. Toggles visibility in jam finder. |
 | `created_at` | DateTimeField | `auto_now_add` |
 | `updated_at` | DateTimeField | `auto_now` |
+
+---
+
+## Planned models (Phase 1)
 
 ### `musicians.Instrument`
 

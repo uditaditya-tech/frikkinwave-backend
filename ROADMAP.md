@@ -29,7 +29,7 @@ Stop here = shippable v1 on frikkinwave.com
 | Sub-step | Status |
 |---|---|
 | 1.1 Auth endpoints — register, login, refresh, logout + tests | ✅ |
-| 1.2 MusicianProfile model (bio, city, country, availability) + migration | ⬜ |
+| 1.2 MusicianProfile model (bio, city, country, availability) + migration | ✅ |
 | 1.3 Instrument + Genre models + seed data (management command) | ⬜ |
 | 1.4 Profile create / update / retrieve endpoints + tests | ⬜ |
 | 1.5 Browse + filter profiles (city, country, instrument, genre) + tests | ⬜ |
