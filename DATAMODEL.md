@@ -72,7 +72,24 @@ Unique constraint on `(profile, instrument)`.
 
 ---
 
-## Planned models (Phase 1)
+## Planned models (Phase 1 — remaining)
+
+### `connections.ContactRequest` (sub-step 1.7)
+
+New app: `apps/connections`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `sender` | ForeignKey → User | String ref to avoid cross-app model import |
+| `recipient` | ForeignKey → User | String ref |
+| `message` | TextField | Optional intro message (blank=True) |
+| `status` | CharField | `pending` / `accepted` / `declined` |
+| `created_at` | DateTimeField | `auto_now_add` |
+| `updated_at` | DateTimeField | `auto_now` |
+
+Unique constraint on `(sender, recipient)`.
+Flow: send → email notification → accept/decline → contact info revealed.
 
 ---
 
