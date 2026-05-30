@@ -83,6 +83,8 @@ frikkinwave-backend/
 ├── .gitignore
 ├── .pre-commit-config.yaml        # Hooks: whitespace, yaml, detect-private-key, ruff
 ├── docker-compose.yml             # Postgres 16 + Redis 7 for local dev
+├── Dockerfile                     # Multi-stage prod image (uv venv → slim runtime, gunicorn, non-root)
+├── .dockerignore                  # Keeps build context lean; excludes .env, tests, .venv, docs
 ├── manage.py                      # Defaults to config.settings.local
 ├── pyproject.toml                 # ruff + mypy + pytest config
 │
@@ -212,6 +214,33 @@ python manage.py runserver
 curl http://localhost:8000/api/health/   # → {"status": "ok"}
 # http://localhost:8000/api/docs/        → Swagger UI
 ```
+
+---
+
+## Production container
+
+`Dockerfile` builds the image deployed to ECS/Fargate (Phase 1, sub-steps 1.9+).
+
+```bash
+docker build -t frikkinwave-backend .
+
+# Run it (health check needs no DB; full app needs DATABASE_URL → RDS):
+docker run -p 8000:8000 \
+  -e DJANGO_SECRET_KEY=... \
+  -e DATABASE_URL=postgres://... \
+  -e ALLOWED_HOSTS=api.frikkinwave.com \
+  -e CORS_ALLOWED_ORIGINS=https://frikkinwave.com \
+  frikkinwave-backend
+
+curl http://localhost:8000/api/health/   # → {"status": "ok"}
+```
+
+Design notes:
+- **Multi-stage:** builder installs deps into `/opt/venv` via uv; runtime stage copies only the venv + source → smaller image, no build tooling shipped.
+- **`DJANGO_SETTINGS_MODULE=config.settings.production`** is baked in; served by **gunicorn** (sync workers, count via `WEB_CONCURRENCY`, default 3).
+- **collectstatic runs at build time** with placeholder env vars (WhiteNoise manifest storage needs the files present in the image). Placeholders are never used at runtime.
+- **Non-root** (`appuser`, uid 10001). Filesystem treated as ephemeral — all real storage is S3/RDS.
+- **Migrations are NOT run on container start** — they run as a separate one-off ECS task (avoids races across concurrent Fargate tasks). Wired in 1.9/1.10.
 
 ---
 

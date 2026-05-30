@@ -35,7 +35,7 @@ Stop here = shippable v1 on frikkinwave.com
 | 1.5 Browse + filter profiles (city, country, instrument, genre) + tests | ✅ |
 | 1.6 Public profile view (unauthenticated) + tests | ✅ |
 | 1.7 ContactRequest flow (send → accept/decline → reveal) + tests | ✅ (email → Phase 2 w/ Celery) |
-| 1.8 Dockerfile (multi-stage, collectstatic baked in) | ⬜ |
+| 1.8 Dockerfile (multi-stage, collectstatic baked in) | ✅ |
 | 1.9 ECR repo + push script; ECS task definition + Fargate service + ALB | ⬜ |
 | 1.10 RDS Postgres + secrets in SSM/Secrets Manager | ⬜ |
 | 1.11 DNS: api.frikkinwave.com → ALB | ⬜ |

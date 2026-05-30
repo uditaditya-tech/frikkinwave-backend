@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Local virtualenv — the image builds its own
+.venv
+venv
+
+# Python caches / artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# Secrets / local env — never copy into the image
+.env
+.env.*
+!.env.example
+
+# Collected static — regenerated at build time
+staticfiles
+
+# Local services / tooling not needed in the image
+docker-compose.yml
+.pre-commit-config.yaml
+.github
+
+# Tests (not shipped in the runtime image)
+**/tests
+conftest.py
+
+# Docs
+*.md
+
+# Editor / OS cruft
+.idea
+.vscode
+.DS_Store
