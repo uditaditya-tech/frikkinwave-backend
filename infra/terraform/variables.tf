@@ -43,14 +43,58 @@ variable "django_secret_key" {
   sensitive   = true
 }
 
-variable "database_url" {
-  description = "DATABASE_URL for the container. Placeholder until RDS lands in 1.10 (health check needs no DB)."
-  type        = string
-  default     = "postgres://placeholder:placeholder@localhost:5432/placeholder"
-}
-
 variable "cors_allowed_origins" {
   description = "Comma-separated CORS origins for the container."
   type        = string
   default     = "https://frikkinwave.com"
+}
+
+# --- Database (RDS) -------------------------------------------------------
+
+variable "db_name" {
+  description = "Initial database name."
+  type        = string
+  default     = "frikkinwave"
+}
+
+variable "db_username" {
+  description = "Master username for the RDS instance."
+  type        = string
+  default     = "frikkinwave"
+}
+
+variable "db_engine_version" {
+  description = "Postgres major version."
+  type        = string
+  default     = "16"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class. db.t4g.micro is the cheapest Graviton option."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "db_allocated_storage" {
+  description = "RDS storage in GB."
+  type        = number
+  default     = 20
+}
+
+variable "db_backup_retention_days" {
+  description = "Automated backup retention. 0 disables backups (cheapest for dev)."
+  type        = number
+  default     = 1
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip the final snapshot on destroy. true = ephemeral dev DB."
+  type        = bool
+  default     = true
+}
+
+variable "db_deletion_protection" {
+  description = "Block terraform destroy until disabled. false = free to cycle."
+  type        = bool
+  default     = false
 }

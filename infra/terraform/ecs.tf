@@ -33,11 +33,15 @@ resource "aws_ecs_task_definition" "app" {
 
       environment = [
         { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
-        { name = "DJANGO_SECRET_KEY", value = var.django_secret_key },
-        { name = "DATABASE_URL", value = var.database_url },
         { name = "ALLOWED_HOSTS", value = aws_lb.main.dns_name },
         { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
         { name = "WEB_CONCURRENCY", value = "3" },
+      ]
+
+      # Injected from SSM Parameter Store by the ECS agent at task start.
+      secrets = [
+        { name = "DJANGO_SECRET_KEY", valueFrom = aws_ssm_parameter.django_secret_key.arn },
+        { name = "DATABASE_URL", valueFrom = aws_ssm_parameter.database_url.arn },
       ]
 
       logConfiguration = {

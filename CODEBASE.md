@@ -68,7 +68,7 @@ frikkinwave-backend/
 │   └── settings/
 │       ├── base.py                # Shared — all envs inherit from here
 │       ├── local.py               # Dev: DEBUG=True, CORS open, human logs
-│       └── production.py          # Prod: HTTPS, ALLOWED_HOSTS from env, AWS ALB
+│       └── production.py          # Prod: HTTPS, ALLOWED_HOSTS from env + ECS task IP (ALB health), SSM secrets
 │
 ├── .github/
 │   └── workflows/
@@ -78,9 +78,10 @@ frikkinwave-backend/
 │   └── base.txt                   # All dependencies pinned (uv pip freeze)
 │
 ├── infra/                         # AWS infrastructure (Terraform) — see infra/README.md
-│   ├── terraform/                 # VPC, ECR, ALB, ECS/Fargate, IAM, logs
+│   ├── terraform/                 # VPC, ECR, RDS, ALB, ECS/Fargate, IAM, SSM secrets, logs
 │   └── scripts/
-│       └── push-image.sh          # build linux/arm64 → push to ECR
+│       ├── push-image.sh          # build linux/arm64 → push to ECR
+│       └── run-migrations.sh      # one-off Fargate task: migrate + seed
 │
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── .env                           # Git-ignored. Copy from .env.example.

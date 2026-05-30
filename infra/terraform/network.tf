@@ -8,8 +8,9 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  azs                 = slice(data.aws_availability_zones.available.names, 0, 2)
-  public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+  azs                  = slice(data.aws_availability_zones.available.names, 0, 2)
+  public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
 resource "aws_vpc" "main" {
@@ -50,6 +51,18 @@ resource "aws_route_table_association" "public" {
   count          = 2
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
+}
+
+# Private subnets: no route to the internet gateway (they use the VPC's main
+# route table = local-only). RDS lives here and needs no outbound internet,
+# so no NAT gateway is required.
+resource "aws_subnet" "private" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = local.private_subnet_cidrs[count.index]
+  availability_zone = local.azs[count.index]
+
+  tags = { Name = "${local.name}-private-${count.index}" }
 }
 
 # --- Security groups -------------------------------------------------------
@@ -106,4 +119,27 @@ resource "aws_security_group" "tasks" {
   }
 
   tags = { Name = "${local.name}-tasks-sg" }
+}
+
+resource "aws_security_group" "rds" {
+  name        = "${local.name}-rds-sg"
+  description = "RDS: accept Postgres traffic only from the ECS tasks."
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "Postgres from tasks only"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.tasks.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${local.name}-rds-sg" }
 }

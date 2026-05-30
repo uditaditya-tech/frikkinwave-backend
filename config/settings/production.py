@@ -3,12 +3,32 @@ Production settings (AWS ECS + Fargate).
 All secrets come from environment variables — never hardcoded here.
 """
 
+import json
+import os
+import urllib.request
+
 from .base import *
 from .base import env
 
 DEBUG = False
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+
+# AWS ALB health checks reach the container using the task's own private IP as
+# the Host header (IP-type target group), which isn't in ALLOWED_HOSTS — Django
+# would 400 every health check. Append the task's private IPv4, read from the
+# ECS container metadata endpoint, so /api/health/ passes. Fails open: a missing
+# or slow metadata endpoint never blocks startup.
+_ecs_metadata_uri = os.environ.get("ECS_CONTAINER_METADATA_URI_V4")
+if _ecs_metadata_uri:
+    try:
+        with urllib.request.urlopen(f"{_ecs_metadata_uri}/task", timeout=2) as _resp:
+            _task_meta = json.load(_resp)
+        for _container in _task_meta.get("Containers", []):
+            for _network in _container.get("Networks", []):
+                ALLOWED_HOSTS += _network.get("IPv4Addresses", [])
+    except (OSError, ValueError):
+        pass
 
 # HTTPS enforcement
 SECURE_SSL_REDIRECT = True

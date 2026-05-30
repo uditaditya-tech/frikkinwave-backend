@@ -17,3 +17,31 @@ output "health_check_url" {
   description = "Hit this to confirm the service is live."
   value       = "http://${aws_lb.main.dns_name}/api/health/"
 }
+
+output "rds_endpoint" {
+  description = "RDS instance hostname (not internet-reachable)."
+  value       = aws_db_instance.main.address
+}
+
+# --- Used by scripts/run-migrations.sh ------------------------------------
+
+output "ecs_cluster" {
+  value = aws_ecs_cluster.main.name
+}
+
+output "ecs_task_family" {
+  value = aws_ecs_task_definition.app.family
+}
+
+output "ecs_container_name" {
+  value = local.name
+}
+
+output "public_subnet_ids" {
+  description = "Comma-joined public subnet IDs for one-off task networking."
+  value       = join(",", aws_subnet.public[*].id)
+}
+
+output "tasks_security_group_id" {
+  value = aws_security_group.tasks.id
+}
