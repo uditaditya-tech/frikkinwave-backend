@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+# terraform.tfvars is read automatically by terraform.
+
+# Generate a throwaway key for this deploy, e.g.:
+#   python -c "import secrets; print(secrets.token_urlsafe(50))"
+django_secret_key = "replace-with-a-real-secret"
+
+# Optional overrides:
+# region               = "ap-south-1"   # Mumbai (default)
+# cors_allowed_origins = "https://frikkinwave.com,https://www.frikkinwave.com"
+# database_url         = "postgres://..."   # set once RDS exists (1.10)

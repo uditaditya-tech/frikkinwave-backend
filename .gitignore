@@ -46,3 +46,17 @@ htmlcov/
 
 # Fly.io
 fly.toml.bak
+
+# Terraform — state can contain secrets; never commit it.
+# (.terraform.lock.hcl IS committed for reproducible provider versions.)
+infra/terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

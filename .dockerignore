@@ -29,6 +29,9 @@ docker-compose.yml
 .pre-commit-config.yaml
 .github
 
+# Infrastructure — never ship Terraform code/state/secrets into the app image
+infra
+
 # Tests (not shipped in the runtime image)
 **/tests
 conftest.py
