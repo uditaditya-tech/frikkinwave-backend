@@ -77,6 +77,11 @@ frikkinwave-backend/
 ├── requirements/
 │   └── base.txt                   # All dependencies pinned (uv pip freeze)
 │
+├── infra/                         # AWS infrastructure (Terraform) — see infra/README.md
+│   ├── terraform/                 # VPC, ECR, ALB, ECS/Fargate, IAM, logs
+│   └── scripts/
+│       └── push-image.sh          # build linux/arm64 → push to ECR
+│
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── .env                           # Git-ignored. Copy from .env.example.
 ├── .env.example                   # Committed template for all env vars.

@@ -16,8 +16,8 @@ TF_DIR="${SCRIPT_DIR}/../terraform"
 REPO_ROOT="${SCRIPT_DIR}/../.."
 
 REPO_URL="$(terraform -chdir="${TF_DIR}" output -raw ecr_repository_url)"
-REGION="$(terraform -chdir="${TF_DIR}" output -raw aws_region)"
-REGISTRY="${REPO_URL%/*}" # strip the trailing /<repo-name>
+REGISTRY="${REPO_URL%/*}"           # strip the trailing /<repo-name>
+REGION="$(echo "${REGISTRY}" | cut -d. -f4)" # <acct>.dkr.ecr.<region>.amazonaws.com
 
 echo "==> Logging in to ECR registry ${REGISTRY}"
 aws ecr get-login-password --region "${REGION}" \

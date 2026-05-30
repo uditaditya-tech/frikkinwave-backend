@@ -36,7 +36,7 @@ Stop here = shippable v1 on frikkinwave.com
 | 1.6 Public profile view (unauthenticated) + tests | ✅ |
 | 1.7 ContactRequest flow (send → accept/decline → reveal) + tests | ✅ (email → Phase 2 w/ Celery) |
 | 1.8 Dockerfile (multi-stage, collectstatic baked in) | ✅ |
-| 1.9 ECR repo + push script; ECS task definition + Fargate service + ALB | ⬜ |
+| 1.9 ECR repo + push script; ECS task definition + Fargate service + ALB | ✅ |
 | 1.10 RDS Postgres + secrets in SSM/Secrets Manager | ⬜ |
 | 1.11 DNS: api.frikkinwave.com → ALB | ⬜ |
 
@@ -89,9 +89,9 @@ Stop here = AI on the tin, portfolio centerpiece live
 
 | Service | Platform | Status |
 |---|---|---|
-| Backend API | AWS ECS + Fargate | ⬜ Phase 1 |
-| Database | AWS RDS (Postgres 16) | ⬜ Phase 1 |
+| Backend API | AWS ECS + Fargate | ✅ Live (ap-south-1, HTTP) |
+| Database | AWS RDS (Postgres 16) | ⬜ Phase 1 (1.10) |
 | Cache / broker | AWS ElastiCache (Redis) | ⬜ Phase 2 |
-| Container registry | AWS ECR | ⬜ Phase 1 |
+| Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ⬜ Phase 1 |
 | Future | AWS EKS | Phase 4+ |
