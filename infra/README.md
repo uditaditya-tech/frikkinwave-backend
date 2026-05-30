@@ -14,9 +14,10 @@ infra/
 │   ├── secrets.tf         # SSM Parameter Store: DJANGO_SECRET_KEY, DATABASE_URL
 │   ├── iam.tf             # ECS execution + task roles (+ SSM read policy)
 │   ├── logs.tf            # CloudWatch log group
-│   ├── alb.tf             # load balancer, target group, HTTP listener
+│   ├── alb.tf             # load balancer, target group, HTTP→HTTPS redirect, HTTPS listener
+│   ├── dns.tf             # Route 53 zone (api subdomain), ACM cert, alias record
 │   ├── ecs.tf             # cluster, task definition (secrets), service
-│   ├── outputs.tf         # ALB DNS, ECR URL, RDS endpoint, health URL
+│   ├── outputs.tf         # ALB DNS, ECR URL, RDS endpoint, nameservers, URLs
 │   └── terraform.tfvars.example
 └── scripts/
     ├── push-image.sh      # build (linux/arm64) + push to ECR
@@ -42,17 +43,24 @@ terraform apply -target=aws_ecr_repository.app
 # 2) Build + push the image:
 ../scripts/push-image.sh            # tags :latest
 
-# 3) Create everything else (RDS, ALB, ECS, networking, secrets, …):
-terraform apply
+# 3) Create the Route 53 hosted zone, then delegate the subdomain:
+terraform apply -target=aws_route53_zone.api
+terraform output api_nameservers
+#   → add these 4 as NS records for `api` at the parent domain's DNS (e.g. GoDaddy).
+#   Verify: dig +short NS api.frikkinwave.com @8.8.8.8
 
-# 4) Run migrations + seed reference data (one-off Fargate task):
+# 4) Create everything else (RDS, ALB, ECS, ACM cert, HTTPS, alias, secrets, …):
+terraform apply
+#   The ACM validation step blocks until the cert is issued — needs step 3 done.
+
+# 5) Run migrations + seed reference data (one-off Fargate task):
 ../scripts/run-migrations.sh
 
-# 5) Verify the service is live behind the ALB:
-curl "$(terraform output -raw health_check_url)"   # → {"status": "ok"}
+# 6) Verify the API is live over HTTPS:
+curl "$(terraform output -raw api_url)"            # → {"status": "ok"}
 ```
 
-> RDS takes ~5–10 min to provision on the first `terraform apply`.
+> RDS takes ~5–10 min to provision; ACM validation a few minutes after delegation.
 
 ## Updating the running app
 
@@ -75,7 +83,10 @@ terraform destroy
   DynamoDB lock once the account is bootstrapped — see the commented block in `main.tf`.
 - **No NAT gateway.** Tasks run in public subnets with public IPs (saves ~$32/mo);
   the task security group still only accepts traffic from the ALB.
-- **HTTP only** in 1.9. HTTPS (443 + ACM cert) and `api.frikkinwave.com` land in 1.11.
+- **DNS + HTTPS:** `api.frikkinwave.com` is a Route 53 hosted zone delegated from the
+  parent domain (apex stays with the registrar/Vercel). ACM issues the TLS cert
+  (DNS-validated); the ALB has an HTTPS:443 listener and redirects HTTP:80 → 443.
+  Django sets `SECURE_PROXY_SSL_HEADER` to trust the ALB's `X-Forwarded-Proto`.
 - **Database:** RDS Postgres 16 (`db.t4g.micro`) in private subnets, not internet-reachable;
   the tasks SG is the only thing allowed to reach it on 5432. Ephemeral-dev posture —
   `terraform destroy` drops the DB; `run-migrations.sh` rebuilds schema + seed on the next apply.
@@ -90,5 +101,9 @@ terraform destroy
 ## Rough cost while running
 
 In `ap-south-1` (Mumbai): ALB ~$18/mo + 1× Fargate (0.25 vCPU/0.5 GB) ~$10/mo +
-RDS `db.t4g.micro` ~$13/mo + 20 GB gp3 ~$2/mo + minimal ECR/logs ≈ **~$43/mo**.
-`terraform destroy` removes all of it.
+RDS `db.t4g.micro` ~$13/mo + 20 GB gp3 ~$2/mo + Route 53 zone $0.50/mo +
+minimal ECR/logs ≈ **~$44/mo**. `terraform destroy` removes all of it.
+
+> Note: `terraform destroy` deletes the Route 53 hosted zone, which changes its
+> nameservers. After a later `apply` you must re-point the `api` NS records at the
+> registrar to the new nameservers (`terraform output api_nameservers`).

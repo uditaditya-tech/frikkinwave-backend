@@ -23,8 +23,8 @@ CI green, dev stack running, zero feature code. Frontend deferred until backend 
 ---
 
 ## Phase 1 — Musician profiles + jam partner discovery
-**Status: 🔄 In progress**
-Stop here = shippable v1 on frikkinwave.com
+**Status: ✅ Complete**
+Shipped: live at https://api.frikkinwave.com (ECS Fargate + ALB + RDS, ap-south-1)
 
 | Sub-step | Status |
 |---|---|
@@ -38,7 +38,7 @@ Stop here = shippable v1 on frikkinwave.com
 | 1.8 Dockerfile (multi-stage, collectstatic baked in) | ✅ |
 | 1.9 ECR repo + push script; ECS task definition + Fargate service + ALB | ✅ |
 | 1.10 RDS Postgres + secrets in SSM/Secrets Manager | ✅ |
-| 1.11 DNS: api.frikkinwave.com → ALB | ⬜ |
+| 1.11 DNS: api.frikkinwave.com → ALB + HTTPS (ACM, Route 53 delegation) | ✅ |
 
 ---
 
@@ -93,5 +93,5 @@ Stop here = AI on the tin, portfolio centerpiece live
 | Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, private subnets) |
 | Cache / broker | AWS ElastiCache (Redis) | ⬜ Phase 2 |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
-| DNS | api.frikkinwave.com → ALB | ⬜ Phase 1 |
+| DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |
 | Future | AWS EKS | Phase 4+ |

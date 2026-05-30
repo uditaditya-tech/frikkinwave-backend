@@ -33,7 +33,8 @@ resource "aws_ecs_task_definition" "app" {
 
       environment = [
         { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
-        { name = "ALLOWED_HOSTS", value = aws_lb.main.dns_name },
+        { name = "ALLOWED_HOSTS", value = "${aws_lb.main.dns_name},${var.api_domain}" },
+        { name = "CSRF_TRUSTED_ORIGINS", value = "https://${var.api_domain}" },
         { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
         { name = "WEB_CONCURRENCY", value = "3" },
       ]

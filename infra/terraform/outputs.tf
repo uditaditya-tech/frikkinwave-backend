@@ -14,8 +14,18 @@ output "alb_dns_name" {
 }
 
 output "health_check_url" {
-  description = "Hit this to confirm the service is live."
+  description = "Hit this to confirm the service is live (raw ALB, HTTP)."
   value       = "http://${aws_lb.main.dns_name}/api/health/"
+}
+
+output "api_nameservers" {
+  description = "Add these as NS records for 'api' at the parent domain's DNS to delegate the subdomain."
+  value       = aws_route53_zone.api.name_servers
+}
+
+output "api_url" {
+  description = "Public HTTPS health check once DNS + cert are live."
+  value       = "https://${var.api_domain}/api/health/"
 }
 
 output "rds_endpoint" {

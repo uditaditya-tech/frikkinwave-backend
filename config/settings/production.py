@@ -31,6 +31,10 @@ if _ecs_metadata_uri:
         pass
 
 # HTTPS enforcement
+# The ALB terminates TLS and forwards over HTTP with X-Forwarded-Proto set.
+# Trust that header so request.is_secure() is True for real HTTPS traffic —
+# without this, SECURE_SSL_REDIRECT would loop forever behind the load balancer.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]  # AWS ALB health check
 SECURE_HSTS_SECONDS = 31536000
@@ -39,6 +43,7 @@ SECURE_HSTS_PRELOAD = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
 
 # Email (configure SMTP via env in production)

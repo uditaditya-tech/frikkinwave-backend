@@ -78,7 +78,7 @@ frikkinwave-backend/
 │   └── base.txt                   # All dependencies pinned (uv pip freeze)
 │
 ├── infra/                         # AWS infrastructure (Terraform) — see infra/README.md
-│   ├── terraform/                 # VPC, ECR, RDS, ALB, ECS/Fargate, IAM, SSM secrets, logs
+│   ├── terraform/                 # VPC, ECR, RDS, ALB, ECS/Fargate, IAM, SSM secrets, Route53+ACM, logs
 │   └── scripts/
 │       ├── push-image.sh          # build linux/arm64 → push to ECR
 │       └── run-migrations.sh      # one-off Fargate task: migrate + seed
@@ -104,6 +104,8 @@ frikkinwave-backend/
 ---
 
 ## Current API endpoints
+
+Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `ap-south-1`).
 
 | Method | URL | Auth | Description |
 |---|---|---|---|

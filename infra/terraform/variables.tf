@@ -44,9 +44,15 @@ variable "django_secret_key" {
 }
 
 variable "cors_allowed_origins" {
-  description = "Comma-separated CORS origins for the container."
+  description = "Comma-separated CORS origins for the container (the Vercel frontend)."
   type        = string
-  default     = "https://frikkinwave.com"
+  default     = "https://frikkinwave.com,https://www.frikkinwave.com"
+}
+
+variable "api_domain" {
+  description = "Public hostname for the backend API."
+  type        = string
+  default     = "api.frikkinwave.com"
 }
 
 # --- Database (RDS) -------------------------------------------------------
