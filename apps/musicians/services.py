@@ -15,13 +15,23 @@ if TYPE_CHECKING:
 
     from apps.users.models import User
 
-from apps.musicians.models import Genre, MusicianInstrument, MusicianProfile
+from apps.musicians.models import Genre, Instrument, MusicianInstrument, MusicianProfile
 
 logger = logging.getLogger(__name__)
 
 
 class ProfileAlreadyExistsError(Exception):
     """Raised when a user tries to create a second MusicianProfile."""
+
+
+def list_instruments() -> QuerySet[Instrument]:
+    """Return all instruments, name-ordered (Instrument.Meta.ordering)."""
+    return Instrument.objects.all()
+
+
+def list_genres() -> QuerySet[Genre]:
+    """Return all genres, name-ordered (Genre.Meta.ordering)."""
+    return Genre.objects.all()
 
 
 def create_profile(*, user: User, data: dict[str, Any]) -> MusicianProfile:
@@ -91,7 +101,7 @@ def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
     -created_at). The queryset prefetches related rows to keep the nested
     serializer free of N+1 queries.
     """
-    queryset = MusicianProfile.objects.prefetch_related(
+    queryset = MusicianProfile.objects.select_related("user").prefetch_related(
         "musician_instruments__instrument",
         "genres",
     )
@@ -122,7 +132,8 @@ def get_public_profile(*, username: str) -> MusicianProfile | None:
     nested serializer stays free of N+1 queries.
     """
     profile = (
-        MusicianProfile.objects.prefetch_related(
+        MusicianProfile.objects.select_related("user")
+        .prefetch_related(
             "musician_instruments__instrument",
             "genres",
         )

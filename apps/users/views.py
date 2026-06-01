@@ -6,7 +6,7 @@ No business logic here.
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -17,10 +17,26 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.users.serializers import RegisterSerializer
+from apps.users.models import User
+from apps.users.serializers import RegisterSerializer, UserReadSerializer
 from apps.users.services import register_user
 
 logger = logging.getLogger(__name__)
+
+
+class MeView(APIView):
+    """
+    GET /api/auth/me/
+
+    Return the authenticated user's identity (id, email, username).
+    Lets the frontend resolve the current user without decoding the JWT.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        return Response(UserReadSerializer(cast(User, request.user)).data)
 
 
 class RegisterView(APIView):

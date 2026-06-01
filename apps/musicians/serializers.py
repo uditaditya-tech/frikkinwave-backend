@@ -38,6 +38,9 @@ class MusicianInstrumentReadSerializer(serializers.ModelSerializer[MusicianInstr
 
 
 class MusicianProfileReadSerializer(serializers.ModelSerializer[MusicianProfile]):
+    # username is the public handle — keys the public profile route and contact
+    # requests, so it must travel with every profile in the discovery feed.
+    username = serializers.CharField(source="user.username", read_only=True)
     # source matches the related_name on MusicianInstrument.profile FK
     instruments = MusicianInstrumentReadSerializer(
         source="musician_instruments",
@@ -51,6 +54,7 @@ class MusicianProfileReadSerializer(serializers.ModelSerializer[MusicianProfile]
         fields = [
             "id",
             "user_id",
+            "username",
             "bio",
             "city",
             "country",

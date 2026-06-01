@@ -115,6 +115,9 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | POST | `/api/auth/token/` | None | Login, returns token pair |
 | POST | `/api/auth/token/refresh/` | Refresh token | Rotate refresh token |
 | POST | `/api/auth/logout/` | Bearer | Blacklist refresh token |
+| GET | `/api/auth/me/` | Bearer | Current user identity (id, email, username, date_joined) |
+| GET | `/api/musicians/instruments/` | None | Full instrument catalogue (for profile-editor pickers) |
+| GET | `/api/musicians/genres/` | None | Full genre catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated) |
 | GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username |
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |
