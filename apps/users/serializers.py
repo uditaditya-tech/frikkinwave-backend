@@ -14,6 +14,14 @@ from rest_framework import serializers
 from apps.users.models import User
 
 
+class UserReadSerializer(serializers.ModelSerializer[User]):
+    """Public identity shape for the authenticated user (`/api/auth/me/`)."""
+
+    class Meta:
+        model = User
+        fields = ["id", "email", "username", "date_joined"]
+
+
 class RegisterSerializer(serializers.Serializer[Any]):
     email = serializers.EmailField()
     username = serializers.SlugField(max_length=50)

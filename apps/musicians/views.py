@@ -17,17 +17,54 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.musicians.models import MusicianProfile
-from apps.musicians.serializers import MusicianProfileReadSerializer, MusicianProfileWriteSerializer
+from apps.musicians.serializers import (
+    GenreSerializer,
+    InstrumentSerializer,
+    MusicianProfileReadSerializer,
+    MusicianProfileWriteSerializer,
+)
 from apps.musicians.services import (
     ProfileAlreadyExistsError,
     create_profile,
     get_public_profile,
+    list_genres,
+    list_instruments,
     list_profiles,
     update_profile,
 )
 from apps.users.models import User
 
 logger = logging.getLogger(__name__)
+
+
+class InstrumentListView(APIView):
+    """
+    GET /api/musicians/instruments/
+
+    Public lookup table — the full instrument catalogue for profile-editor pickers.
+    Unauthenticated access allowed.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        return Response(InstrumentSerializer(list_instruments(), many=True).data)
+
+
+class GenreListView(APIView):
+    """
+    GET /api/musicians/genres/
+
+    Public lookup table — the full genre catalogue for profile-editor pickers.
+    Unauthenticated access allowed.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        return Response(GenreSerializer(list_genres(), many=True).data)
 
 
 class ProfileCursorPagination(CursorPagination):
@@ -122,7 +159,8 @@ class ProfileMeView(APIView):
 
     def _get_profile(self, request: Request) -> MusicianProfile | None:
         return (
-            MusicianProfile.objects.prefetch_related(
+            MusicianProfile.objects.select_related("user")
+            .prefetch_related(
                 "musician_instruments__instrument",
                 "genres",
             )
