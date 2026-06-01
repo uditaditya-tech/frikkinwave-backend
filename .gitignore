@@ -54,6 +54,9 @@ fly.toml.bak
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+# Saved plans embed variable values (incl. secrets) — never commit.
+tfplan
+*.tfplan
 crash.log
 crash.*.log
 override.tf
