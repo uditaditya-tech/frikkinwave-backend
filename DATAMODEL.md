@@ -40,6 +40,7 @@ One-to-one with `User`. The public-facing profile.
 | `city` | CharField(100) | Free-text for Phase 1; normalise later if geo-search demands it. |
 | `country` | CharField(100) | Free-text for Phase 1. |
 | `is_available` | BooleanField | Default True. Toggles visibility in jam finder. |
+| `sound_url` | URLField(500) | Optional. External track (SoundCloud/Spotify/YouTube) embedded on the profile. |
 | `created_at` | DateTimeField | `auto_now_add` |
 | `updated_at` | DateTimeField | `auto_now` |
 

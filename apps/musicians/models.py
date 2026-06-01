@@ -126,6 +126,8 @@ class MusicianProfile(models.Model):
     city = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)
     is_available = models.BooleanField(default=True)
+    # External audio link (SoundCloud / Spotify / YouTube) shown on the profile.
+    sound_url = models.URLField(max_length=500, blank=True)
 
     instruments = models.ManyToManyField(
         Instrument,

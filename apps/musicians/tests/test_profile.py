@@ -93,6 +93,18 @@ class TestCreateProfile:
         assert response.data["instruments"][0]["proficiency"] == "advanced"
         assert len(response.data["genres"]) == 1
 
+    def test_with_sound_url(self, api_client: APIClient, user: User) -> None:
+        _auth(api_client, user)
+        url = "https://soundcloud.com/artist/demo"
+        response = api_client.post(PROFILE_URL, {"sound_url": url}, format="json")
+        assert response.status_code == 201
+        assert response.data["sound_url"] == url
+
+    def test_invalid_sound_url_rejected(self, api_client: APIClient, user: User) -> None:
+        _auth(api_client, user)
+        response = api_client.post(PROFILE_URL, {"sound_url": "not-a-url"}, format="json")
+        assert response.status_code == 400
+
     def test_duplicate_returns_409(
         self, api_client: APIClient, user: User, profile: MusicianProfile
     ) -> None:
