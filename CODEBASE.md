@@ -78,7 +78,8 @@ frikkinwave-backend/
 │   └── base.txt                   # All dependencies pinned (uv pip freeze)
 │
 ├── infra/                         # AWS infrastructure (Terraform) — see infra/README.md
-│   ├── terraform/                 # VPC, ECR, RDS, ALB, ECS/Fargate, IAM, SSM secrets, Route53+ACM, logs
+│   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
+│   ├── terraform/                 # APP stack: VPC, ECR, RDS, ALB, ECS/Fargate, IAM, SSM secrets, logs
 │   └── scripts/
 │       ├── push-image.sh          # build linux/arm64 → push to ECR
 │       └── run-migrations.sh      # one-off Fargate task: migrate + seed

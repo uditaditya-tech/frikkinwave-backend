@@ -49,7 +49,7 @@ fly.toml.bak
 
 # Terraform — state can contain secrets; never commit it.
 # (.terraform.lock.hcl IS committed for reproducible provider versions.)
-infra/terraform/.terraform/
+**/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars

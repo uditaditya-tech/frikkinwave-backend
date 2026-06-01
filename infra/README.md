@@ -1,13 +1,19 @@
 # Infrastructure (Terraform)
 
-AWS infra for frikkinwave-backend, provisioned with Terraform.
-Target: ECS Fargate behind an Application Load Balancer (Phase 1, sub-steps 1.9–1.11).
+AWS infra for frikkinwave-backend, split into two Terraform stacks so the
+app can be torn down and rebuilt freely without disturbing DNS or the TLS cert.
 
 ```
 infra/
-├── terraform/        # All Terraform config
+├── dns/              # PERSISTENT stack — create once, never `terraform destroy`
 │   ├── main.tf            # provider, version pins, local state
-│   ├── variables.tf       # inputs (region, image_tag, secrets, db, …)
+│   ├── variables.tf       # region, project, environment, api_domain
+│   ├── dns.tf             # Route 53 zone (api subdomain), ACM cert + validation
+│   └── outputs.tf         # nameservers, zone_id, certificate_arn
+│
+├── terraform/        # APP stack — the disposable destroy/apply layer
+│   ├── main.tf            # provider, version pins, local state
+│   ├── variables.tf       # inputs (region, image_tag, secrets, db, api_domain, …)
 │   ├── network.tf         # VPC, public + private subnets, IGW, security groups
 │   ├── ecr.tf             # container registry + lifecycle policy
 │   ├── rds.tf             # Postgres 16 instance + subnet group + password
@@ -15,14 +21,20 @@ infra/
 │   ├── iam.tf             # ECS execution + task roles (+ SSM read policy)
 │   ├── logs.tf            # CloudWatch log group
 │   ├── alb.tf             # load balancer, target group, HTTP→HTTPS redirect, HTTPS listener
-│   ├── dns.tf             # Route 53 zone (api subdomain), ACM cert, alias record
+│   ├── dns.tf             # data lookups (zone + cert) + ALB alias record
 │   ├── ecs.tf             # cluster, task definition (secrets), service
-│   ├── outputs.tf         # ALB DNS, ECR URL, RDS endpoint, nameservers, URLs
+│   ├── outputs.tf         # ALB DNS, ECR URL, RDS endpoint, URLs
 │   └── terraform.tfvars.example
 └── scripts/
     ├── push-image.sh      # build (linux/arm64) + push to ECR
     └── run-migrations.sh  # one-off Fargate task: migrate + seed
 ```
+
+**Why two stacks:** the Route 53 zone's nameservers are delegated from the
+registrar (GoDaddy) once, and the ACM cert is tied to that zone. If those lived
+in the app stack, every `terraform destroy` would rotate the nameservers and
+force a re-delegation. Keeping them in a separate persistent stack means the app
+stack discovers them via `data` sources and can be destroyed/recreated at will.
 
 ## Prerequisites
 
@@ -30,7 +42,21 @@ infra/
 - Terraform >= 1.6
 - Docker running (for the image build/push)
 
-## First deploy
+## One-time DNS bootstrap (persistent stack)
+
+Do this **once**. Don't destroy it afterwards.
+
+```bash
+cd infra/dns
+terraform init
+terraform apply
+terraform output api_nameservers
+#   → add these 4 as NS records for `api` at the parent domain's DNS (GoDaddy).
+#   Verify: dig +short NS api.frikkinwave.com @8.8.8.8
+#   The ACM cert validates automatically a few minutes after delegation.
+```
+
+## App deploy (disposable stack)
 
 ```bash
 cd infra/terraform
@@ -43,24 +69,18 @@ terraform apply -target=aws_ecr_repository.app
 # 2) Build + push the image:
 ../scripts/push-image.sh            # tags :latest
 
-# 3) Create the Route 53 hosted zone, then delegate the subdomain:
-terraform apply -target=aws_route53_zone.api
-terraform output api_nameservers
-#   → add these 4 as NS records for `api` at the parent domain's DNS (e.g. GoDaddy).
-#   Verify: dig +short NS api.frikkinwave.com @8.8.8.8
-
-# 4) Create everything else (RDS, ALB, ECS, ACM cert, HTTPS, alias, secrets, …):
+# 3) Create everything else (RDS, ALB, ECS, HTTPS listener, alias, secrets, …):
 terraform apply
-#   The ACM validation step blocks until the cert is issued — needs step 3 done.
+#   Reads the zone + cert from the dns stack via data sources.
 
-# 5) Run migrations + seed reference data (one-off Fargate task):
+# 4) Run migrations + seed reference data (one-off Fargate task):
 ../scripts/run-migrations.sh
 
-# 6) Verify the API is live over HTTPS:
+# 5) Verify the API is live over HTTPS:
 curl "$(terraform output -raw api_url)"            # → {"status": "ok"}
 ```
 
-> RDS takes ~5–10 min to provision; ACM validation a few minutes after delegation.
+> RDS takes ~5–10 min to provision on the first `terraform apply`.
 
 ## Updating the running app
 
@@ -71,22 +91,28 @@ terraform apply -var image_tag=v2
 ../scripts/run-migrations.sh
 ```
 
-## Tear down (back to $0)
+## Tear down
 
 ```bash
-terraform destroy
+cd infra/terraform && terraform destroy   # app stack only — DNS + cert survive
 ```
+
+**Never** `terraform destroy` the `infra/dns` stack unless you intend to give up
+the domain delegation — doing so deletes the hosted zone, rotates the
+nameservers, and would require re-adding the NS records at GoDaddy.
 
 ## Notes / scope
 
-- **State is local** (`terraform.tfstate`, git-ignored). Migrate to an S3 backend +
-  DynamoDB lock once the account is bootstrapped — see the commented block in `main.tf`.
+- **State is local** (`terraform.tfstate`, git-ignored, one per stack). Migrate to
+  an S3 backend + DynamoDB lock once the account is bootstrapped — see the
+  commented block in each `main.tf`.
 - **No NAT gateway.** Tasks run in public subnets with public IPs (saves ~$32/mo);
   the task security group still only accepts traffic from the ALB.
-- **DNS + HTTPS:** `api.frikkinwave.com` is a Route 53 hosted zone delegated from the
-  parent domain (apex stays with the registrar/Vercel). ACM issues the TLS cert
-  (DNS-validated); the ALB has an HTTPS:443 listener and redirects HTTP:80 → 443.
-  Django sets `SECURE_PROXY_SSL_HEADER` to trust the ALB's `X-Forwarded-Proto`.
+- **DNS + HTTPS:** `api.frikkinwave.com` is a Route 53 hosted zone (persistent stack)
+  delegated from the parent domain — apex stays with the registrar/Vercel. ACM issues
+  the TLS cert (DNS-validated). The app stack's ALB has an HTTPS:443 listener using
+  that cert and redirects HTTP:80 → 443. Django sets `SECURE_PROXY_SSL_HEADER` to
+  trust the ALB's `X-Forwarded-Proto`.
 - **Database:** RDS Postgres 16 (`db.t4g.micro`) in private subnets, not internet-reachable;
   the tasks SG is the only thing allowed to reach it on 5432. Ephemeral-dev posture —
   `terraform destroy` drops the DB; `run-migrations.sh` rebuilds schema + seed on the next apply.
@@ -101,9 +127,6 @@ terraform destroy
 ## Rough cost while running
 
 In `ap-south-1` (Mumbai): ALB ~$18/mo + 1× Fargate (0.25 vCPU/0.5 GB) ~$10/mo +
-RDS `db.t4g.micro` ~$13/mo + 20 GB gp3 ~$2/mo + Route 53 zone $0.50/mo +
-minimal ECR/logs ≈ **~$44/mo**. `terraform destroy` removes all of it.
-
-> Note: `terraform destroy` deletes the Route 53 hosted zone, which changes its
-> nameservers. After a later `apply` you must re-point the `api` NS records at the
-> registrar to the new nameservers (`terraform output api_nameservers`).
+RDS `db.t4g.micro` ~$13/mo + 20 GB gp3 ~$2/mo + minimal ECR/logs ≈ **~$43/mo**
+for the app stack. The persistent dns stack adds the Route 53 zone (~$0.50/mo);
+ACM certs are free. `terraform destroy` on the app stack removes the ~$43/mo.

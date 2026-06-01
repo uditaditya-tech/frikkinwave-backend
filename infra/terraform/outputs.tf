@@ -18,11 +18,6 @@ output "health_check_url" {
   value       = "http://${aws_lb.main.dns_name}/api/health/"
 }
 
-output "api_nameservers" {
-  description = "Add these as NS records for 'api' at the parent domain's DNS to delegate the subdomain."
-  value       = aws_route53_zone.api.name_servers
-}
-
 output "api_url" {
   description = "Public HTTPS health check once DNS + cert are live."
   value       = "https://${var.api_domain}/api/health/"
