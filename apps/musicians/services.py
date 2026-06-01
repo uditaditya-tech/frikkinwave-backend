@@ -50,6 +50,7 @@ def create_profile(*, user: User, data: dict[str, Any]) -> MusicianProfile:
         city=data.get("city", ""),
         country=data.get("country", ""),
         is_available=data.get("is_available", True),
+        sound_url=data.get("sound_url", ""),
     )
 
     _set_instruments(profile, data.get("instruments", []))
@@ -66,7 +67,7 @@ def update_profile(*, profile: MusicianProfile, data: dict[str, Any]) -> Musicia
     Only keys present in `data` are updated — absent keys are left untouched.
     `data` is the validated output of MusicianProfileWriteSerializer (partial=True).
     """
-    scalar_fields = ("bio", "city", "country", "is_available")
+    scalar_fields = ("bio", "city", "country", "is_available", "sound_url")
     changed = False
     for field in scalar_fields:
         if field in data:
