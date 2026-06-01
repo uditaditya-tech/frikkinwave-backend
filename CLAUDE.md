@@ -196,7 +196,16 @@ Manual run: `pre-commit run --all-files`
 - **WhiteNoise + collectstatic:** Must run `collectstatic` at Dockerfile build time with placeholder env vars.
 - **JWT refresh rotation:** Requires `rest_framework_simplejwt.token_blacklist` in `INSTALLED_APPS` AND its migrations applied. Both are already wired.
 - **Custom User model migrations:** Never add a FK to `AUTH_USER_MODEL` before the users migration exists. Always `makemigrations users` first.
-- **AWS ECS health check:** `SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]` is in production.py — keeps the ALB health check from being 301'd.
+- **AWS ECS health check:** `SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]` is in production.py — keeps the ALB health check from being 301'd. Also: the ALB health check hits the container with the **task's private IP** as the Host header, so production.py appends that IP (from the ECS metadata endpoint) to `ALLOWED_HOSTS`, and sets `SECURE_PROXY_SSL_HEADER` so HTTPS-behind-ALB doesn't redirect-loop. Don't remove either.
+- **pgvector (Phase 2):** RDS Postgres 16 supports it, but the `vector` extension must be enabled (`CREATE EXTENSION vector`) **before** any `VectorField` migration — do it as the first operation in a Django migration (pgvector's `VectorExtension`, or `RunSQL`). The RDS master user can run it. Also add `pgvector` to requirements and, for local dev, swap docker-compose's Postgres image for `pgvector/pgvector`.
+
+---
+
+## Infrastructure (AWS) — see `infra/README.md`
+
+- **Two Terraform stacks.** `infra/dns/` is PERSISTENT (Route 53 zone + ACM cert) — **never `terraform destroy` it** or the GoDaddy NS delegation breaks. `infra/terraform/` is the disposable app stack (VPC, ALB, ECS/Fargate, RDS, SSM secrets); destroy/apply freely. The app stack discovers the zone + cert via `data` sources.
+- **The app stack is currently DESTROYED** to save cost (only the ~$0.50/mo Route 53 zone runs). Bring it back via infra/README "App deploy": `terraform apply -target=aws_ecr_repository.app` → `push-image.sh` → `terraform apply` → `run-migrations.sh`. Same domain/cert, ~10 min, no GoDaddy steps. *(Update this line when the deployment state changes.)*
+- **Region** `ap-south-1` (Mumbai). **Migrations run as a one-off ECS task** (`infra/scripts/run-migrations.sh`), never on container start. **Secrets** live in SSM Parameter Store, injected via the task def `secrets` block. **Images** are `linux/arm64` (Graviton Fargate).
 
 ---
 

@@ -101,6 +101,11 @@ Flow: send → accept/decline → contact email revealed to both parties once ac
 
 One-to-one with `MusicianProfile`. Stores the pgvector embedding.
 
+> **pgvector setup:** enable the `vector` extension (`CREATE EXTENSION vector`) as the
+> first operation in the migration that adds the `VectorField` — RDS Postgres 16 supports
+> it, the master user can run it. Add `pgvector` to requirements; for local dev use the
+> `pgvector/pgvector` Postgres image in docker-compose. (See CLAUDE.md gotchas.)
+
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
