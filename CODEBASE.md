@@ -32,8 +32,10 @@ frikkinwave-backend/
 │   │   ├── apps.py                # name="apps.musicians", label="musicians"
 │   │   ├── migrations/
 │   │   │   ├── 0001_initial.py    # MusicianProfile
-│   │   │   └── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
-│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
+│   │   │   ├── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
+│   │   │   ├── 0003_*.py          # MusicianProfile.sound_url
+│   │   │   └── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding + HNSW index
+│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, ProfileEmbedding
 │   │   ├── serializers.py         # Read + Write serializers for profiles
 │   │   ├── services.py            # create_profile(), update_profile(), list_profiles(), get_public_profile()
 │   │   ├── urls.py                # /profiles/, /profiles/<username>/, /profile/, /profile/me/
@@ -44,7 +46,8 @@ frikkinwave-backend/
 │   │   └── tests/
 │   │       ├── __init__.py
 │   │       ├── conftest.py        # instrument, genre, profile fixtures
-│   │       └── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
+│   │       ├── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
+│   │       └── test_embedding.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
 │   │
 │   └── connections/               # Contact requests between users (send → accept/decline → reveal)
 │       ├── admin.py

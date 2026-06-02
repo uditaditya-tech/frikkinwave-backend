@@ -62,6 +62,7 @@ disable_error_code = ["untyped-decorator", "misc"]
 module = [
     "environ.*",
     "celery.*",
+    "pgvector.*",
     "factory.*",
     "boto3.*",
     "botocore.*",
