@@ -10,12 +10,22 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from django.conf import settings
+from django.db import transaction
+
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
     from apps.users.models import User
 
-from apps.musicians.models import Genre, Instrument, MusicianInstrument, MusicianProfile
+from apps.musicians.models import (
+    Genre,
+    Instrument,
+    MusicianInstrument,
+    MusicianProfile,
+    ProfileEmbedding,
+)
+from apps.musicians.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +66,8 @@ def create_profile(*, user: User, data: dict[str, Any]) -> MusicianProfile:
     _set_instruments(profile, data.get("instruments", []))
     _set_genres(profile, data.get("genres", []))
 
+    _enqueue_embedding(profile)
+
     logger.info("profile_created", extra={"profile_id": str(profile.id), "user_id": str(user.pk)})
     return profile
 
@@ -81,6 +93,8 @@ def update_profile(*, profile: MusicianProfile, data: dict[str, Any]) -> Musicia
 
     if "genres" in data:
         _set_genres(profile, data["genres"])
+
+    _enqueue_embedding(profile)
 
     logger.info("profile_updated", extra={"profile_id": str(profile.id)})
     return profile
@@ -171,3 +185,78 @@ def _set_instruments(
 def _set_genres(profile: MusicianProfile, genres: list[Genre]) -> None:
     """Replace all genres on a profile."""
     profile.genres.set(genres)
+
+
+def _enqueue_embedding(profile: MusicianProfile) -> None:
+    """
+    Emit the "embed this profile" event after the transaction commits.
+
+    on_commit so the task never runs against a half-written / rolled-back row.
+    Local import avoids a tasks ↔ services import cycle.
+    """
+    from apps.musicians.tasks import generate_profile_embedding_task
+
+    profile_id = str(profile.id)
+    transaction.on_commit(lambda: generate_profile_embedding_task.delay(profile_id))
+
+
+# ---------------------------------------------------------------------------
+# Embedding pipeline (invoked by the Celery task in apps/musicians/tasks.py)
+# ---------------------------------------------------------------------------
+
+
+def build_embedding_text(profile: MusicianProfile) -> str:
+    """
+    Compose the text that represents a profile for embedding.
+
+    Deterministic so identical profiles produce identical text (the content-skip
+    in generate_profile_embedding relies on this). Reads prefetched relations.
+    """
+    instruments = ", ".join(
+        f"{mi.instrument.name} ({mi.proficiency})" for mi in profile.musician_instruments.all()
+    )
+    genres = ", ".join(genre.name for genre in profile.genres.all())
+
+    lines = [
+        f"Bio: {profile.bio}" if profile.bio else "",
+        f"Location: {profile.city}, {profile.country}".strip(", "),
+        f"Instruments: {instruments}" if instruments else "",
+        f"Genres: {genres}" if genres else "",
+    ]
+    return "\n".join(line for line in lines if line)
+
+
+def generate_profile_embedding(*, profile_id: str) -> None:
+    """
+    Compute and store the embedding for a profile.
+
+    No-ops (logged) when: the profile is gone, no OpenAI key is configured, or
+    the profile's embedding text is unchanged since the last run (so re-saving a
+    profile without touching embeddable fields costs nothing).
+    """
+    profile = (
+        MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
+        .filter(id=profile_id)
+        .first()
+    )
+    if profile is None:
+        logger.warning("embedding_skipped_missing_profile", extra={"profile_id": profile_id})
+        return
+
+    if not settings.OPENAI_API_KEY:
+        logger.warning("embedding_skipped_no_api_key", extra={"profile_id": profile_id})
+        return
+
+    text = build_embedding_text(profile)
+
+    existing = ProfileEmbedding.objects.filter(profile=profile).first()
+    if existing is not None and existing.embedding_text == text:
+        logger.info("embedding_unchanged", extra={"profile_id": profile_id})
+        return
+
+    vector = get_openai_client().embed(text)
+    ProfileEmbedding.objects.update_or_create(
+        profile=profile,
+        defaults={"embedding": vector, "embedding_text": text},
+    )
+    logger.info("embedding_generated", extra={"profile_id": profile_id})

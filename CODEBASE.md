@@ -37,7 +37,9 @@ frikkinwave-backend/
 │   │   │   └── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding + HNSW index
 │   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, ProfileEmbedding
 │   │   ├── serializers.py         # Read + Write serializers for profiles
-│   │   ├── services.py            # create_profile(), update_profile(), list_profiles(), get_public_profile()
+│   │   ├── services.py            # create/update/list/get profiles + build_embedding_text(), generate_profile_embedding()
+│   │   ├── openai_client.py       # OpenAIClient wrapper + get_openai_client() (swappable seam; mocked in tests)
+│   │   ├── tasks.py               # Celery task: generate_profile_embedding (emitted on profile save via on_commit)
 │   │   ├── urls.py                # /profiles/, /profiles/<username>/, /profile/, /profile/me/
 │   │   ├── views.py               # ProfileListView, ProfilePublicView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
 │   │   ├── management/
@@ -47,7 +49,8 @@ frikkinwave-backend/
 │   │       ├── __init__.py
 │   │       ├── conftest.py        # instrument, genre, profile fixtures
 │   │       ├── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
-│   │       └── test_embedding.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
+│   │       ├── test_embedding.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
+│   │       └── test_embedding_pipeline.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
 │   │
 │   └── connections/               # Contact requests between users (send → accept/decline → reveal)
 │       ├── admin.py
