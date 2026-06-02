@@ -112,7 +112,10 @@ One-to-one with `MusicianProfile`. Stores the pgvector embedding.
 
 HNSW index `profile_embedding_hnsw` on `embedding` with `vector_cosine_ops`
 (m=16, ef_construction=64) — cosine because text-embedding-3-small vectors are
-normalised. Populated asynchronously by a Celery task on profile save (2.4).
+normalised. **Populated by the 2.4 pipeline:** `create_profile` / `update_profile`
+emit `musicians.generate_profile_embedding` via `on_commit`; the task builds the
+profile text, embeds it through the OpenAI wrapper, and upserts this row. Skips
+the OpenAI call when the embedding text is unchanged or no API key is set.
 
 ---
 
