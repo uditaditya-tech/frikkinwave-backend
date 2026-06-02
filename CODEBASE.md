@@ -61,7 +61,8 @@ frikkinwave-backend/
 │           └── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
 │
 ├── config/                        # Django project config (not an app)
-│   ├── __init__.py
+│   ├── __init__.py                # Loads the Celery app so @shared_task binds
+│   ├── celery.py                  # Celery app (Redis broker, autodiscovers tasks.py)
 │   ├── asgi.py
 │   ├── wsgi.py
 │   ├── urls.py                    # Root URL conf — all routes wired here
@@ -85,6 +86,8 @@ frikkinwave-backend/
 │       └── run-migrations.sh      # one-off Fargate task: migrate + seed
 │
 ├── conftest.py                    # Root pytest fixtures: api_client, user
+├── tests/                         # Project-level tests not tied to one app
+│   └── test_celery_wiring.py      # Celery app wiring (2.1)
 ├── .env                           # Git-ignored. Copy from .env.example.
 ├── .env.example                   # Committed template for all env vars.
 ├── .gitignore

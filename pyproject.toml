@@ -52,8 +52,16 @@ module = ["apps.*.admin"]
 disable_error_code = ["type-arg"]
 
 [[tool.mypy.overrides]]
+# Celery's task decorators are untyped in the shipped stubs, so @app.task /
+# @shared_task trip `untyped-decorator` under strict mode. Suppress it in the
+# Celery app and every app's tasks.py — the task bodies themselves stay typed.
+module = ["config.celery", "apps.*.tasks"]
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
 module = [
     "environ.*",
+    "celery.*",
     "factory.*",
     "boto3.*",
     "botocore.*",

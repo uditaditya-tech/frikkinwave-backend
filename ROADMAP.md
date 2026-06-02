@@ -43,17 +43,20 @@ Shipped: live at https://api.frikkinwave.com (ECS Fargate + ALB + RDS, ap-south-
 ---
 
 ## Phase 2 — AI-powered matching
-**Status: ⬜ Not started**
+**Status: 🟡 In progress**
 Stop here = AI on the tin, portfolio centerpiece live
 
-- pgvector extension + ProfileEmbedding model
-- Celery worker + Redis broker
-- Contact request email notifications (send → notify recipient; accept → notify sender) — deferred here from 1.7, wired as Celery tasks
-- Embedding pipeline: profile save → Celery task → OpenAI text-embedding-3-small → pgvector store
-- Semantic search endpoint: natural language query → embedding → nearest-neighbor retrieval
-- Compatibility blurb: gpt-4o-mini generates "Why you might click" per profile pair, cached
-- Profile coach: LLM evaluates completeness on profile setup, surfaces specific suggestions
-- Evals: measure embedding retrieval quality, blurb relevance
+| Sub-step | Status |
+|---|---|
+| 2.1 Celery app + Redis broker wired (settings, eager-in-tests, debug task) | ✅ |
+| 2.2 Contact-request email notifications as Celery tasks (deferred from 1.7) | ⬜ |
+| 2.3 pgvector extension + `ProfileEmbedding` model + migration | ⬜ |
+| 2.4 Embedding pipeline: profile save → event → Celery task → OpenAI text-embedding-3-small → pgvector store | ⬜ |
+| 2.5 Semantic search endpoint: natural language query → embedding → nearest-neighbor retrieval | ⬜ |
+| 2.6 Compatibility blurb: gpt-4o-mini "Why you might click" per profile pair, cached (`CompatibilityBlurb`) | ⬜ |
+| 2.7 Profile coach: LLM evaluates completeness on profile setup, surfaces specific suggestions | ⬜ |
+| 2.8 Evals: measure embedding retrieval quality, blurb relevance | ⬜ |
+| 2.9 Infra: ElastiCache Redis + Celery worker task def (when the app stack is redeployed) | ⬜ |
 
 ---
 
