@@ -49,7 +49,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 | Sub-step | Status |
 |---|---|
 | 2.1 Celery app + Redis broker wired (settings, eager-in-tests, debug task) | ✅ |
-| 2.2 Contact-request email notifications as Celery tasks (deferred from 1.7) | ⬜ |
+| 2.2 Contact-request email notifications as Celery tasks (deferred from 1.7) | ✅ |
 | 2.3 pgvector extension + `ProfileEmbedding` model + migration | ⬜ |
 | 2.4 Embedding pipeline: profile save → event → Celery task → OpenAI text-embedding-3-small → pgvector store | ⬜ |
 | 2.5 Semantic search endpoint: natural language query → embedding → nearest-neighbor retrieval | ⬜ |

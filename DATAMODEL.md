@@ -92,7 +92,7 @@ Unique constraint on `(sender, recipient)`.
 Self-requests rejected in the service layer.
 Username → user resolution goes through `apps.users.services.get_user_by_username` (no model import).
 Flow: send → accept/decline → contact email revealed to both parties once accepted.
-**Email notification on send/accept is deferred to Phase 2** (handled by a Celery task once the worker + broker land).
+**Email notifications wired in Phase 2.2:** `send` emits `connections.notify_new_contact_request` (emails the recipient); `accept` emits `connections.notify_contact_request_accepted` (emails the sender, revealing the recipient's contact email). Both are emitted via `transaction.on_commit(... .delay())` from the service layer — see `apps/connections/tasks.py`.
 
 ---
 

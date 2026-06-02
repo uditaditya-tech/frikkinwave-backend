@@ -181,6 +181,14 @@ SPECTACULAR_SETTINGS = {
 }
 
 # ---------------------------------------------------------------------------
+# Email
+# Default sender for transactional email (contact-request notifications, etc.).
+# Local dev uses the console backend; production overrides this from env and
+# uses SMTP. Defined here so every environment has a sender address.
+# ---------------------------------------------------------------------------
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@frikkinwave.com")
+
+# ---------------------------------------------------------------------------
 # CORS (frontend origin configured per environment)
 # ---------------------------------------------------------------------------
 CORS_ALLOWED_ORIGINS: list[str] = []
