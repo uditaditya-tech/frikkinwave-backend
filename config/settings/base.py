@@ -154,6 +154,23 @@ SIMPLE_JWT = {
 }
 
 # ---------------------------------------------------------------------------
+# Celery (Redis broker)
+# Async work runs through Celery; tasks are wired as event handlers, not inline
+# view calls (see "Events for async work" in CLAUDE.md). Locally the broker is
+# the docker-compose Redis; in production it is ElastiCache (set via env).
+# ---------------------------------------------------------------------------
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = "UTC"
+# When True, tasks run inline in the calling process (used in tests via the
+# autouse fixture in conftest.py). Real workers run with this False.
+CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
+CELERY_TASK_EAGER_PROPAGATES = True
+
+# ---------------------------------------------------------------------------
 # drf-spectacular (OpenAPI)
 # ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
