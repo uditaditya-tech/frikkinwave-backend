@@ -96,24 +96,27 @@ Flow: send → accept/decline → contact email revealed to both parties once ac
 
 ---
 
-## Planned models (Phase 2 — AI)
-
-### `musicians.ProfileEmbedding`
+### `musicians.ProfileEmbedding` (Phase 2 — 2.3 ✅)
 
 One-to-one with `MusicianProfile`. Stores the pgvector embedding.
-
-> **pgvector setup:** enable the `vector` extension (`CREATE EXTENSION vector`) as the
-> first operation in the migration that adds the `VectorField` — RDS Postgres 16 supports
-> it, the master user can run it. Add `pgvector` to requirements; for local dev use the
-> `pgvector/pgvector` Postgres image in docker-compose. (See CLAUDE.md gotchas.)
+**App:** `apps/musicians` | **Migration:** `0004_profileembedding`
+(enables the `vector` extension via `VectorExtension()` as its first op.)
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
-| `profile` | OneToOneField → MusicianProfile | Cascade delete |
-| `embedding` | VectorField(1536) | text-embedding-3-small output (1536 dims) |
-| `embedding_text` | TextField | The raw text that was embedded (for debugging) |
-| `generated_at` | DateTimeField | When the embedding was last computed |
+| `profile` | OneToOneField → MusicianProfile | Cascade delete. `related_name="embedding"`. |
+| `embedding` | VectorField(1536) | text-embedding-3-small output (1536 dims). `EMBEDDING_DIMENSIONS` const. |
+| `embedding_text` | TextField | The raw text that was embedded (for debugging / re-embedding) |
+| `generated_at` | DateTimeField | `auto_now` — when the embedding was last computed |
+
+HNSW index `profile_embedding_hnsw` on `embedding` with `vector_cosine_ops`
+(m=16, ef_construction=64) — cosine because text-embedding-3-small vectors are
+normalised. Populated asynchronously by a Celery task on profile save (2.4).
+
+---
+
+## Planned models (Phase 2 — AI)
 
 ### `musicians.CompatibilityBlurb`
 

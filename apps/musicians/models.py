@@ -25,6 +25,7 @@ import uuid
 import uuid6
 from django.conf import settings
 from django.db import models
+from pgvector.django import HnswIndex, VectorField
 
 
 def _new_uuid() -> uuid.UUID:
@@ -149,3 +150,49 @@ class MusicianProfile(models.Model):
 
     def __str__(self) -> str:
         return f"MusicianProfile({self.user_id})"
+
+
+# ---------------------------------------------------------------------------
+# AI embeddings (Phase 2)
+# ---------------------------------------------------------------------------
+
+# OpenAI text-embedding-3-small output dimensionality.
+EMBEDDING_DIMENSIONS = 1536
+
+
+class ProfileEmbedding(models.Model):
+    """
+    Vector embedding of a MusicianProfile, used for semantic jam-partner search.
+
+    Populated asynchronously by a Celery task on profile save (Phase 2.4) from
+    text-embedding-3-small. The HNSW index with cosine distance backs the
+    nearest-neighbour query in Phase 2.5 — text-embedding-3-small vectors are
+    normalised, so cosine is the right metric.
+    """
+
+    id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
+    profile = models.OneToOneField(
+        MusicianProfile,
+        on_delete=models.CASCADE,
+        related_name="embedding",
+    )
+    embedding = VectorField(dimensions=EMBEDDING_DIMENSIONS)
+    # The raw text that was embedded — kept for debugging / re-embedding.
+    embedding_text = models.TextField()
+    # When the embedding was last computed (auto-updates on each recompute).
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-generated_at"]
+        indexes = [
+            HnswIndex(
+                name="profile_embedding_hnsw",
+                fields=["embedding"],
+                m=16,
+                ef_construction=64,
+                opclasses=["vector_cosine_ops"],
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"ProfileEmbedding({self.profile_id})"

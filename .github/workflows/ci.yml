@@ -13,7 +13,8 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        # pgvector image so migrations can CREATE EXTENSION vector (Phase 2).
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

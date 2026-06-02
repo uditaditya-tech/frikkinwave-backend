@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from apps.musicians.models import Genre, Instrument, MusicianInstrument, MusicianProfile
+from apps.musicians.models import (
+    Genre,
+    Instrument,
+    MusicianInstrument,
+    MusicianProfile,
+    ProfileEmbedding,
+)
 
 
 @admin.register(Instrument)
@@ -28,3 +34,13 @@ class MusicianProfileAdmin(admin.ModelAdmin):
 class MusicianInstrumentAdmin(admin.ModelAdmin):
     list_display = ["profile", "instrument", "proficiency"]
     list_filter = ["proficiency"]
+
+
+@admin.register(ProfileEmbedding)
+class ProfileEmbeddingAdmin(admin.ModelAdmin):
+    # The raw 1536-dim vector is unusable in a form, so exclude it; show only
+    # the metadata. Embeddings are written by a Celery task, not by hand.
+    list_display = ["profile", "generated_at"]
+    readonly_fields = ["profile", "embedding_text", "generated_at"]
+    exclude = ["embedding"]
+    search_fields = ["profile__user__username", "profile__user__email"]
