@@ -53,12 +53,14 @@ frikkinwave-backend/
 │       │   └── 0001_initial.py    # ContactRequest
 │       ├── models.py              # ContactRequest (sender/recipient FKs via AUTH_USER_MODEL string ref)
 │       ├── serializers.py         # Read (conditional contact_email reveal) + Create
-│       ├── services.py            # send / list / get / accept / decline; calls users.services for username lookup
+│       ├── services.py            # send / list / get / accept / decline + email notify fns; calls users.services for username lookup
+│       ├── tasks.py               # Celery tasks: notify recipient on send, notify sender on accept (emitted via on_commit)
 │       ├── urls.py                # /requests/, /requests/<id>/, /requests/<id>/accept/, /decline/
 │       ├── views.py               # ListCreate, Detail, Accept, Decline views
 │       └── tests/
 │           ├── __init__.py
-│           └── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
+│           ├── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
+│           └── test_notifications.py  # 5 tests: send/accept emails, decline silent, missing-request no-op
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py                # Loads the Celery app so @shared_task binds

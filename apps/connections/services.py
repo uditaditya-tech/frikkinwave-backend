@@ -11,7 +11,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from django.db import IntegrityError
+from django.conf import settings
+from django.core.mail import send_mail
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 
 from apps.connections.models import ContactRequest
@@ -71,6 +73,13 @@ def send_contact_request(
         )
     except IntegrityError as exc:
         raise DuplicateContactRequestError from exc
+
+    # Emit the "new contact request" event once the row actually commits, so a
+    # rolled-back transaction never enqueues a task pointing at a phantom row.
+    # Local import avoids a tasks ↔ services import cycle.
+    from apps.connections.tasks import notify_new_contact_request
+
+    transaction.on_commit(lambda: notify_new_contact_request.delay(str(request.id)))
 
     logger.info(
         "contact_request_sent",
@@ -142,8 +151,76 @@ def _resolve(*, user: User, request_id: str, new_status: str) -> ContactRequest 
         raise NotPendingError
     request.status = new_status
     request.save(update_fields=["status", "updated_at"])
+
+    # Notify the sender only when their request is accepted (decline is silent).
+    if new_status == ContactRequest.Status.ACCEPTED:
+        from apps.connections.tasks import notify_contact_request_accepted
+
+        transaction.on_commit(lambda: notify_contact_request_accepted.delay(str(request.id)))
+
     logger.info(
         "contact_request_resolved",
         extra={"request_id": str(request.id), "status": new_status},
     )
     return request
+
+
+# ---------------------------------------------------------------------------
+# Email notifications (invoked by Celery tasks in apps/connections/tasks.py)
+# ---------------------------------------------------------------------------
+
+
+def notify_recipient_of_request(*, request_id: str) -> None:
+    """
+    Email the recipient that `sender` wants to connect.
+
+    A missing request (e.g. deleted before the task ran) is logged and ignored
+    rather than raised — the task must not retry forever on a row that is gone.
+    """
+    request = (
+        ContactRequest.objects.select_related("sender", "recipient").filter(id=request_id).first()
+    )
+    if request is None:
+        logger.warning("notify_recipient_skipped_missing_request", extra={"request_id": request_id})
+        return
+
+    sender_name = request.sender.username
+    body = f"{sender_name} wants to connect with you on frikkinwave."
+    if request.message:
+        body += f'\n\nThey said:\n"{request.message}"'
+    body += "\n\nLog in to frikkinwave to accept or decline."
+
+    send_mail(
+        subject=f"{sender_name} wants to connect on frikkinwave",
+        message=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[request.recipient.email],
+    )
+    logger.info("contact_request_notification_sent", extra={"request_id": request_id})
+
+
+def notify_sender_of_acceptance(*, request_id: str) -> None:
+    """
+    Email the sender that their request was accepted, revealing the recipient's
+    contact email (the reveal-on-accept rule). Missing request: logged, ignored.
+    """
+    request = (
+        ContactRequest.objects.select_related("sender", "recipient").filter(id=request_id).first()
+    )
+    if request is None:
+        logger.warning("notify_sender_skipped_missing_request", extra={"request_id": request_id})
+        return
+
+    recipient_name = request.recipient.username
+    body = (
+        f"{recipient_name} accepted your contact request on frikkinwave.\n\n"
+        f"You can now reach them at: {request.recipient.email}"
+    )
+
+    send_mail(
+        subject=f"{recipient_name} accepted your contact request",
+        message=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[request.sender.email],
+    )
+    logger.info("contact_request_acceptance_sent", extra={"request_id": request_id})
