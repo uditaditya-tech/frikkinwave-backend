@@ -56,7 +56,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 | 2.6 Compatibility blurb: gpt-4o-mini "Why you might click" per profile pair, cached (`CompatibilityBlurb`) | ⬜ |
 | 2.7 Profile coach: LLM evaluates completeness on profile setup, surfaces specific suggestions | ⬜ |
 | 2.8 Evals: measure embedding retrieval quality, blurb relevance | ⬜ |
-| 2.9 Infra: ElastiCache Redis + Celery worker task def (when the app stack is redeployed) | ⬜ |
+| 2.9 Infra: ElastiCache Redis + Celery worker task def; **prod deploy of 2.2+ is gated on this** (no broker = send/accept fail). **Consider adding CD here** (CI currently lint/test only; deploys are manual). | ⬜ |
 
 ---
 
