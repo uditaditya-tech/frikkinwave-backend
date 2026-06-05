@@ -43,8 +43,8 @@ Shipped: live at https://api.frikkinwave.com (ECS Fargate + ALB + RDS, ap-south-
 ---
 
 ## Phase 2 — AI-powered matching
-**Status: 🟡 In progress**
-Stop here = AI on the tin, portfolio centerpiece live
+**Status: ✅ Complete**
+Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery worker + ElastiCache + pgvector, ap-south-1)
 
 | Sub-step | Status |
 |---|---|
@@ -56,7 +56,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 | 2.6 Compatibility blurb: gpt-4o-mini "Why you might click" per profile pair, cached (`CompatibilityBlurb`) | ✅ |
 | 2.7 Profile coach: completeness score + field suggestions (rules) + LLM tip on profile setup | ✅ |
 | 2.8 Evals: retrieval quality (recall@k, MRR) + blurb grounding — metrics + golden set + `eval_matching` command + deterministic CI harness | ✅ |
-| 2.9 Infra: ElastiCache Redis + Celery worker task def + `OPENAI_API_KEY` secret — **Terraform authored & validated (`plan`: 7 add / additive), apply deferred.** CD decision: **staying manual** (recorded in infra/README). First Phase-2 prod deploy runs when you apply. | 🟡 |
+| 2.9 Infra: ElastiCache Redis + Celery worker task def + `OPENAI_API_KEY` secret — **deployed & verified live in prod** (real end-to-end semantic search via OpenAI). CD decision: **staying manual** (recorded in infra/README). `terraform destroy` takes a final RDS snapshot by default. | ✅ |
 
 ---
 
@@ -92,9 +92,9 @@ Stop here = AI on the tin, portfolio centerpiece live
 
 | Service | Platform | Status |
 |---|---|---|
-| Backend API | AWS ECS + Fargate | ✅ Live (ap-south-1, HTTP) |
+| Backend API | AWS ECS + Fargate | ✅ Live (ap-south-1, HTTPS) — web + Celery worker |
 | Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, private subnets) |
-| Cache / broker | AWS ElastiCache (Redis) | 🟡 Terraform authored (2.9), apply deferred |
+| Cache / broker | AWS ElastiCache (Redis) | ✅ Live (ap-south-1, Celery broker) |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |
 | Future | AWS EKS | Phase 4+ |
