@@ -196,3 +196,39 @@ class ProfileEmbedding(models.Model):
 
     def __str__(self) -> str:
         return f"ProfileEmbedding({self.profile_id})"
+
+
+class CompatibilityBlurb(models.Model):
+    """
+    Cached "why you might click" text for an unordered pair of profiles.
+
+    The pair is canonical: callers order the two profiles by id before lookup
+    (profile_a.id < profile_b.id), so (A,B) and (B,A) map to one row. The blurb
+    is phrased neutrally ("you both…"), generated once by gpt-4o-mini and cached.
+    """
+
+    id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
+    profile_a = models.ForeignKey(
+        MusicianProfile,
+        on_delete=models.CASCADE,
+        related_name="compat_blurbs_as_a",
+    )
+    profile_b = models.ForeignKey(
+        MusicianProfile,
+        on_delete=models.CASCADE,
+        related_name="compat_blurbs_as_b",
+    )
+    blurb = models.TextField()
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-generated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["profile_a", "profile_b"],
+                name="unique_compatibility_pair",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"CompatibilityBlurb({self.profile_a_id}, {self.profile_b_id})"

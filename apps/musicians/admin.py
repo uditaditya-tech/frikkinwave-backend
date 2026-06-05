@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from apps.musicians.models import (
+    CompatibilityBlurb,
     Genre,
     Instrument,
     MusicianInstrument,
@@ -44,3 +45,9 @@ class ProfileEmbeddingAdmin(admin.ModelAdmin):
     readonly_fields = ["profile", "embedding_text", "generated_at"]
     exclude = ["embedding"]
     search_fields = ["profile__user__username", "profile__user__email"]
+
+
+@admin.register(CompatibilityBlurb)
+class CompatibilityBlurbAdmin(admin.ModelAdmin):
+    list_display = ["profile_a", "profile_b", "generated_at"]
+    readonly_fields = ["profile_a", "profile_b", "blurb", "generated_at"]

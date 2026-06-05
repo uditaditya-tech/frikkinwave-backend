@@ -161,6 +161,7 @@ SIMPLE_JWT = {
 # ---------------------------------------------------------------------------
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 OPENAI_EMBEDDING_MODEL = env("OPENAI_EMBEDDING_MODEL", default="text-embedding-3-small")
+OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
 
 # ---------------------------------------------------------------------------
 # Celery (Redis broker)

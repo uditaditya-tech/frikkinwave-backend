@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from apps.users.models import User
 
 from apps.musicians.models import (
+    CompatibilityBlurb,
     Genre,
     Instrument,
     MusicianInstrument,
@@ -174,6 +175,54 @@ def search_profiles(
     results: list[MusicianProfile] = list(queryset[:limit])
     logger.info("profiles_searched", extra={"result_count": len(results), "limit": limit})
     return results
+
+
+def get_compatibility_blurb(
+    *,
+    viewer_profile: MusicianProfile,
+    other_profile: MusicianProfile,
+) -> str | None:
+    """
+    Return a cached "why you might click" blurb for the pair, generating it on a
+    cache miss via gpt-4o-mini.
+
+    The pair is canonical (ordered by id), so viewing from either side hits the
+    same row. Returns None (logged) when no OpenAI key is configured.
+    """
+    profile_a, profile_b = sorted([viewer_profile, other_profile], key=lambda p: p.id)
+
+    existing = CompatibilityBlurb.objects.filter(profile_a=profile_a, profile_b=profile_b).first()
+    if existing is not None:
+        logger.info("compatibility_blurb_cache_hit", extra={"a": str(profile_a.id)})
+        return existing.blurb
+
+    if not settings.OPENAI_API_KEY:
+        logger.warning("compatibility_skipped_no_api_key")
+        return None
+
+    prompt = _build_compatibility_prompt(profile_a, profile_b)
+    blurb = get_openai_client().complete(prompt)
+
+    # get_or_create guards against a concurrent request having just written it.
+    obj, _created = CompatibilityBlurb.objects.get_or_create(
+        profile_a=profile_a,
+        profile_b=profile_b,
+        defaults={"blurb": blurb},
+    )
+    logger.info("compatibility_blurb_generated", extra={"a": str(profile_a.id)})
+    return obj.blurb
+
+
+def _build_compatibility_prompt(a: MusicianProfile, b: MusicianProfile) -> str:
+    """Prompt gpt-4o-mini for a short, grounded compatibility blurb."""
+    return (
+        "Two musicians are considering jamming together. Using only the details "
+        "below, write 2-3 friendly sentences addressed to both of them as 'you', "
+        "explaining why you might click musically. Be specific about shared or "
+        "complementary instruments, genres, and location. Do not invent facts.\n\n"
+        f"Musician A:\n{build_embedding_text(a)}\n\n"
+        f"Musician B:\n{build_embedding_text(b)}\n"
+    )
 
 
 def get_public_profile(*, username: str) -> MusicianProfile | None:
