@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from django.db import transaction
+from pgvector.django import CosineDistance
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -137,6 +138,42 @@ def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
 
     logger.info("profiles_listed", extra={"filter_keys": sorted(filters.keys())})
     return queryset
+
+
+def search_profiles(
+    *,
+    query: str,
+    limit: int = 20,
+    available_only: bool = False,
+) -> list[MusicianProfile]:
+    """
+    Semantic search: embed `query` and return the nearest profiles by cosine
+    distance over the HNSW index, most similar first.
+
+    Only profiles that already have an embedding are searchable. Each returned
+    profile carries a `distance` attribute (from the annotation) the serializer
+    turns into a similarity score. Returns [] (logged) when no OpenAI key is
+    configured, so search degrades gracefully rather than erroring.
+    """
+    if not settings.OPENAI_API_KEY:
+        logger.warning("search_skipped_no_api_key")
+        return []
+
+    query_vector = get_openai_client().embed(query)
+
+    queryset = (
+        MusicianProfile.objects.filter(embedding__isnull=False)
+        .select_related("user")
+        .prefetch_related("musician_instruments__instrument", "genres")
+        .annotate(distance=CosineDistance("embedding__embedding", query_vector))
+        .order_by("distance")
+    )
+    if available_only:
+        queryset = queryset.filter(is_available=True)
+
+    results: list[MusicianProfile] = list(queryset[:limit])
+    logger.info("profiles_searched", extra={"result_count": len(results), "limit": limit})
+    return results
 
 
 def get_public_profile(*, username: str) -> MusicianProfile | None:

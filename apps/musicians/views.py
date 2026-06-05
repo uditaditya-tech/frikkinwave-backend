@@ -22,6 +22,7 @@ from apps.musicians.serializers import (
     InstrumentSerializer,
     MusicianProfileReadSerializer,
     MusicianProfileWriteSerializer,
+    ProfileSearchResultSerializer,
 )
 from apps.musicians.services import (
     ProfileAlreadyExistsError,
@@ -30,11 +31,16 @@ from apps.musicians.services import (
     list_genres,
     list_instruments,
     list_profiles,
+    search_profiles,
     update_profile,
 )
 from apps.users.models import User
 
 logger = logging.getLogger(__name__)
+
+SEARCH_QUERY_MAX_LEN = 500
+SEARCH_DEFAULT_LIMIT = 20
+SEARCH_MAX_LIMIT = 50
 
 
 class InstrumentListView(APIView):
@@ -128,6 +134,50 @@ class ProfileListView(APIView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = MusicianProfileReadSerializer(page, many=True).data
         return paginator.get_paginated_response(data)
+
+
+class ProfileSearchView(APIView):
+    """
+    GET /api/musicians/search/?q=<text>&limit=N&available=true
+
+    Semantic search over profile embeddings (cosine kNN). Public.
+    `q` is required; `limit` defaults to 20 (max 50); `available=true` restricts
+    to profiles open to jamming. Results are ranked most-similar first, each with
+    a `similarity` score. Returns an empty list if AI search is unavailable.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        query = request.query_params.get("q", "").strip()
+        if not query:
+            return Response(
+                {"detail": "Query parameter 'q' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(query) > SEARCH_QUERY_MAX_LEN:
+            return Response(
+                {"detail": f"Query must be at most {SEARCH_QUERY_MAX_LEN} characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit = self._parse_limit(request.query_params.get("limit"))
+        available_only = request.query_params.get("available", "").lower() == "true"
+
+        results = search_profiles(query=query, limit=limit, available_only=available_only)
+        data = ProfileSearchResultSerializer(results, many=True).data
+        return Response({"query": query, "results": data})
+
+    @staticmethod
+    def _parse_limit(raw: str | None) -> int:
+        if raw is None:
+            return SEARCH_DEFAULT_LIMIT
+        try:
+            limit = int(raw)
+        except ValueError:
+            return SEARCH_DEFAULT_LIMIT
+        return max(1, min(limit, SEARCH_MAX_LIMIT))
 
 
 class ProfilePublicView(APIView):
