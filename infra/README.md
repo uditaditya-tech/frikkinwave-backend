@@ -139,6 +139,12 @@ up; a manual-approval-gated GitHub Actions job is the natural next step.
 cd infra/terraform && terraform destroy   # app stack only — DNS + cert survive
 ```
 
+By default this **takes a final RDS snapshot** (`db_skip_final_snapshot=false`)
+named `frikkinwave-prod-final-<rand>` (see the `db_final_snapshot_name` output),
+so the data is retained and can rehydrate a future deploy by pointing
+`aws_db_instance` at `snapshot_identifier`. Manual snapshots also survive a
+destroy. To wipe cleanly instead (no snapshot): `terraform destroy -var db_skip_final_snapshot=true`.
+
 **Never** `terraform destroy` the `infra/dns` stack unless you intend to give up
 the domain delegation — doing so deletes the hosted zone, rotates the
 nameservers, and would require re-adding the NS records at GoDaddy.
@@ -156,8 +162,10 @@ nameservers, and would require re-adding the NS records at GoDaddy.
   that cert and redirects HTTP:80 → 443. Django sets `SECURE_PROXY_SSL_HEADER` to
   trust the ALB's `X-Forwarded-Proto`.
 - **Database:** RDS Postgres 16 (`db.t4g.micro`) in private subnets, not internet-reachable;
-  the tasks SG is the only thing allowed to reach it on 5432. Ephemeral-dev posture —
-  `terraform destroy` drops the DB; `run-migrations.sh` rebuilds schema + seed on the next apply.
+  the tasks SG is the only thing allowed to reach it on 5432. `terraform destroy` takes a
+  **final snapshot** by default (`db_skip_final_snapshot=false`), so data is retained; a
+  clean rebuild uses `run-migrations.sh` on the next apply, or restore the snapshot via
+  `snapshot_identifier`. Pass `-var db_skip_final_snapshot=true` to wipe without a snapshot.
 - **Secrets:** `DJANGO_SECRET_KEY` and `DATABASE_URL` live in SSM Parameter Store
   (SecureString) and are injected into the container via the task definition's `secrets`
   block. The Terraform-generated DB password never appears in the task definition.
