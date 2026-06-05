@@ -38,11 +38,11 @@ frikkinwave-backend/
 │   │   │   └── 0005_compatibilityblurb.py # CompatibilityBlurb (cached per profile pair)
 │   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, ProfileEmbedding, CompatibilityBlurb
 │   │   ├── serializers.py         # Read + Write serializers + ProfileSearchResultSerializer (adds similarity)
-│   │   ├── services.py            # profiles + build_embedding_text/generate_profile_embedding/search_profiles/get_compatibility_blurb
+│   │   ├── services.py            # profiles + embeddings/search/compatibility blurb/coach_profile
 │   │   ├── openai_client.py       # OpenAIClient (embed + complete) + get_openai_client() (swappable seam; mocked in tests)
 │   │   ├── tasks.py               # Celery task: generate_profile_embedding (emitted on profile save via on_commit)
-│   │   ├── urls.py                # /search/, /compatibility/<username>/, /profiles/, /profiles/<username>/, /profile/, /profile/me/
-│   │   ├── views.py               # ProfileList/Public/Create/Me/Search + Compatibility views (+ ProfileCursorPagination)
+│   │   ├── urls.py                # /search/, /compatibility/<username>/, /profiles/, /profile/, /profile/coach/, /profile/me/
+│   │   ├── views.py               # ProfileList/Public/Create/Me/Search/Compatibility/Coach views (+ ProfileCursorPagination)
 │   │   ├── management/
 │   │   │   └── commands/
 │   │   │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
@@ -53,7 +53,8 @@ frikkinwave-backend/
 │   │       ├── test_embedding.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
 │   │       ├── test_embedding_pipeline.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
 │   │       ├── test_search.py     # 7 tests: ranking, limit, available filter, no-embedding exclusion, 400s, no-key (OpenAI mocked)
-│   │       └── test_compatibility.py  # 8 tests: generate+cache, reverse-pair cache, self/404/no-profile/401/503 (LLM mocked)
+│   │       ├── test_compatibility.py  # 8 tests: generate+cache, reverse-pair cache, self/404/no-profile/401/503 (LLM mocked)
+│   │       └── test_coach.py      # 5 tests: missing-field suggestions, score 100, no-key null tip, no-profile 400, 401 (LLM mocked)
 │   │
 │   └── connections/               # Contact requests between users (send → accept/decline → reveal)
 │       ├── admin.py
@@ -139,6 +140,7 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |
 | GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile |
 | PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile |
+| GET | `/api/musicians/profile/coach/` | Bearer | Profile completeness score + field suggestions + LLM tip |
 | POST | `/api/connections/requests/` | Bearer | Send a contact request (by recipient username) |
 | GET | `/api/connections/requests/` | Bearer | List own requests (`?box=incoming\|outgoing`) |
 | GET | `/api/connections/requests/<id>/` | Bearer | Retrieve a request you are party to |
