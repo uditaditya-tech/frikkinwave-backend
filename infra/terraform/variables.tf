@@ -117,9 +117,9 @@ variable "db_backup_retention_days" {
 }
 
 variable "db_skip_final_snapshot" {
-  description = "Skip the final snapshot on destroy. true = ephemeral dev DB."
+  description = "Skip the final snapshot on destroy. Default false = take a final snapshot for data retention; set true to wipe cleanly."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "db_deletion_protection" {

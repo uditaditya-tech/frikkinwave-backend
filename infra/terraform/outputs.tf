@@ -33,6 +33,11 @@ output "redis_endpoint" {
   value       = aws_elasticache_cluster.redis.cache_nodes[0].address
 }
 
+output "db_final_snapshot_name" {
+  description = "Snapshot name `terraform destroy` will create for data retention (unless db_skip_final_snapshot=true)."
+  value       = var.db_skip_final_snapshot ? "(skipped)" : "${local.name}-final-${random_id.final_snapshot.hex}"
+}
+
 output "worker_ecs_service" {
   description = "Name of the Celery worker ECS service."
   value       = aws_ecs_service.worker.name
