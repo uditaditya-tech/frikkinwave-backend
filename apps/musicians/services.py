@@ -27,7 +27,7 @@ from apps.musicians.models import (
     MusicianProfile,
     ProfileEmbedding,
 )
-from apps.musicians.openai_client import get_openai_client
+from apps.musicians.openai_client import OpenAIUnavailableError, get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,12 @@ def search_profiles(
         logger.warning("search_skipped_no_api_key")
         return []
 
-    query_vector = get_openai_client().embed(query)
+    try:
+        query_vector = get_openai_client().embed(query)
+    except OpenAIUnavailableError:
+        # Upstream down/quota-exhausted: degrade to no results rather than 500.
+        logger.warning("search_skipped_openai_unavailable")
+        return []
 
     queryset = (
         MusicianProfile.objects.filter(embedding__isnull=False)
@@ -201,7 +206,12 @@ def get_compatibility_blurb(
         return None
 
     prompt = _build_compatibility_prompt(profile_a, profile_b)
-    blurb = get_openai_client().complete(prompt)
+    try:
+        blurb = get_openai_client().complete(prompt)
+    except OpenAIUnavailableError:
+        # Upstream down/quota-exhausted: caller turns None into a 503.
+        logger.warning("compatibility_skipped_openai_unavailable")
+        return None
 
     # get_or_create guards against a concurrent request having just written it.
     obj, _created = CompatibilityBlurb.objects.get_or_create(
@@ -315,7 +325,12 @@ def _generate_coach_tip(profile: MusicianProfile, suggestions: list[dict[str, st
         f"Profile:\n{build_embedding_text(profile) or '(empty profile)'}\n\n"
         f"Missing or weak fields: {gaps}\n"
     )
-    return get_openai_client().complete(prompt)
+    try:
+        return get_openai_client().complete(prompt)
+    except OpenAIUnavailableError:
+        # Upstream down/quota-exhausted: omit the tip, keep the rule-based coaching.
+        logger.warning("coach_tip_skipped_openai_unavailable")
+        return None
 
 
 # ---------------------------------------------------------------------------

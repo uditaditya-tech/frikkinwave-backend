@@ -108,6 +108,28 @@ class TestCoach:
         assert response.data["suggestions"]  # still computed
         assert client.complete_calls == []  # LLM never called
 
+    def test_openai_error_returns_null_tip_with_suggestions(
+        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
+    ) -> None:
+        from apps.musicians.openai_client import OpenAIUnavailableError
+
+        settings.OPENAI_API_KEY = "test-key"
+
+        class FailingClient:
+            def complete(self, prompt: str) -> str:
+                raise OpenAIUnavailableError("quota exhausted")
+
+        monkeypatch.setattr(services, "get_openai_client", lambda: FailingClient())
+        user = _make_user("err")
+        MusicianProfile.objects.create(user=user, bio="short")
+        _auth(api_client, user)
+
+        response = api_client.get(COACH_URL)
+        # Rule-based coaching survives; only the LLM tip is dropped — no 500.
+        assert response.status_code == 200
+        assert response.data["tip"] is None
+        assert response.data["suggestions"]
+
     def test_viewer_without_profile_returns_400(
         self, api_client: APIClient, fake_openai: FakeOpenAIClient
     ) -> None:

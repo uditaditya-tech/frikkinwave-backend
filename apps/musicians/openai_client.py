@@ -20,6 +20,16 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
+class OpenAIUnavailableError(Exception):
+    """
+    An OpenAI API call failed (quota exhausted, rate limit, timeout, outage).
+
+    Raised by OpenAIClient so callers can degrade gracefully without importing
+    the `openai` SDK's exception types. Lets the rest of the code treat "no key"
+    and "API down" the same way.
+    """
+
+
 class OpenAIClient:
     """Wraps the OpenAI SDK. One method per capability we use."""
 
@@ -34,15 +44,25 @@ class OpenAIClient:
 
     def embed(self, text: str) -> list[float]:
         """Return the embedding vector for `text` (text-embedding-3-small → 1536 dims)."""
-        response = self._client.embeddings.create(model=self._embedding_model, input=text)
+        from openai import OpenAIError
+
+        try:
+            response = self._client.embeddings.create(model=self._embedding_model, input=text)
+        except OpenAIError as exc:
+            raise OpenAIUnavailableError(str(exc)) from exc
         return response.data[0].embedding
 
     def complete(self, prompt: str) -> str:
         """Return a chat completion for `prompt` (gpt-4o-mini)."""
-        response = self._client.chat.completions.create(
-            model=self._chat_model,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        from openai import OpenAIError
+
+        try:
+            response = self._client.chat.completions.create(
+                model=self._chat_model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except OpenAIError as exc:
+            raise OpenAIUnavailableError(str(exc)) from exc
         return (response.choices[0].message.content or "").strip()
 
 
