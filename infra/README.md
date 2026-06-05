@@ -91,12 +91,13 @@ terraform apply -var image_tag=v2
 ../scripts/run-migrations.sh
 ```
 
-## Phase 2: Redis broker + Celery worker (2.9 — Terraform authored, NOT yet applied)
+## Phase 2: Redis broker + Celery worker (2.9 — DEPLOYED)
 
-Phase 2 added async work (Celery) and the AI features. The Terraform for the
-broker + worker is committed but **has not been applied** — prod still runs the
-Phase 1 image. Deploying Phase 2 code requires this infra first, or
-contact-request notifications and embedding generation would fail at `.delay()`.
+Phase 2 added async work (Celery) and the AI features. This infra is **applied
+and live in prod** (re-deployed 2026-06-05; verified end-to-end — a profile save
+ran through the worker → OpenAI embedding → pgvector → semantic search). Without
+it, contact-request notifications and embedding generation would fail at
+`.delay()`, so any image with 2.2+ requires it.
 
 What the 2.9 Terraform adds (all additive — see `terraform plan`):
 - `elasticache.tf` — single-node `cache.t4g.micro` **Redis** in private subnets;
