@@ -149,6 +149,24 @@ pytest apps/users/              # specific app
 pytest -k "test_login"          # specific test
 ```
 
+### Running the matching evals (Phase 2.8)
+
+Quality measurement against the real model — **needs a real key, makes live API
+calls, costs a little**. Not in CI (the deterministic harness test covers wiring
+there). Seeds a golden set, embeds + searches + blurbs, prints a JSON report,
+and rolls the DB back so nothing persists:
+
+```bash
+OPENAI_API_KEY=sk-... python manage.py eval_matching
+# → {"retrieval": {"cases": 7, "recall@1": ..., "recall@3": ..., "mrr": ...},
+#    "blurbs": {"pairs": 2, "grounding_rate": ...}}
+```
+
+Golden dataset + metrics live in `apps/musicians/evals/`. The CI test in
+`tests/test_evals.py` runs the same `run_matching_eval()` with a deterministic
+fake embedder (token-overlap vectors) so retrieval ranking is meaningful without
+a key.
+
 ---
 
 ## Tooling

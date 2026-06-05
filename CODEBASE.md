@@ -43,9 +43,14 @@ frikkinwave-backend/
 │   │   ├── tasks.py               # Celery task: generate_profile_embedding (emitted on profile save via on_commit)
 │   │   ├── urls.py                # /search/, /compatibility/<username>/, /profiles/, /profile/, /profile/coach/, /profile/me/
 │   │   ├── views.py               # ProfileList/Public/Create/Me/Search/Compatibility/Coach views (+ ProfileCursorPagination)
+│   │   ├── evals/                 # Phase 2.8 matching evals
+│   │   │   ├── golden.py          # Golden profiles + labeled retrieval cases + blurb pairs
+│   │   │   ├── metrics.py         # recall@k, precision@k, MRR, blurb_is_grounded (pure)
+│   │   │   └── runner.py          # run_matching_eval() — seed→embed→search→blurbs→metrics (rolled back)
 │   │   ├── management/
 │   │   │   └── commands/
-│   │   │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
+│   │   │       ├── seed_music_data.py   # Seeds 44 instruments + 31 genres
+│   │   │       └── eval_matching.py     # Real eval (needs OPENAI_API_KEY) → JSON report
 │   │   └── tests/
 │   │       ├── __init__.py
 │   │       ├── conftest.py        # instrument, genre, profile fixtures
@@ -54,7 +59,8 @@ frikkinwave-backend/
 │   │       ├── test_embedding_pipeline.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
 │   │       ├── test_search.py     # 7 tests: ranking, limit, available filter, no-embedding exclusion, 400s, no-key (OpenAI mocked)
 │   │       ├── test_compatibility.py  # 8 tests: generate+cache, reverse-pair cache, self/404/no-profile/401/503 (LLM mocked)
-│   │       └── test_coach.py      # 5 tests: missing-field suggestions, score 100, no-key null tip, no-profile 400, 401 (LLM mocked)
+│   │       ├── test_coach.py      # 5 tests: missing-field suggestions, score 100, no-key null tip, no-profile 400, 401 (LLM mocked)
+│   │       └── test_evals.py      # 7 tests: metric math + end-to-end harness w/ deterministic fake embedder + rollback
 │   │
 │   └── connections/               # Contact requests between users (send → accept/decline → reveal)
 │       ├── admin.py
