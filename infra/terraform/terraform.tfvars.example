@@ -5,7 +5,12 @@
 #   python -c "import secrets; print(secrets.token_urlsafe(50))"
 django_secret_key = "replace-with-a-real-secret"
 
+# OpenAI key for Phase 2 AI (embeddings / blurbs / coach). Leave empty to deploy
+# without AI — those features degrade gracefully (search returns empty, etc.).
+# openai_api_key = "sk-..."
+
 # Optional overrides:
-# region               = "ap-south-1"   # Mumbai (default)
+# region               = "ap-south-1"     # Mumbai (default)
 # cors_allowed_origins = "https://frikkinwave.com,https://www.frikkinwave.com"
-# database_url         = "postgres://..."   # set once RDS exists (1.10)
+# redis_node_type      = "cache.t4g.micro"  # ElastiCache broker (default)
+# worker_desired_count = 1                   # Celery worker tasks (default)

@@ -36,6 +36,7 @@ data "aws_iam_policy_document" "execution_secrets" {
     resources = [
       aws_ssm_parameter.django_secret_key.arn,
       aws_ssm_parameter.database_url.arn,
+      aws_ssm_parameter.openai_api_key.arn,
     ]
   }
 

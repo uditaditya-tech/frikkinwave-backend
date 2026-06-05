@@ -28,6 +28,21 @@ output "rds_endpoint" {
   value       = aws_db_instance.main.address
 }
 
+output "redis_endpoint" {
+  description = "ElastiCache Redis hostname (Celery broker; not internet-reachable)."
+  value       = aws_elasticache_cluster.redis.cache_nodes[0].address
+}
+
+output "worker_ecs_service" {
+  description = "Name of the Celery worker ECS service."
+  value       = aws_ecs_service.worker.name
+}
+
+output "worker_task_family" {
+  description = "Task definition family for the Celery worker."
+  value       = aws_ecs_task_definition.worker.family
+}
+
 # --- Used by scripts/run-migrations.sh ------------------------------------
 
 output "ecs_cluster" {
