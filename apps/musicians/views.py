@@ -26,6 +26,7 @@ from apps.musicians.serializers import (
 )
 from apps.musicians.services import (
     ProfileAlreadyExistsError,
+    coach_profile,
     create_profile,
     get_compatibility_blurb,
     get_public_profile,
@@ -239,6 +240,32 @@ class CompatibilityView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response({"with": username, "blurb": blurb})
+
+
+class ProfileCoachView(APIView):
+    """
+    GET /api/musicians/profile/coach/
+
+    Evaluate the authenticated user's own profile: returns a completeness score
+    (0-100), structured per-field suggestions, and an LLM `tip` (null if AI is
+    unavailable). 400 if the user has no profile yet.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        profile = (
+            MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
+            .filter(user=cast(User, request.user))
+            .first()
+        )
+        if profile is None:
+            return Response(
+                {"detail": "Create a profile first to get coaching."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(coach_profile(profile=profile))
 
 
 class ProfileMeView(APIView):

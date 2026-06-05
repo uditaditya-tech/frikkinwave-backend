@@ -246,6 +246,79 @@ def get_public_profile(*, username: str) -> MusicianProfile | None:
 
 
 # ---------------------------------------------------------------------------
+# Profile coach (2.7)
+# ---------------------------------------------------------------------------
+
+# Minimum bio length (chars) to count the bio as "complete" for scoring.
+_BIO_MIN_LENGTH = 30
+
+# (field, weight, message-when-missing). Weights sum to 100.
+_COMPLETENESS_RULES = [
+    ("bio", 30, "Add a bio describing your style and influences."),
+    ("instruments", 25, "Add at least one instrument so others can find you."),
+    ("genres", 20, "List a few genres you play."),
+    ("city", 10, "Add your city for local discovery."),
+    ("sound_url", 10, "Link a track so people can hear you."),
+    ("country", 5, "Add your country."),
+]
+
+
+def coach_profile(*, profile: MusicianProfile) -> dict[str, Any]:
+    """
+    Evaluate a profile's completeness and return actionable suggestions.
+
+    Returns a deterministic completeness score (0-100) plus structured per-field
+    suggestions (always present, no cost), and an LLM `tip` with qualitative
+    advice — `None` when no OpenAI key is configured. Generated synchronously;
+    not cached (the user's own setup flow, changing between calls).
+    """
+    score = 0
+    suggestions: list[dict[str, str]] = []
+    for field, weight, message in _COMPLETENESS_RULES:
+        if _field_is_complete(profile, field):
+            score += weight
+        else:
+            suggestions.append({"field": field, "message": message})
+
+    tip = _generate_coach_tip(profile, suggestions)
+
+    logger.info(
+        "profile_coached",
+        extra={"profile_id": str(profile.id), "completeness": score, "has_tip": tip is not None},
+    )
+    return {"completeness": score, "suggestions": suggestions, "tip": tip}
+
+
+def _field_is_complete(profile: MusicianProfile, field: str) -> bool:
+    if field == "bio":
+        return len(profile.bio.strip()) >= _BIO_MIN_LENGTH
+    if field == "instruments":
+        return profile.musician_instruments.exists()
+    if field == "genres":
+        return profile.genres.exists()
+    # Remaining fields are plain CharFields — non-blank means complete.
+    return bool(getattr(profile, field, "").strip())
+
+
+def _generate_coach_tip(profile: MusicianProfile, suggestions: list[dict[str, str]]) -> str | None:
+    """LLM qualitative tip, or None when no OpenAI key is configured."""
+    if not settings.OPENAI_API_KEY:
+        logger.warning("coach_tip_skipped_no_api_key")
+        return None
+
+    gaps = ", ".join(s["field"] for s in suggestions) or "none"
+    prompt = (
+        "You are a friendly coach helping a musician improve their profile on a "
+        "jam-partner network. Using only the details below, give one or two "
+        "specific, encouraging suggestions to make the profile more appealing and "
+        "discoverable. Address them as 'you'. Do not invent facts.\n\n"
+        f"Profile:\n{build_embedding_text(profile) or '(empty profile)'}\n\n"
+        f"Missing or weak fields: {gaps}\n"
+    )
+    return get_openai_client().complete(prompt)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
