@@ -91,6 +91,48 @@ terraform apply -var image_tag=v2
 ../scripts/run-migrations.sh
 ```
 
+## Phase 2: Redis broker + Celery worker (2.9 — Terraform authored, NOT yet applied)
+
+Phase 2 added async work (Celery) and the AI features. The Terraform for the
+broker + worker is committed but **has not been applied** — prod still runs the
+Phase 1 image. Deploying Phase 2 code requires this infra first, or
+contact-request notifications and embedding generation would fail at `.delay()`.
+
+What the 2.9 Terraform adds (all additive — see `terraform plan`):
+- `elasticache.tf` — single-node `cache.t4g.micro` **Redis** in private subnets;
+  its SG only accepts 6379 from the tasks SG. ~$12/mo.
+- `ecs.tf` — `OPENAI_API_KEY` + `CELERY_BROKER_URL` on the web task; a new
+  **worker task definition** (`celery -A config worker`) and **worker service**.
+- `secrets.tf` / `iam.tf` — `OPENAI_API_KEY` SSM SecureString + read permission.
+
+### First Phase-2 deploy (when ready — spends ~$12/mo more)
+
+```bash
+cd infra/terraform
+# 1) Put the OpenAI key in terraform.tfvars (git-ignored):
+#    openai_api_key = "sk-..."
+../scripts/push-image.sh <tag>          # build+push the current main image
+terraform apply -var image_tag=<tag>    # creates Redis + worker, updates web task
+../scripts/run-migrations.sh            # runs the pgvector migrations (0004/0005);
+                                        # CREATE EXTENSION vector runs as the RDS master user
+# Verify:
+curl "$(terraform output -raw api_url)"                 # web still 200
+aws logs tail /ecs/frikkinwave-prod --since 5m | grep worker   # worker booted, ready
+```
+
+The worker rides the **same image** as the web task (command override), so one
+`push-image.sh` + `apply` updates both. Roll the worker off cheaply any time
+with `terraform apply -var worker_desired_count=0`.
+
+### Continuous deployment
+
+**Decision (2.9): staying manual — no CD.** CI lints/tests/migrates only;
+deploys are the manual `push-image.sh → terraform apply → run-migrations.sh`
+flow above. Rationale: solo prod project, deploys touch real cost + an immutable
+prod DB, and the deploy is infrequent — an automated pipeline (plus AWS creds in
+CI and migration-safety gating) isn't worth it yet. Revisit if the cadence picks
+up; a manual-approval-gated GitHub Actions job is the natural next step.
+
 ## Tear down
 
 ```bash

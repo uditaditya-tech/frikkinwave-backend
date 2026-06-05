@@ -22,3 +22,14 @@ resource "aws_ssm_parameter" "database_url" {
 
   tags = { Name = "${local.name}-database-url" }
 }
+
+# OpenAI key for the Phase 2 AI features (embeddings, blurbs, coach). Empty is
+# allowed — the app skips AI calls and degrades gracefully. Both the web and
+# worker containers receive it via their `secrets` block.
+resource "aws_ssm_parameter" "openai_api_key" {
+  name  = "/${local.name}/OPENAI_API_KEY"
+  type  = "SecureString"
+  value = var.openai_api_key
+
+  tags = { Name = "${local.name}-openai-api-key" }
+}

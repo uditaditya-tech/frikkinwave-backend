@@ -56,7 +56,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 | 2.6 Compatibility blurb: gpt-4o-mini "Why you might click" per profile pair, cached (`CompatibilityBlurb`) | ✅ |
 | 2.7 Profile coach: completeness score + field suggestions (rules) + LLM tip on profile setup | ✅ |
 | 2.8 Evals: retrieval quality (recall@k, MRR) + blurb grounding — metrics + golden set + `eval_matching` command + deterministic CI harness | ✅ |
-| 2.9 Infra: ElastiCache Redis + Celery worker task def; **prod deploy of 2.2+ is gated on this** (no broker = send/accept fail). **Consider adding CD here** (CI currently lint/test only; deploys are manual). | ⬜ |
+| 2.9 Infra: ElastiCache Redis + Celery worker task def + `OPENAI_API_KEY` secret — **Terraform authored & validated (`plan`: 7 add / additive), apply deferred.** CD decision: **staying manual** (recorded in infra/README). First Phase-2 prod deploy runs when you apply. | 🟡 |
 
 ---
 
@@ -94,7 +94,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 |---|---|---|
 | Backend API | AWS ECS + Fargate | ✅ Live (ap-south-1, HTTP) |
 | Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, private subnets) |
-| Cache / broker | AWS ElastiCache (Redis) | ⬜ Phase 2 |
+| Cache / broker | AWS ElastiCache (Redis) | 🟡 Terraform authored (2.9), apply deferred |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |
 | Future | AWS EKS | Phase 4+ |

@@ -29,9 +29,32 @@ variable "image_tag" {
 }
 
 variable "desired_count" {
-  description = "Number of Fargate tasks to run."
+  description = "Number of web Fargate tasks to run."
   type        = number
   default     = 1
+}
+
+variable "worker_desired_count" {
+  description = "Number of Celery worker Fargate tasks to run."
+  type        = number
+  default     = 1
+}
+
+# --- OpenAI (Phase 2 AI) --------------------------------------------------
+
+variable "openai_api_key" {
+  description = "OPENAI_API_KEY for embeddings/blurbs/coach. Set in terraform.tfvars (git-ignored). Empty disables AI calls (features degrade gracefully)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# --- ElastiCache (Redis / Celery broker) ----------------------------------
+
+variable "redis_node_type" {
+  description = "ElastiCache node type. cache.t4g.micro is the cheapest Graviton option."
+  type        = string
+  default     = "cache.t4g.micro"
 }
 
 # --- Application runtime config -------------------------------------------
