@@ -23,18 +23,27 @@ logger = logging.getLogger(__name__)
 class OpenAIClient:
     """Wraps the OpenAI SDK. One method per capability we use."""
 
-    def __init__(self, api_key: str, embedding_model: str) -> None:
+    def __init__(self, api_key: str, embedding_model: str, chat_model: str) -> None:
         # Imported lazily so the SDK is only required when a client is built —
         # tests that patch get_openai_client never import it.
         from openai import OpenAI
 
         self._client = OpenAI(api_key=api_key)
         self._embedding_model = embedding_model
+        self._chat_model = chat_model
 
     def embed(self, text: str) -> list[float]:
         """Return the embedding vector for `text` (text-embedding-3-small → 1536 dims)."""
         response = self._client.embeddings.create(model=self._embedding_model, input=text)
         return response.data[0].embedding
+
+    def complete(self, prompt: str) -> str:
+        """Return a chat completion for `prompt` (gpt-4o-mini)."""
+        response = self._client.chat.completions.create(
+            model=self._chat_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (response.choices[0].message.content or "").strip()
 
 
 @lru_cache(maxsize=1)
@@ -48,4 +57,5 @@ def get_openai_client() -> OpenAIClient:
     return OpenAIClient(
         api_key=settings.OPENAI_API_KEY,
         embedding_model=settings.OPENAI_EMBEDDING_MODEL,
+        chat_model=settings.OPENAI_CHAT_MODEL,
     )

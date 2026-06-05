@@ -119,21 +119,23 @@ the OpenAI call when the embedding text is unchanged or no API key is set.
 
 ---
 
-## Planned models (Phase 2 — AI)
-
-### `musicians.CompatibilityBlurb`
+### `musicians.CompatibilityBlurb` (Phase 2 — 2.6 ✅)
 
 Cached LLM-generated "Why you might click" text for a pair of profiles.
+**App:** `apps/musicians` | **Migration:** `0005_compatibilityblurb`
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
-| `profile_a` | ForeignKey → MusicianProfile | |
-| `profile_b` | ForeignKey → MusicianProfile | |
+| `profile_a` | ForeignKey → MusicianProfile | `related_name="compat_blurbs_as_a"` |
+| `profile_b` | ForeignKey → MusicianProfile | `related_name="compat_blurbs_as_b"` |
 | `blurb` | TextField | gpt-4o-mini generated text |
-| `generated_at` | DateTimeField | For cache invalidation |
+| `generated_at` | DateTimeField | `auto_now` |
 
-Unique constraint on `(profile_a, profile_b)`.
+Unique constraint on `(profile_a, profile_b)`. **Canonical unordered pair:**
+`get_compatibility_blurb` orders the two profiles by id before lookup, so
+`(A,B)` and `(B,A)` share one row. Generated synchronously on cache miss via
+`GET /api/musicians/compatibility/<username>/`; returns None (→ 503) with no key.
 
 ---
 

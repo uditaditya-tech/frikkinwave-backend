@@ -27,6 +27,7 @@ from apps.musicians.serializers import (
 from apps.musicians.services import (
     ProfileAlreadyExistsError,
     create_profile,
+    get_compatibility_blurb,
     get_public_profile,
     list_genres,
     list_instruments,
@@ -196,6 +197,48 @@ class ProfilePublicView(APIView):
         if profile is None:
             return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(MusicianProfileReadSerializer(profile).data)
+
+
+class CompatibilityView(APIView):
+    """
+    GET /api/musicians/compatibility/<username>/
+
+    Returns a cached "why you might click" blurb between the authenticated user's
+    profile and <username>'s profile (gpt-4o-mini, generated once per pair).
+    400 if the viewer has no profile or targets themselves; 404 if the target is
+    unknown; 503 if AI is unavailable.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
+        viewer = (
+            MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
+            .filter(user=cast(User, request.user))
+            .first()
+        )
+        if viewer is None:
+            return Response(
+                {"detail": "Create a profile first to see compatibility."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        other = get_public_profile(username=username)
+        if other is None:
+            return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        if viewer.pk == other.pk:
+            return Response(
+                {"detail": "Cannot compare a profile with itself."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        blurb = get_compatibility_blurb(viewer_profile=viewer, other_profile=other)
+        if blurb is None:
+            return Response(
+                {"detail": "Compatibility is unavailable right now."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response({"with": username, "blurb": blurb})
 
 
 class ProfileMeView(APIView):
