@@ -36,12 +36,12 @@ frikkinwave-backend/
 │   │   │   ├── 0003_*.py          # MusicianProfile.sound_url
 │   │   │   └── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding + HNSW index
 │   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, ProfileEmbedding
-│   │   ├── serializers.py         # Read + Write serializers for profiles
-│   │   ├── services.py            # create/update/list/get profiles + build_embedding_text(), generate_profile_embedding()
+│   │   ├── serializers.py         # Read + Write serializers + ProfileSearchResultSerializer (adds similarity)
+│   │   ├── services.py            # create/update/list/get + build_embedding_text(), generate_profile_embedding(), search_profiles()
 │   │   ├── openai_client.py       # OpenAIClient wrapper + get_openai_client() (swappable seam; mocked in tests)
 │   │   ├── tasks.py               # Celery task: generate_profile_embedding (emitted on profile save via on_commit)
-│   │   ├── urls.py                # /profiles/, /profiles/<username>/, /profile/, /profile/me/
-│   │   ├── views.py               # ProfileListView, ProfilePublicView, ProfileCreateView, ProfileMeView (+ ProfileCursorPagination)
+│   │   ├── urls.py                # /search/, /profiles/, /profiles/<username>/, /profile/, /profile/me/
+│   │   ├── views.py               # ProfileList/Public/Create/Me/Search views (+ ProfileCursorPagination)
 │   │   ├── management/
 │   │   │   └── commands/
 │   │   │       └── seed_music_data.py   # Seeds 44 instruments + 31 genres
@@ -50,7 +50,8 @@ frikkinwave-backend/
 │   │       ├── conftest.py        # instrument, genre, profile fixtures
 │   │       ├── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
 │   │       ├── test_embedding.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
-│   │       └── test_embedding_pipeline.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
+│   │       ├── test_embedding_pipeline.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
+│   │       └── test_search.py     # 7 tests: ranking, limit, available filter, no-embedding exclusion, 400s, no-key (OpenAI mocked)
 │   │
 │   └── connections/               # Contact requests between users (send → accept/decline → reveal)
 │       ├── admin.py
@@ -129,6 +130,7 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/auth/me/` | Bearer | Current user identity (id, email, username, date_joined) |
 | GET | `/api/musicians/instruments/` | None | Full instrument catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/genres/` | None | Full genre catalogue (for profile-editor pickers) |
+| GET | `/api/musicians/search/` | None | Semantic search (`?q=` NL query, `?limit=`, `?available=true`) — cosine kNN, ranked w/ similarity |
 | GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated) |
 | GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username |
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |

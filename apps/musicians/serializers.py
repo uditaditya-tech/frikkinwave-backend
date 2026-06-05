@@ -67,6 +67,22 @@ class MusicianProfileReadSerializer(serializers.ModelSerializer[MusicianProfile]
         ]
 
 
+class ProfileSearchResultSerializer(MusicianProfileReadSerializer):
+    """A discovery-feed profile plus its semantic-search similarity score."""
+
+    similarity = serializers.SerializerMethodField()
+
+    class Meta(MusicianProfileReadSerializer.Meta):
+        fields = [*MusicianProfileReadSerializer.Meta.fields, "similarity"]
+
+    def get_similarity(self, obj: MusicianProfile) -> float | None:
+        # `distance` is the cosine distance annotated by search_profiles.
+        distance = getattr(obj, "distance", None)
+        if distance is None:
+            return None
+        return round(1.0 - float(distance), 4)
+
+
 # ---------------------------------------------------------------------------
 # Write serializers (create / update input)
 # ---------------------------------------------------------------------------

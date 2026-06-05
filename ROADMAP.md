@@ -52,7 +52,7 @@ Stop here = AI on the tin, portfolio centerpiece live
 | 2.2 Contact-request email notifications as Celery tasks (deferred from 1.7) | ✅ |
 | 2.3 pgvector extension + `ProfileEmbedding` model + migration (HNSW cosine index) | ✅ |
 | 2.4 Embedding pipeline: profile save → event → Celery task → OpenAI text-embedding-3-small → pgvector store | ✅ |
-| 2.5 Semantic search endpoint: natural language query → embedding → nearest-neighbor retrieval | ⬜ |
+| 2.5 Semantic search endpoint: natural language query → embedding → nearest-neighbor retrieval | ✅ |
 | 2.6 Compatibility blurb: gpt-4o-mini "Why you might click" per profile pair, cached (`CompatibilityBlurb`) | ⬜ |
 | 2.7 Profile coach: LLM evaluates completeness on profile setup, surfaces specific suggestions | ⬜ |
 | 2.8 Evals: measure embedding retrieval quality, blurb relevance | ⬜ |
