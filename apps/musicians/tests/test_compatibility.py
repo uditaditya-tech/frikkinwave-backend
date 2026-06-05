@@ -126,6 +126,27 @@ class TestCompatibility:
         _make_user_with_profile("target")
         assert api_client.get(_url("user-target")).status_code == 401
 
+    def test_openai_error_returns_503(
+        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
+    ) -> None:
+        from apps.musicians.openai_client import OpenAIUnavailableError
+
+        settings.OPENAI_API_KEY = "test-key"
+
+        class FailingClient:
+            def complete(self, prompt: str) -> str:
+                raise OpenAIUnavailableError("quota exhausted")
+
+        monkeypatch.setattr(services, "get_openai_client", lambda: FailingClient())
+        viewer = _make_user_with_profile("viewer")
+        _make_user_with_profile("target")
+        _auth(api_client, viewer)
+
+        response = api_client.get(_url("user-target"))
+        # Degrades to 503, not a 500, and caches nothing.
+        assert response.status_code == 503
+        assert CompatibilityBlurb.objects.count() == 0
+
     def test_no_api_key_returns_503(
         self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
     ) -> None:

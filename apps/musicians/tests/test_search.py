@@ -128,6 +128,25 @@ class TestSearch:
         _profile_with_embedding("a", 0)
         assert api_client.get(SEARCH_URL, {"q": "x"}).status_code == 200
 
+    def test_openai_error_returns_empty(
+        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
+    ) -> None:
+        from apps.musicians.openai_client import OpenAIUnavailableError
+
+        settings.OPENAI_API_KEY = "test-key"
+
+        class FailingClient:
+            def embed(self, text: str) -> list[float]:
+                raise OpenAIUnavailableError("quota exhausted")
+
+        monkeypatch.setattr(services, "get_openai_client", lambda: FailingClient())
+        _profile_with_embedding("a", 0)
+
+        response = api_client.get(SEARCH_URL, {"q": "x"})
+        # Degrades to empty results, not a 500.
+        assert response.status_code == 200
+        assert response.data["results"] == []
+
     def test_no_api_key_returns_empty(
         self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
     ) -> None:
