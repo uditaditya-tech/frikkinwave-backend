@@ -32,6 +32,13 @@ resource "aws_db_instance" "main" {
   username = var.db_username
   password = random_password.db.result
 
+  # Restore from a snapshot when db_snapshot_identifier is set (rehydrate a prior
+  # destroy's data). Only consulted at create time — RDS restores schema + data +
+  # the pgvector extension from the snapshot, then Terraform modifies the master
+  # password to random_password.db so it stays in sync with DATABASE_URL in SSM.
+  # Empty (default) → fresh empty DB, unchanged behavior.
+  snapshot_identifier = var.db_snapshot_identifier != "" ? var.db_snapshot_identifier : null
+
   db_subnet_group_name    = aws_db_subnet_group.main.name
   vpc_security_group_ids  = [aws_security_group.rds.id]
   publicly_accessible     = false

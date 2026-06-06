@@ -127,3 +127,9 @@ variable "db_deletion_protection" {
   type        = bool
   default     = false
 }
+
+variable "db_snapshot_identifier" {
+  description = "Restore RDS from this snapshot on create (manual or final-on-destroy snapshot id). Empty = fresh empty DB. Only consulted when the instance is first created; ignored on in-place updates."
+  type        = string
+  default     = ""
+}
