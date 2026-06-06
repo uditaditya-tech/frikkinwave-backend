@@ -144,14 +144,18 @@ Two wrapper scripts make the destroy → restore cycle one command each:
 ./infra/scripts/teardown.sh            # destroy app stack, take a final RDS snapshot
 ./infra/scripts/teardown.sh --wipe     # destroy WITHOUT a snapshot (data lost)
 
-./infra/scripts/bring-up.sh <sha>              # rebuild + AUTO-restore latest snapshot (fresh if none)
-./infra/scripts/bring-up.sh <sha> --fresh      # rebuild with an empty DB
-./infra/scripts/bring-up.sh <sha> <snapshot>   # rebuild restoring a specific snapshot
+./infra/scripts/bring-up.sh                    # auto-tag (HEAD) + AUTO-restore latest snapshot (fresh if none)
+./infra/scripts/bring-up.sh --fresh            # auto-tag, empty DB
+./infra/scripts/bring-up.sh <sha>              # pin image, AUTO-restore latest snapshot
+./infra/scripts/bring-up.sh <sha> --fresh      # pin image, empty DB
+./infra/scripts/bring-up.sh <sha> <snapshot>   # pin image, restore a specific snapshot
 ```
 
 `bring-up.sh` runs the whole ordered sequence (ECR → push image → full apply →
-`run-migrations.sh` → health check) and, in the default `auto` mode, queries RDS
-for the **latest manual snapshot of `frikkinwave-prod-db`** and restores it —
+`run-migrations.sh` → health check). The **image tag defaults to the current git
+HEAD short SHA** (push-image.sh builds the working tree and only labels it, so HEAD
+is the honest tag); pass an explicit SHA to override. In the default `auto` mode it
+queries RDS for the **latest manual snapshot of `frikkinwave-prod-db`** and restores it —
 final-on-destroy and hand-taken snapshots are `manual` and survive a destroy
 (automated daily backups are deleted with the instance). It prints the resolved
 snapshot and asks for confirmation before applying. Override the project/env/region

@@ -10,10 +10,12 @@
 # By default it AUTO-DETECTS the latest manual RDS snapshot for this instance and
 # restores it. If none exists it creates a fresh empty DB.
 #
-# Usage:
-#   ./infra/scripts/bring-up.sh <image-sha>                # auto-restore latest snapshot (or fresh)
-#   ./infra/scripts/bring-up.sh <image-sha> --fresh        # force a fresh empty DB
-#   ./infra/scripts/bring-up.sh <image-sha> <snapshot-id>  # restore a specific snapshot
+# Usage (image tag defaults to the current git HEAD short SHA):
+#   ./infra/scripts/bring-up.sh                            # auto-tag + auto-restore latest snapshot
+#   ./infra/scripts/bring-up.sh --fresh                    # auto-tag, force a fresh empty DB
+#   ./infra/scripts/bring-up.sh <image-sha>                # pin image, auto-restore latest snapshot
+#   ./infra/scripts/bring-up.sh <image-sha> --fresh        # pin image, force a fresh empty DB
+#   ./infra/scripts/bring-up.sh <image-sha> <snapshot-id>  # pin image, restore a specific snapshot
 #
 # Requires: terraform.tfvars present (django_secret_key + openai_api_key),
 # Docker running, AWS credentials configured.
@@ -30,12 +32,27 @@ REGION="${AWS_REGION:-ap-south-1}"
 NAME="${PROJECT}-${ENVIRONMENT}"
 DB_INSTANCE_ID="${NAME}-db"
 
-TAG="${1:-}"
+# Arg parsing. The image tag is optional and defaults to the current git HEAD
+# short SHA — push-image.sh builds the working tree and only *labels* it with this
+# tag, so HEAD is the honest default (a stale SHA would mislabel the image). If the
+# first arg is a snapshot mode (--fresh or a snapshot id), there's no tag and we
+# default it; otherwise the first arg is the tag and the second is the mode.
+if [ "${1:-}" = "--fresh" ] || [ -z "${1:-}" ]; then
+  TAG=""
+  MODE="${1:-auto}"
+  [ "${MODE}" = "--fresh" ] || MODE="auto"
+else
+  TAG="${1}"
+  MODE="${2:-auto}"
+fi
+
 if [ -z "${TAG}" ]; then
-  echo "Usage: $0 <image-sha> [--fresh | <snapshot-id>]" >&2
+  TAG="$(git -C "${SCRIPT_DIR}/../.." rev-parse --short HEAD 2>/dev/null || true)"
+fi
+if [ -z "${TAG}" ]; then
+  echo "Could not determine image tag (no arg and not a git repo)." >&2
   exit 1
 fi
-MODE="${2:-auto}"
 
 # --- Resolve which snapshot (if any) to restore -----------------------------
 SNAPSHOT=""
