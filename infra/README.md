@@ -162,6 +162,12 @@ snapshot and asks for confirmation before applying. Override the project/env/reg
 via `TF_PROJECT` / `TF_ENVIRONMENT` / `AWS_REGION` env vars if they differ from the
 defaults.
 
+**Both scripts are safe to re-run.** Terraform is idempotent, so if an apply is
+interrupted partway — e.g. a transient local network drop, which surfaces as
+`dial tcp: lookup ...: no such host` or `Plugin did not respond` — just run the
+same script again and it resumes from state (already-created resources are skipped,
+the rest are created). A half-finished bring-up leaves the snapshot untouched.
+
 ### Manual equivalents
 
 ```bash
