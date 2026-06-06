@@ -139,7 +139,7 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/auth/me/` | Bearer | Current user identity (id, email, username, date_joined) |
 | GET | `/api/musicians/instruments/` | None | Full instrument catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/genres/` | None | Full genre catalogue (for profile-editor pickers) |
-| GET | `/api/musicians/search/` | None | Semantic search (`?q=` NL query, `?limit=`, `?available=true`) — cosine kNN, ranked w/ similarity |
+| GET | `/api/musicians/search/` | None | Semantic search (`?q=` NL query, `?limit=`, `?available=true`) — cosine kNN, ranked w/ similarity; drops results below `SEARCH_SIMILARITY_THRESHOLD` (default 0.4) |
 | GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated) |
 | GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username |
 | GET | `/api/musicians/compatibility/<username>/` | Bearer | Cached gpt-4o-mini "why you might click" blurb between you and `<username>` |

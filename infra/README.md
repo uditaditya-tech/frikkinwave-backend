@@ -108,6 +108,12 @@ What the 2.9 Terraform adds (all additive — see `terraform plan`):
   **worker task definition** (`celery -A config worker`) and **worker service**.
 - `secrets.tf` / `iam.tf` — `OPENAI_API_KEY` SSM SecureString + read permission.
 
+**Live-tunable search threshold:** `SEARCH_SIMILARITY_THRESHOLD` is a plain web
+task-def env var (`var.search_similarity_threshold`, default 0.4) — adjust the
+semantic-search relevance floor without an image rebuild:
+`terraform apply -var search_similarity_threshold=N -var image_tag=<current>`.
+0.8 is too high for text-embedding-3-small (measured matches ~0.45–0.78); 0 disables.
+
 ### First Phase-2 deploy (when ready — spends ~$12/mo more)
 
 ```bash
