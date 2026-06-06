@@ -27,7 +27,9 @@ infra/
 │   └── terraform.tfvars.example
 └── scripts/
     ├── push-image.sh      # build (linux/arm64) + push to ECR
-    └── run-migrations.sh  # one-off Fargate task: migrate + seed
+    ├── run-migrations.sh  # one-off Fargate task: migrate + seed
+    ├── teardown.sh        # destroy app stack (final snapshot by default; --wipe to skip)
+    └── bring-up.sh        # rebuild + auto-restore latest snapshot (ECR→push→apply→migrate→verify)
 ```
 
 **Why two stacks:** the Route 53 zone's nameservers are delegated from the
@@ -134,17 +136,40 @@ prod DB, and the deploy is infrequent — an automated pipeline (plus AWS creds 
 CI and migration-safety gating) isn't worth it yet. Revisit if the cadence picks
 up; a manual-approval-gated GitHub Actions job is the natural next step.
 
-## Tear down
+## Tear down & bring back up (scripted)
+
+Two wrapper scripts make the destroy → restore cycle one command each:
+
+```bash
+./infra/scripts/teardown.sh            # destroy app stack, take a final RDS snapshot
+./infra/scripts/teardown.sh --wipe     # destroy WITHOUT a snapshot (data lost)
+
+./infra/scripts/bring-up.sh <sha>              # rebuild + AUTO-restore latest snapshot (fresh if none)
+./infra/scripts/bring-up.sh <sha> --fresh      # rebuild with an empty DB
+./infra/scripts/bring-up.sh <sha> <snapshot>   # rebuild restoring a specific snapshot
+```
+
+`bring-up.sh` runs the whole ordered sequence (ECR → push image → full apply →
+`run-migrations.sh` → health check) and, in the default `auto` mode, queries RDS
+for the **latest manual snapshot of `frikkinwave-prod-db`** and restores it —
+final-on-destroy and hand-taken snapshots are `manual` and survive a destroy
+(automated daily backups are deleted with the instance). It prints the resolved
+snapshot and asks for confirmation before applying. Override the project/env/region
+via `TF_PROJECT` / `TF_ENVIRONMENT` / `AWS_REGION` env vars if they differ from the
+defaults.
+
+### Manual equivalents
 
 ```bash
 cd infra/terraform && terraform destroy   # app stack only — DNS + cert survive
 ```
 
-By default this **takes a final RDS snapshot** (`db_skip_final_snapshot=false`)
+By default destroy **takes a final RDS snapshot** (`db_skip_final_snapshot=false`)
 named `frikkinwave-prod-final-<rand>` (see the `db_final_snapshot_name` output),
-so the data is retained and can rehydrate a future deploy by pointing
-`aws_db_instance` at `snapshot_identifier`. Manual snapshots also survive a
-destroy. To wipe cleanly instead (no snapshot): `terraform destroy -var db_skip_final_snapshot=true`.
+so the data is retained. Restore it on a later apply with
+`-var db_snapshot_identifier=<snapshot-id>` (wired in `rds.tf`). Manual snapshots
+also survive a destroy. To wipe cleanly instead (no snapshot):
+`terraform destroy -var db_skip_final_snapshot=true`.
 
 **Never** `terraform destroy` the `infra/dns` stack unless you intend to give up
 the domain delegation — doing so deletes the hosted zone, rotates the
