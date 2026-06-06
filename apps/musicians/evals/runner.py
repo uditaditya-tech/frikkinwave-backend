@@ -52,7 +52,9 @@ def run_matching_eval() -> dict[str, Any]:
         recall3: list[float] = []
         rr: list[float] = []
         for case in RETRIEVAL_CASES:
-            results = search_profiles(query=case.query, limit=10)
+            # threshold=0.0: the eval measures ranking/recall, not the production
+            # relevance floor, so it must not drop weak-but-correctly-ranked hits.
+            results = search_profiles(query=case.query, limit=10, similarity_threshold=0.0)
             retrieved = [p.user.username for p in results]
             recall1.append(recall_at_k(retrieved, case.relevant, 1))
             recall3.append(recall_at_k(retrieved, case.relevant, 3))

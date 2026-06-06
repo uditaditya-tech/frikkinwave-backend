@@ -56,6 +56,9 @@ def query_closest_to_a(
     monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
 ) -> FakeOpenAIClient:
     settings.OPENAI_API_KEY = "test-key"
+    # Disable the similarity floor so these tests assert on raw ranking/counts;
+    # the floor itself is covered by test_drops_below_similarity_threshold.
+    settings.SEARCH_SIMILARITY_THRESHOLD = 0.0
     # Mostly index 0 (profile A), a touch of index 1 (profile B).
     client = FakeOpenAIClient(_unit_vector(0, second=1))
     monkeypatch.setattr(services, "get_openai_client", lambda: client)
@@ -82,6 +85,26 @@ class TestSearch:
         sims = [r["similarity"] for r in results]
         assert sims[0] > sims[1] > sims[2]
         assert query_closest_to_a.calls == ["jazz drummer"]
+
+    def test_drops_below_similarity_threshold(
+        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
+    ) -> None:
+        # Query ~= profile A (similarity ~0.995); B (~0.10) and C (0.0) are weak.
+        settings.OPENAI_API_KEY = "test-key"
+        settings.SEARCH_SIMILARITY_THRESHOLD = 0.8
+        client = FakeOpenAIClient(_unit_vector(0, second=1))
+        monkeypatch.setattr(services, "get_openai_client", lambda: client)
+
+        a = _profile_with_embedding("a", 0)
+        _profile_with_embedding("b", 1)  # below floor → dropped
+        _profile_with_embedding("c", 2)  # below floor → dropped
+
+        response = api_client.get(SEARCH_URL, {"q": "jazz drummer"})
+
+        assert response.status_code == 200
+        results = response.data["results"]
+        assert [r["id"] for r in results] == [str(a.id)]
+        assert results[0]["similarity"] >= 0.8
 
     def test_limit_caps_results(
         self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient

@@ -146,6 +146,7 @@ def search_profiles(
     query: str,
     limit: int = 20,
     available_only: bool = False,
+    similarity_threshold: float | None = None,
 ) -> list[MusicianProfile]:
     """
     Semantic search: embed `query` and return the nearest profiles by cosine
@@ -155,6 +156,10 @@ def search_profiles(
     profile carries a `distance` attribute (from the annotation) the serializer
     turns into a similarity score. Returns [] (logged) when no OpenAI key is
     configured, so search degrades gracefully rather than erroring.
+
+    `similarity_threshold` is a cosine-similarity floor (0..1): profiles scoring
+    below it are dropped. Defaults to settings.SEARCH_SIMILARITY_THRESHOLD; pass
+    0.0 to disable the floor (e.g. the eval harness, which measures ranking).
     """
     if not settings.OPENAI_API_KEY:
         logger.warning("search_skipped_no_api_key")
@@ -177,8 +182,21 @@ def search_profiles(
     if available_only:
         queryset = queryset.filter(is_available=True)
 
+    # Drop weak matches: similarity = 1 - distance, so a similarity floor of T
+    # means keeping only distance <= 1 - T. A threshold of 0 keeps everything.
+    threshold = (
+        settings.SEARCH_SIMILARITY_THRESHOLD
+        if similarity_threshold is None
+        else similarity_threshold
+    )
+    if threshold > 0:
+        queryset = queryset.filter(distance__lte=1.0 - threshold)
+
     results: list[MusicianProfile] = list(queryset[:limit])
-    logger.info("profiles_searched", extra={"result_count": len(results), "limit": limit})
+    logger.info(
+        "profiles_searched",
+        extra={"result_count": len(results), "limit": limit, "threshold": threshold},
+    )
     return results
 
 
