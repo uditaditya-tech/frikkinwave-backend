@@ -49,6 +49,12 @@ variable "openai_api_key" {
   default     = ""
 }
 
+variable "search_similarity_threshold" {
+  description = "Cosine-similarity floor for semantic search (0..1). 0 disables. Tune live via terraform apply -var. 0.8 is far too high for text-embedding-3-small — measured prod scores: strong matches ~0.72-0.78, moderate ~0.45-0.55, noise <0.3. 0.4 keeps relevant, drops weak."
+  type        = number
+  default     = 0.4
+}
+
 # --- ElastiCache (Redis / Celery broker) ----------------------------------
 
 variable "redis_node_type" {

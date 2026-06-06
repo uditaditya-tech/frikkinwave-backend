@@ -167,7 +167,9 @@ OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
 # score against the query to be returned. Results below this are dropped, so a
 # query with no good matches returns fewer (or zero) results rather than padding
 # the list with weak ones. 0.0 disables the floor (return all nearest).
-SEARCH_SIMILARITY_THRESHOLD = env.float("SEARCH_SIMILARITY_THRESHOLD", default=0.8)
+# Default 0.4: measured against text-embedding-3-small in prod, strong matches
+# score ~0.72-0.78, moderate ~0.45-0.55, noise <0.3 — so 0.8 returned nothing.
+SEARCH_SIMILARITY_THRESHOLD = env.float("SEARCH_SIMILARITY_THRESHOLD", default=0.4)
 
 # ---------------------------------------------------------------------------
 # Celery (Redis broker)

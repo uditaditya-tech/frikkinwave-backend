@@ -37,6 +37,8 @@ resource "aws_ecs_task_definition" "app" {
         { name = "CSRF_TRUSTED_ORIGINS", value = "https://${var.api_domain}" },
         { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
         { name = "WEB_CONCURRENCY", value = "3" },
+        # Semantic-search similarity floor — tunable live without an image rebuild.
+        { name = "SEARCH_SIMILARITY_THRESHOLD", value = tostring(var.search_similarity_threshold) },
         # Broker carries no credentials (the SG is the access control), so it
         # rides as a plain env var. The web container emits tasks to it.
         { name = "CELERY_BROKER_URL", value = local.redis_url },
