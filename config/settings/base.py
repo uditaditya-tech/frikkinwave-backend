@@ -163,6 +163,12 @@ OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 OPENAI_EMBEDDING_MODEL = env("OPENAI_EMBEDDING_MODEL", default="text-embedding-3-small")
 OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
 
+# Semantic search: minimum cosine similarity (1 - cosine distance) a profile must
+# score against the query to be returned. Results below this are dropped, so a
+# query with no good matches returns fewer (or zero) results rather than padding
+# the list with weak ones. 0.0 disables the floor (return all nearest).
+SEARCH_SIMILARITY_THRESHOLD = env.float("SEARCH_SIMILARITY_THRESHOLD", default=0.8)
+
 # ---------------------------------------------------------------------------
 # Celery (Redis broker)
 # Async work runs through Celery; tasks are wired as event handlers, not inline
