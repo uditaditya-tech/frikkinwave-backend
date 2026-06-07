@@ -60,6 +60,8 @@ class MusicianProfileReadSerializer(serializers.ModelSerializer[MusicianProfile]
             "country",
             "is_available",
             "sound_url",
+            "is_open_to_session_work",
+            "session_rate",
             "instruments",
             "genres",
             "created_at",
@@ -110,6 +112,8 @@ class MusicianProfileWriteSerializer(serializers.Serializer[Any]):
     country = serializers.CharField(required=False, allow_blank=True, max_length=100)
     is_available = serializers.BooleanField(required=False)
     sound_url = serializers.URLField(required=False, allow_blank=True, max_length=500)
+    is_open_to_session_work = serializers.BooleanField(required=False)
+    session_rate = serializers.CharField(required=False, allow_blank=True, max_length=200)
     instruments = MusicianInstrumentWriteSerializer(many=True, required=False)
     genres = serializers.PrimaryKeyRelatedField(
         queryset=Genre.objects.all(),

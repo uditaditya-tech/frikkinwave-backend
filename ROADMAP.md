@@ -89,9 +89,12 @@ Deployed manually via the rolling update flow (push-image → apply -var image_t
 | 4.3 Membership invite flow — owner invites by username → accept/decline → reveal-on-accept + Celery email notifications + tests | ✅ |
 | 4.4 Browse + filter bands (city / country, active-only, cursor-paginated) + tests | ✅ |
 
-### Block B — Session-musician marketplace ⬜
-- "Open to session work" intent on the musician profile (availability flag + optional rate text)
-- Hire/booking request flow (requester → musician, status pending/accepted/declined/completed) — contact-request variant + Celery notify. **Hire-intent only, no real payments** (decided).
+### Block B — Session-musician marketplace → `apps/engagements` ✅ (code complete)
+
+| Sub-step | Status |
+|---|---|
+| 4.5 "Open to session work" intent on `MusicianProfile` (`is_open_to_session_work` + `session_rate`) + serializers + `?open_to_session` filter + migration `0006` + tests | ✅ |
+| 4.6 `EngagementRequest` hire-intent flow — send/list/accept/decline/complete, reveal-on-accept + Celery email notifications + tests. **Hire-intent only, no payments.** | ✅ |
 
 ### Block C — Venue profiles ⬜
 - `Venue` model owned by a regular User (name, address, city, country, capacity) + CRUD + browse + tests.

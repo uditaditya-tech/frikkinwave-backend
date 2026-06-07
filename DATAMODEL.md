@@ -41,8 +41,13 @@ One-to-one with `User`. The public-facing profile.
 | `country` | CharField(100) | Free-text for Phase 1. |
 | `is_available` | BooleanField | Default True. Toggles visibility in jam finder. |
 | `sound_url` | URLField(500) | Optional. External track (SoundCloud/Spotify/YouTube) embedded on the profile. |
+| `is_open_to_session_work` | BooleanField | Default False. Session-musician marketplace flag (Phase 4 Block B). Filter: `?open_to_session=true`. |
+| `session_rate` | CharField(200) | Optional free-text rate, e.g. "₹5000/session". Hire-intent only — no payments. |
 | `created_at` | DateTimeField | `auto_now_add` |
 | `updated_at` | DateTimeField | `auto_now` |
+
+> Session-work fields added in migration `0006`. They are **not** part of
+> `build_embedding_text`, so toggling them doesn't trigger re-embedding.
 
 ---
 
@@ -224,6 +229,30 @@ An invitation / membership tying a user to a band — the contact-request varian
 Unique constraint on `(band, member)`. The owner is the `Band.owner` field, **not** a membership row — the roster (accepted memberships) lists invited members only.
 Flow: owner invites by username → invitee accepts/declines → contact email revealed to both parties once accepted.
 **Email notifications:** `invite` emits `bands.notify_band_invite` (emails the invitee); `accept` emits `bands.notify_band_invite_accepted` (emails the owner). Both via `transaction.on_commit(... .delay())` — see `apps/bands/tasks.py`.
+
+---
+
+### `engagements.EngagementRequest` (Phase 4 — Block B ✅)
+
+A request to hire a musician for session/paid work — the contact-request variant
+for the marketplace. Hire-intent only (no real payments).
+**App:** `apps/engagements` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `requester` | ForeignKey → `AUTH_USER_MODEL` | `related_name="sent_engagement_requests"`. String ref. |
+| `musician` | ForeignKey → `AUTH_USER_MODEL` | `related_name="received_engagement_requests"`. The user being hired. String ref. |
+| `message` | TextField | Optional intro (blank=True) |
+| `proposed_date` | DateField | Optional (null/blank). When the session/gig is. |
+| `rate_offer` | CharField(200) | Optional free-text offer, e.g. "₹5000". |
+| `status` | CharField(10) | `pending` / `accepted` / `declined` / `completed`. Default `pending`. |
+| `created_at` / `updated_at` | DateTimeField | `auto_now_add` / `auto_now` |
+
+**No** unique constraint — a requester may hire the same musician repeatedly (different dates).
+Self-hire rejected in the service layer.
+Flow: send → accept/decline (musician only) → either party marks `completed` (only from `accepted`). Contact email revealed to both parties once accepted (and stays revealed when completed).
+**Email notifications:** `send` emits `engagements.notify_new_engagement_request` (emails the musician); `accept` emits `engagements.notify_engagement_request_accepted` (emails the requester, revealing the musician's contact email). Both via `transaction.on_commit(... .delay())` — see `apps/engagements/tasks.py`.
 
 ---
 

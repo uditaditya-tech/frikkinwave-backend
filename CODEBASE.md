@@ -96,22 +96,41 @@ frikkinwave-backend/
 │   │       ├── test_listing.py    # 16 tests: CRUD happy + negatives, ownership, active-only browse, filters
 │   │       └── test_application.py  # 20 tests: apply, list (in/out box), accept/decline, reveal, notifications
 │   │
-│   └── bands/                     # Bands as group entities + member rosters (Phase 4, Block A)
+│   ├── bands/                     # Bands as group entities + member rosters (Phase 4, Block A)
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.bands", label="bands"
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py    # Band + BandMembership (unique per band+member)
+│   │   ├── models.py              # Band, BandMembership (owner/member FKs via AUTH_USER_MODEL string ref)
+│   │   ├── serializers.py         # Band Read (w/ accepted roster)/Create/Update + Membership Read (reveal-on-accept)/Invite
+│   │   ├── services.py            # band CRUD (owner-only, slug derivation) + invite/list/accept/decline + email notify fns
+│   │   ├── tasks.py               # Celery tasks: notify member on invite, notify owner on accept (on_commit)
+│   │   ├── urls.py                # /, /<slug>/, /<slug>/invite/, /memberships/, /memberships/<id>/(accept|decline)
+│   │   ├── views.py               # BandListCreate/Detail/Invite + MembershipList/Detail/Accept/Decline views
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py        # owner + band fixtures, auth/make_user helpers
+│   │       ├── test_band.py       # 14 tests: CRUD happy + negatives, slug derivation/collision, roster, browse/filters
+│   │       └── test_membership.py  # 17 tests: invite, list, accept/decline, reveal, notifications
+│   │
+│   └── engagements/               # Session-musician hire-intent marketplace (Phase 4, Block B)
 │       ├── admin.py
-│       ├── apps.py                # name="apps.bands", label="bands"
+│       ├── apps.py                # name="apps.engagements", label="engagements"
 │       ├── migrations/
-│       │   └── 0001_initial.py    # Band + BandMembership (unique per band+member)
-│       ├── models.py              # Band, BandMembership (owner/member FKs via AUTH_USER_MODEL string ref)
-│       ├── serializers.py         # Band Read (w/ accepted roster)/Create/Update + Membership Read (reveal-on-accept)/Invite
-│       ├── services.py            # band CRUD (owner-only, slug derivation) + invite/list/accept/decline + email notify fns
-│       ├── tasks.py               # Celery tasks: notify member on invite, notify owner on accept (on_commit)
-│       ├── urls.py                # /, /<slug>/, /<slug>/invite/, /memberships/, /memberships/<id>/(accept|decline)
-│       ├── views.py               # BandListCreate/Detail/Invite + MembershipList/Detail/Accept/Decline views
+│       │   └── 0001_initial.py    # EngagementRequest (no unique — repeat hires allowed)
+│       ├── models.py              # EngagementRequest (requester/musician FKs via AUTH_USER_MODEL string ref)
+│       ├── serializers.py         # Read (reveal-on-accept/completed) + Create
+│       ├── services.py            # send/list/get/accept/decline/complete + email notify fns
+│       ├── tasks.py               # Celery tasks: notify musician on send, notify requester on accept (on_commit)
+│       ├── urls.py                # /, /<id>/, /<id>/(accept|decline|complete)
+│       ├── views.py               # EngagementListCreate/Detail/Accept/Decline/Complete views
 │       └── tests/
 │           ├── __init__.py
-│           ├── conftest.py        # owner + band fixtures, auth/make_user helpers
-│           ├── test_band.py       # 14 tests: CRUD happy + negatives, slug derivation/collision, roster, browse/filters
-│           └── test_membership.py  # 17 tests: invite, list, accept/decline, reveal, notifications
+│           ├── conftest.py        # auth/make_user helpers
+│           └── test_engagement.py  # 19 tests: send, list (in/out), accept/decline/complete, reveal, notifications
+│
+│   # NOTE: musicians gained session-work intent fields (is_open_to_session_work,
+│   # session_rate) in migration 0006 — see apps/musicians/tests/test_session_work.py (4 tests).
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py                # Loads the Celery app so @shared_task binds
@@ -175,7 +194,7 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/musicians/instruments/` | None | Full instrument catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/genres/` | None | Full genre catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/search/` | None | Semantic search (`?q=` NL query, `?limit=`, `?available=true`) — cosine kNN, ranked w/ similarity; drops results below `SEARCH_SIMILARITY_THRESHOLD` (default 0.4) |
-| GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated) |
+| GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated); filters incl. `?open_to_session=true` |
 | GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username |
 | GET | `/api/musicians/compatibility/<username>/` | Bearer | Cached gpt-4o-mini "why you might click" blurb between you and `<username>` |
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile |
@@ -207,6 +226,12 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/bands/memberships/<id>/` | Bearer | Retrieve a membership you are party to (reveal-on-accept) |
 | POST | `/api/bands/memberships/<id>/accept/` | Bearer | Invited member accepts (reveals contact email) |
 | POST | `/api/bands/memberships/<id>/decline/` | Bearer | Invited member declines |
+| POST | `/api/engagements/` | Bearer | Send a hire request to a musician (by username) |
+| GET | `/api/engagements/` | Bearer | List own hire requests (`?box=incoming\|outgoing`) |
+| GET | `/api/engagements/<id>/` | Bearer | Retrieve a request you are party to (reveal-on-accept) |
+| POST | `/api/engagements/<id>/accept/` | Bearer | Hired musician accepts (reveals contact email) |
+| POST | `/api/engagements/<id>/decline/` | Bearer | Hired musician declines |
+| POST | `/api/engagements/<id>/complete/` | Bearer | Either party marks an accepted request completed |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 

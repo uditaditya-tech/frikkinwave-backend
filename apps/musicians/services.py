@@ -63,6 +63,8 @@ def create_profile(*, user: User, data: dict[str, Any]) -> MusicianProfile:
         country=data.get("country", ""),
         is_available=data.get("is_available", True),
         sound_url=data.get("sound_url", ""),
+        is_open_to_session_work=data.get("is_open_to_session_work", False),
+        session_rate=data.get("session_rate", ""),
     )
 
     _set_instruments(profile, data.get("instruments", []))
@@ -81,7 +83,15 @@ def update_profile(*, profile: MusicianProfile, data: dict[str, Any]) -> Musicia
     Only keys present in `data` are updated — absent keys are left untouched.
     `data` is the validated output of MusicianProfileWriteSerializer (partial=True).
     """
-    scalar_fields = ("bio", "city", "country", "is_available", "sound_url")
+    scalar_fields = (
+        "bio",
+        "city",
+        "country",
+        "is_available",
+        "sound_url",
+        "is_open_to_session_work",
+        "session_rate",
+    )
     changed = False
     for field in scalar_fields:
         if field in data:
@@ -113,6 +123,7 @@ def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
       - instrument→ instrument slug
       - genre     → genre slug
       - available → True restricts to is_available=True; any other value is ignored
+      - open_to_session → True restricts to is_open_to_session_work=True
 
     Ordering is left to the caller's paginator (CursorPagination orders by
     -created_at). The queryset prefetches related rows to keep the nested
@@ -133,6 +144,8 @@ def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
         queryset = queryset.filter(genres__slug=genre)
     if filters.get("available") is True:
         queryset = queryset.filter(is_available=True)
+    if filters.get("open_to_session") is True:
+        queryset = queryset.filter(is_open_to_session_work=True)
 
     # M2M filters can duplicate rows across joins.
     queryset = queryset.distinct()
