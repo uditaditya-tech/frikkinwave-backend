@@ -61,11 +61,19 @@ Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery w
 ---
 
 ## Phase 3 — Gig and audition board
-**Status: ⬜ Not started**
+**Status: ✅ Complete (code)** — not yet deployed (manual bring-up; no CD)
 
-- Listing model (gig / audition / venue types)
-- Post a listing, browse listings, filter by type / city / country
-- Apply to a listing (contact request variant)
+New `apps/listings` app (three-layer, no cross-app model imports).
+
+| Sub-step | Status |
+|---|---|
+| 3.1 `Listing` model (gig / audition / venue types, soft-delete via `is_active`) + migration | ✅ |
+| 3.2 Post / retrieve / update / soft-delete listing endpoints (author-only mutation) + tests | ✅ |
+| 3.3 Browse + filter listings (type / city / country, active only, cursor-paginated) + tests | ✅ |
+| 3.4 Apply to a listing — `ListingApplication` (contact-request variant): apply / accept / decline / reveal-on-accept + Celery email notifications + tests | ✅ |
+| 3.5 Docs sync (DATAMODEL, CODEBASE, ROADMAP) | ✅ |
+
+Deploy: gated behind manual bring-up (see infra/README — no CD).
 
 ---
 

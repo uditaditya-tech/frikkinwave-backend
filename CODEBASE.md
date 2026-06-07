@@ -62,21 +62,39 @@ frikkinwave-backend/
 │   │       ├── test_coach.py      # 5 tests: missing-field suggestions, score 100, no-key null tip, no-profile 400, 401 (LLM mocked)
 │   │       └── test_evals.py      # 7 tests: metric math + end-to-end harness w/ deterministic fake embedder + rollback
 │   │
-│   └── connections/               # Contact requests between users (send → accept/decline → reveal)
+│   ├── connections/               # Contact requests between users (send → accept/decline → reveal)
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.connections", label="connections"
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py    # ContactRequest
+│   │   ├── models.py              # ContactRequest (sender/recipient FKs via AUTH_USER_MODEL string ref)
+│   │   ├── serializers.py         # Read (conditional contact_email reveal) + Create
+│   │   ├── services.py            # send / list / get / accept / decline + email notify fns; calls users.services for username lookup
+│   │   ├── tasks.py               # Celery tasks: notify recipient on send, notify sender on accept (emitted via on_commit)
+│   │   ├── urls.py                # /requests/, /requests/<id>/, /requests/<id>/accept/, /decline/
+│   │   ├── views.py               # ListCreate, Detail, Accept, Decline views
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
+│   │       └── test_notifications.py  # 5 tests: send/accept emails, decline silent, missing-request no-op
+│   │
+│   └── listings/                  # Gig & audition board — listings + applications (Phase 3)
 │       ├── admin.py
-│       ├── apps.py                # name="apps.connections", label="connections"
+│       ├── apps.py                # name="apps.listings", label="listings"
 │       ├── migrations/
-│       │   └── 0001_initial.py    # ContactRequest
-│       ├── models.py              # ContactRequest (sender/recipient FKs via AUTH_USER_MODEL string ref)
-│       ├── serializers.py         # Read (conditional contact_email reveal) + Create
-│       ├── services.py            # send / list / get / accept / decline + email notify fns; calls users.services for username lookup
-│       ├── tasks.py               # Celery tasks: notify recipient on send, notify sender on accept (emitted via on_commit)
-│       ├── urls.py                # /requests/, /requests/<id>/, /requests/<id>/accept/, /decline/
-│       ├── views.py               # ListCreate, Detail, Accept, Decline views
+│       │   ├── 0001_initial.py    # Listing
+│       │   └── 0002_listingapplication.py  # ListingApplication (unique per listing+applicant)
+│       ├── models.py              # Listing, ListingApplication (FKs via AUTH_USER_MODEL string ref)
+│       ├── serializers.py         # Listing Read/Create/Update + Application Read (reveal-on-accept)/Create
+│       ├── services.py            # listing CRUD (author-only) + apply/list/accept/decline + email notify fns
+│       ├── tasks.py               # Celery tasks: notify author on apply, notify applicant on accept (on_commit)
+│       ├── urls.py                # /, /<id>/, /<id>/apply/, /applications/, /applications/<id>/(accept|decline)
+│       ├── views.py               # ListingListCreate/Detail/Apply + ApplicationList/Detail/Accept/Decline views
 │       └── tests/
 │           ├── __init__.py
-│           ├── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
-│           └── test_notifications.py  # 5 tests: send/accept emails, decline silent, missing-request no-op
+│           ├── conftest.py        # author + listing fixtures, auth/make_user helpers
+│           ├── test_listing.py    # 16 tests: CRUD happy + negatives, ownership, active-only browse, filters
+│           └── test_application.py  # 20 tests: apply, list (in/out box), accept/decline, reveal, notifications
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py                # Loads the Celery app so @shared_task binds
@@ -152,6 +170,16 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/connections/requests/<id>/` | Bearer | Retrieve a request you are party to |
 | POST | `/api/connections/requests/<id>/accept/` | Bearer | Recipient accepts (reveals contact email) |
 | POST | `/api/connections/requests/<id>/decline/` | Bearer | Recipient declines |
+| GET | `/api/listings/` | None | Browse active listings (cursor-paginated); filter `?type=` / `?city=` / `?country=` |
+| POST | `/api/listings/` | Bearer | Post a listing (gig / audition / venue) |
+| GET | `/api/listings/<id>/` | None | Public single active listing |
+| PATCH | `/api/listings/<id>/` | Bearer | Update own listing (author only) |
+| DELETE | `/api/listings/<id>/` | Bearer | Soft-delete own listing (author only) |
+| POST | `/api/listings/<id>/apply/` | Bearer | Apply to a listing |
+| GET | `/api/listings/applications/` | Bearer | List own applications (`?box=incoming\|outgoing`) |
+| GET | `/api/listings/applications/<id>/` | Bearer | Retrieve an application you are party to (reveal-on-accept) |
+| POST | `/api/listings/applications/<id>/accept/` | Bearer | Listing author accepts (reveals contact email) |
+| POST | `/api/listings/applications/<id>/decline/` | Bearer | Listing author declines |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 
