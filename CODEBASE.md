@@ -113,21 +113,36 @@ frikkinwave-backend/
 │   │       ├── test_band.py       # 14 tests: CRUD happy + negatives, slug derivation/collision, roster, browse/filters
 │   │       └── test_membership.py  # 17 tests: invite, list, accept/decline, reveal, notifications
 │   │
-│   └── engagements/               # Session-musician hire-intent marketplace (Phase 4, Block B)
+│   ├── engagements/               # Session-musician hire-intent marketplace (Phase 4, Block B)
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.engagements", label="engagements"
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py    # EngagementRequest (no unique — repeat hires allowed)
+│   │   ├── models.py              # EngagementRequest (requester/musician FKs via AUTH_USER_MODEL string ref)
+│   │   ├── serializers.py         # Read (reveal-on-accept/completed) + Create
+│   │   ├── services.py            # send/list/get/accept/decline/complete + email notify fns
+│   │   ├── tasks.py               # Celery tasks: notify musician on send, notify requester on accept (on_commit)
+│   │   ├── urls.py                # /, /<id>/, /<id>/(accept|decline|complete)
+│   │   ├── views.py               # EngagementListCreate/Detail/Accept/Decline/Complete views
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py        # auth/make_user helpers
+│   │       └── test_engagement.py  # 19 tests: send, list (in/out), accept/decline/complete, reveal, notifications
+│   │
+│   └── venues/                    # User-owned venue profiles (Phase 4, Block C)
 │       ├── admin.py
-│       ├── apps.py                # name="apps.engagements", label="engagements"
+│       ├── apps.py                # name="apps.venues", label="venues"
 │       ├── migrations/
-│       │   └── 0001_initial.py    # EngagementRequest (no unique — repeat hires allowed)
-│       ├── models.py              # EngagementRequest (requester/musician FKs via AUTH_USER_MODEL string ref)
-│       ├── serializers.py         # Read (reveal-on-accept/completed) + Create
-│       ├── services.py            # send/list/get/accept/decline/complete + email notify fns
-│       ├── tasks.py               # Celery tasks: notify musician on send, notify requester on accept (on_commit)
-│       ├── urls.py                # /, /<id>/, /<id>/(accept|decline|complete)
-│       ├── views.py               # EngagementListCreate/Detail/Accept/Decline/Complete views
+│       │   └── 0001_initial.py    # Venue
+│       ├── models.py              # Venue (owner FK via AUTH_USER_MODEL string ref)
+│       ├── serializers.py         # Venue Read/Create/Update
+│       ├── services.py            # venue CRUD (owner-only, slug derivation) + browse/filter
+│       ├── urls.py                # /, /<slug>/
+│       ├── views.py               # VenueListCreate/Detail views
 │       └── tests/
 │           ├── __init__.py
-│           ├── conftest.py        # auth/make_user helpers
-│           └── test_engagement.py  # 19 tests: send, list (in/out), accept/decline/complete, reveal, notifications
+│           ├── conftest.py        # owner + venue fixtures, auth/make_user helpers
+│           └── test_venue.py      # 15 tests: CRUD happy + negatives, slug derivation/collision, browse/filters
 │
 │   # NOTE: musicians gained session-work intent fields (is_open_to_session_work,
 │   # session_rate) in migration 0006 — see apps/musicians/tests/test_session_work.py (4 tests).
@@ -232,6 +247,11 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | POST | `/api/engagements/<id>/accept/` | Bearer | Hired musician accepts (reveals contact email) |
 | POST | `/api/engagements/<id>/decline/` | Bearer | Hired musician declines |
 | POST | `/api/engagements/<id>/complete/` | Bearer | Either party marks an accepted request completed |
+| GET | `/api/venues/` | None | Browse active venues (cursor-paginated); filter `?city=` / `?country=` |
+| POST | `/api/venues/` | Bearer | Create a venue (caller becomes owner) |
+| GET | `/api/venues/<slug>/` | None | Public venue page |
+| PATCH | `/api/venues/<slug>/` | Bearer | Update own venue (owner only) |
+| DELETE | `/api/venues/<slug>/` | Bearer | Soft-delete own venue (owner only) |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 
