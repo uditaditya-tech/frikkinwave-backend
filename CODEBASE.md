@@ -78,23 +78,40 @@ frikkinwave-backend/
 │   │       ├── test_contact.py    # 14 tests: send, list, accept, decline, retrieve + reveal
 │   │       └── test_notifications.py  # 5 tests: send/accept emails, decline silent, missing-request no-op
 │   │
-│   └── listings/                  # Gig & audition board — listings + applications (Phase 3)
+│   ├── listings/                  # Gig & audition board — listings + applications (Phase 3)
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.listings", label="listings"
+│   │   ├── migrations/
+│   │   │   ├── 0001_initial.py    # Listing
+│   │   │   └── 0002_listingapplication.py  # ListingApplication (unique per listing+applicant)
+│   │   ├── models.py              # Listing, ListingApplication (FKs via AUTH_USER_MODEL string ref)
+│   │   ├── serializers.py         # Listing Read/Create/Update + Application Read (reveal-on-accept)/Create
+│   │   ├── services.py            # listing CRUD (author-only) + apply/list/accept/decline + email notify fns
+│   │   ├── tasks.py               # Celery tasks: notify author on apply, notify applicant on accept (on_commit)
+│   │   ├── urls.py                # /, /<id>/, /<id>/apply/, /applications/, /applications/<id>/(accept|decline)
+│   │   ├── views.py               # ListingListCreate/Detail/Apply + ApplicationList/Detail/Accept/Decline views
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py        # author + listing fixtures, auth/make_user helpers
+│   │       ├── test_listing.py    # 16 tests: CRUD happy + negatives, ownership, active-only browse, filters
+│   │       └── test_application.py  # 20 tests: apply, list (in/out box), accept/decline, reveal, notifications
+│   │
+│   └── bands/                     # Bands as group entities + member rosters (Phase 4, Block A)
 │       ├── admin.py
-│       ├── apps.py                # name="apps.listings", label="listings"
+│       ├── apps.py                # name="apps.bands", label="bands"
 │       ├── migrations/
-│       │   ├── 0001_initial.py    # Listing
-│       │   └── 0002_listingapplication.py  # ListingApplication (unique per listing+applicant)
-│       ├── models.py              # Listing, ListingApplication (FKs via AUTH_USER_MODEL string ref)
-│       ├── serializers.py         # Listing Read/Create/Update + Application Read (reveal-on-accept)/Create
-│       ├── services.py            # listing CRUD (author-only) + apply/list/accept/decline + email notify fns
-│       ├── tasks.py               # Celery tasks: notify author on apply, notify applicant on accept (on_commit)
-│       ├── urls.py                # /, /<id>/, /<id>/apply/, /applications/, /applications/<id>/(accept|decline)
-│       ├── views.py               # ListingListCreate/Detail/Apply + ApplicationList/Detail/Accept/Decline views
+│       │   └── 0001_initial.py    # Band + BandMembership (unique per band+member)
+│       ├── models.py              # Band, BandMembership (owner/member FKs via AUTH_USER_MODEL string ref)
+│       ├── serializers.py         # Band Read (w/ accepted roster)/Create/Update + Membership Read (reveal-on-accept)/Invite
+│       ├── services.py            # band CRUD (owner-only, slug derivation) + invite/list/accept/decline + email notify fns
+│       ├── tasks.py               # Celery tasks: notify member on invite, notify owner on accept (on_commit)
+│       ├── urls.py                # /, /<slug>/, /<slug>/invite/, /memberships/, /memberships/<id>/(accept|decline)
+│       ├── views.py               # BandListCreate/Detail/Invite + MembershipList/Detail/Accept/Decline views
 │       └── tests/
 │           ├── __init__.py
-│           ├── conftest.py        # author + listing fixtures, auth/make_user helpers
-│           ├── test_listing.py    # 16 tests: CRUD happy + negatives, ownership, active-only browse, filters
-│           └── test_application.py  # 20 tests: apply, list (in/out box), accept/decline, reveal, notifications
+│           ├── conftest.py        # owner + band fixtures, auth/make_user helpers
+│           ├── test_band.py       # 14 tests: CRUD happy + negatives, slug derivation/collision, roster, browse/filters
+│           └── test_membership.py  # 17 tests: invite, list, accept/decline, reveal, notifications
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py                # Loads the Celery app so @shared_task binds
@@ -180,6 +197,16 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/listings/applications/<id>/` | Bearer | Retrieve an application you are party to (reveal-on-accept) |
 | POST | `/api/listings/applications/<id>/accept/` | Bearer | Listing author accepts (reveals contact email) |
 | POST | `/api/listings/applications/<id>/decline/` | Bearer | Listing author declines |
+| GET | `/api/bands/` | None | Browse active bands (cursor-paginated); filter `?city=` / `?country=` |
+| POST | `/api/bands/` | Bearer | Create a band (caller becomes owner) |
+| GET | `/api/bands/<slug>/` | None | Public band page (with accepted member roster) |
+| PATCH | `/api/bands/<slug>/` | Bearer | Update own band (owner only) |
+| DELETE | `/api/bands/<slug>/` | Bearer | Soft-delete own band (owner only) |
+| POST | `/api/bands/<slug>/invite/` | Bearer | Owner invites a user (by username) to the band |
+| GET | `/api/bands/memberships/` | Bearer | List the caller's own memberships / invites |
+| GET | `/api/bands/memberships/<id>/` | Bearer | Retrieve a membership you are party to (reveal-on-accept) |
+| POST | `/api/bands/memberships/<id>/accept/` | Bearer | Invited member accepts (reveals contact email) |
+| POST | `/api/bands/memberships/<id>/decline/` | Bearer | Invited member declines |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 
