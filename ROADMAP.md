@@ -78,7 +78,7 @@ Deployed manually via the rolling update flow (push-image → apply -var image_t
 ---
 
 ## Phase 4 — Bands + session musicians
-**Status: ✅ Complete (code)** — three feature blocks, each its own PR. Not yet deployed.
+**Status: ✅ Complete** — deployed & verified live at https://api.frikkinwave.com (image `55a0f3e`, 2026-06-07). Three feature blocks, each shipped as its own PR.
 
 ### Block A — Bands → `apps/bands` ✅ (code complete)
 
