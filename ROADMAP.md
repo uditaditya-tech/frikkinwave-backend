@@ -78,11 +78,24 @@ Deployed manually via the rolling update flow (push-image → apply -var image_t
 ---
 
 ## Phase 4 — Bands + session musicians
-**Status: ⬜ Not started**
+**Status: 🟡 In progress** — three feature blocks, each its own PR.
 
-- Band as a group entity (multiple member profiles)
-- Session musician marketplace (hire intent, paid engagement)
-- Venue profiles (Phase 5 user type: venue)
+### Block A — Bands → `apps/bands` ✅ (code complete)
+
+| Sub-step | Status |
+|---|---|
+| 4.1 `Band` + `BandMembership` models (owner FK, slug, soft-delete; membership unique per band+member) + migration | ✅ |
+| 4.2 Band CRUD (create/retrieve/update/soft-delete, owner-only) + public band page by slug (with accepted roster) + tests | ✅ |
+| 4.3 Membership invite flow — owner invites by username → accept/decline → reveal-on-accept + Celery email notifications + tests | ✅ |
+| 4.4 Browse + filter bands (city / country, active-only, cursor-paginated) + tests | ✅ |
+
+### Block B — Session-musician marketplace ⬜
+- "Open to session work" intent on the musician profile (availability flag + optional rate text)
+- Hire/booking request flow (requester → musician, status pending/accepted/declined/completed) — contact-request variant + Celery notify. **Hire-intent only, no real payments** (decided).
+
+### Block C — Venue profiles ⬜
+- `Venue` model owned by a regular User (name, address, city, country, capacity) + CRUD + browse + tests.
+- Ties into the existing `venue` listing type; the Phase 5 "venue user-type" is a later auth refinement.
 
 ---
 

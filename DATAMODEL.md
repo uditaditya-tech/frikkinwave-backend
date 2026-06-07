@@ -186,6 +186,47 @@ Flow: apply → accept/decline (listing author only) → contact email revealed 
 
 ---
 
+### `bands.Band` (Phase 4 — 4.1 ✅)
+
+A band / group entity, owned by one user, with an invited member roster.
+**App:** `apps/bands` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `owner` | ForeignKey → `AUTH_USER_MODEL` | `related_name="owned_bands"`. String ref. |
+| `name` | CharField(200) | |
+| `slug` | SlugField(120) | Unique. URL handle (`/api/bands/<slug>/`). Derived from name in the service layer with a numeric suffix on collision. |
+| `bio` | TextField | Blank allowed. |
+| `city` | CharField(100) | Blank allowed. Browse filter `__iexact`. |
+| `country` | CharField(100) | Blank allowed. Browse filter `__iexact`. |
+| `is_active` | BooleanField | Default True. Soft-delete — browse + retrieve show active only. |
+| `created_at` / `updated_at` | DateTimeField | `auto_now_add` / `auto_now` |
+
+`Meta.ordering = ["-created_at"]`. Owner-only mutation enforced in the service layer.
+
+---
+
+### `bands.BandMembership` (Phase 4 — 4.1 ✅)
+
+An invitation / membership tying a user to a band — the contact-request variant for rosters.
+**App:** `apps/bands` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `band` | ForeignKey → Band | Cascade delete. `related_name="memberships"`. |
+| `member` | ForeignKey → `AUTH_USER_MODEL` | `related_name="band_memberships"`. String ref (member is a User, not a MusicianProfile — keeps apps decoupled). |
+| `role` | CharField(100) | Optional free-text role, e.g. "Lead guitarist". |
+| `status` | CharField(10) | `pending` / `accepted` / `declined`. Default `pending`. |
+| `created_at` / `updated_at` | DateTimeField | `auto_now_add` / `auto_now` |
+
+Unique constraint on `(band, member)`. The owner is the `Band.owner` field, **not** a membership row — the roster (accepted memberships) lists invited members only.
+Flow: owner invites by username → invitee accepts/declines → contact email revealed to both parties once accepted.
+**Email notifications:** `invite` emits `bands.notify_band_invite` (emails the invitee); `accept` emits `bands.notify_band_invite_accepted` (emails the owner). Both via `transaction.on_commit(... .delay())` — see `apps/bands/tasks.py`.
+
+---
+
 ## Design rules
 
 - Every model gets a UUIDv7 `id` as primary key.
