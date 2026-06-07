@@ -130,6 +130,11 @@ class MusicianProfile(models.Model):
     # External audio link (SoundCloud / Spotify / YouTube) shown on the profile.
     sound_url = models.URLField(max_length=500, blank=True)
 
+    # Session-musician marketplace (Phase 4 Block B): signals the musician is open
+    # to paid session work, plus a free-text rate. Hire-intent only — no payments.
+    is_open_to_session_work = models.BooleanField(default=False)
+    session_rate = models.CharField(max_length=200, blank=True)
+
     instruments = models.ManyToManyField(
         Instrument,
         through=MusicianInstrument,

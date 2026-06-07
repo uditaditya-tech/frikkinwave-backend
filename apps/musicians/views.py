@@ -115,7 +115,7 @@ class ProfileListView(APIView):
 
     Public discovery feed. Unauthenticated access allowed.
     Optional, combinable query params: ?city= ?country= ?instrument=<slug>
-    ?genre=<slug> ?available=true. Cursor-paginated.
+    ?genre=<slug> ?available=true ?open_to_session=true. Cursor-paginated.
     """
 
     authentication_classes = [JWTAuthentication]
@@ -129,6 +129,8 @@ class ProfileListView(APIView):
                 filters[key] = value
         if "available" in params:
             filters["available"] = params.get("available", "").lower() == "true"
+        if "open_to_session" in params:
+            filters["open_to_session"] = params.get("open_to_session", "").lower() == "true"
 
         queryset = list_profiles(filters=filters)
 
