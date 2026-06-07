@@ -61,7 +61,7 @@ Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery w
 ---
 
 ## Phase 3 — Gig and audition board
-**Status: ✅ Complete (code)** — not yet deployed (manual bring-up; no CD)
+**Status: ✅ Complete** — deployed & verified live at https://api.frikkinwave.com (image `fc4d97e`, 2026-06-07)
 
 New `apps/listings` app (three-layer, no cross-app model imports).
 
@@ -73,7 +73,7 @@ New `apps/listings` app (three-layer, no cross-app model imports).
 | 3.4 Apply to a listing — `ListingApplication` (contact-request variant): apply / accept / decline / reveal-on-accept + Celery email notifications + tests | ✅ |
 | 3.5 Docs sync (DATAMODEL, CODEBASE, ROADMAP) | ✅ |
 
-Deploy: gated behind manual bring-up (see infra/README — no CD).
+Deployed manually via the rolling update flow (push-image → apply -var image_tag → run-migrations; no CD).
 
 ---
 
