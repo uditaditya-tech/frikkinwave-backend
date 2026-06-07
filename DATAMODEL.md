@@ -139,24 +139,50 @@ Unique constraint on `(profile_a, profile_b)`. **Canonical unordered pair:**
 
 ---
 
-## Planned models (Phase 3 — gigs & auditions)
+### `listings.Listing` (Phase 3 — 3.1 ✅)
 
-### `listings.Listing`
+A gig / audition / venue posting on the board.
+**App:** `apps/listings` | **Migration:** `0001_initial`
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
-| `author` | ForeignKey → User | |
-| `listing_type` | CharField | `gig` / `audition` / `venue` |
+| `author` | ForeignKey → `AUTH_USER_MODEL` | `related_name="listings"`. String ref — no cross-app import. |
+| `listing_type` | CharField(10) | `gig` / `audition` / `venue` (TextChoices) |
 | `title` | CharField(200) | |
 | `description` | TextField | |
-| `city` | CharField(100) | |
-| `country` | CharField(100) | |
-| `is_paid` | BooleanField | |
-| `pay_description` | CharField(200) | Optional. e.g. "₹2000 per show" |
-| `deadline` | DateField | Optional |
-| `is_active` | BooleanField | Default True |
+| `city` | CharField(100) | Free-text. Browse filter is `__iexact`. |
+| `country` | CharField(100) | Free-text. Browse filter is `__iexact`. |
+| `is_paid` | BooleanField | Default False |
+| `pay_description` | CharField(200) | Optional (blank). e.g. "₹2000 per show" |
+| `deadline` | DateField | Optional (null/blank) |
+| `is_active` | BooleanField | Default True. Soft-delete flag — browse + retrieve show active only. |
 | `created_at` | DateTimeField | `auto_now_add` |
+| `updated_at` | DateTimeField | `auto_now` |
+
+`Meta.ordering = ["-created_at"]`. Author-only mutation enforced in the service layer.
+
+---
+
+### `listings.ListingApplication` (Phase 3 — 3.4 ✅)
+
+A musician's application to a listing — the contact-request variant for the board.
+**App:** `apps/listings` | **Migration:** `0002_listingapplication`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `listing` | ForeignKey → Listing | Cascade delete. `related_name="applications"`. |
+| `applicant` | ForeignKey → `AUTH_USER_MODEL` | `related_name="listing_applications"`. String ref. |
+| `message` | TextField | Optional intro message (blank=True) |
+| `status` | CharField(10) | `pending` / `accepted` / `declined`. Default `pending`. |
+| `created_at` | DateTimeField | `auto_now_add` |
+| `updated_at` | DateTimeField | `auto_now` |
+
+Unique constraint on `(listing, applicant)`.
+Self-applications (author applying to own listing) rejected in the service layer.
+Flow: apply → accept/decline (listing author only) → contact email revealed to both parties once accepted.
+**Email notifications:** `apply` emits `listings.notify_new_application` (emails the listing author); `accept` emits `listings.notify_application_accepted` (emails the applicant, revealing the author's contact email). Both via `transaction.on_commit(... .delay())` — see `apps/listings/tasks.py`.
 
 ---
 

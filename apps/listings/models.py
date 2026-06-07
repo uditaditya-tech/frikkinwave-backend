@@ -50,3 +50,44 @@ class Listing(models.Model):
 
     def __str__(self) -> str:
         return f"{self.title} ({self.listing_type})"
+
+
+class ListingApplication(models.Model):
+    """A musician's application to a listing. The contact-request variant for the board."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+
+    id = models.UUIDField(primary_key=True, default=_new_uuid, editable=False)
+    listing = models.ForeignKey(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name="applications",
+    )
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="listing_applications",
+    )
+    message = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["listing", "applicant"],
+                name="unique_application_per_listing",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.applicant_id} → {self.listing_id} ({self.status})"
