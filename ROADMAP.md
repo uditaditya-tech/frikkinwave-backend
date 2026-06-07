@@ -78,7 +78,7 @@ Deployed manually via the rolling update flow (push-image → apply -var image_t
 ---
 
 ## Phase 4 — Bands + session musicians
-**Status: 🟡 In progress** — three feature blocks, each its own PR.
+**Status: ✅ Complete (code)** — three feature blocks, each its own PR. Not yet deployed.
 
 ### Block A — Bands → `apps/bands` ✅ (code complete)
 
@@ -96,9 +96,14 @@ Deployed manually via the rolling update flow (push-image → apply -var image_t
 | 4.5 "Open to session work" intent on `MusicianProfile` (`is_open_to_session_work` + `session_rate`) + serializers + `?open_to_session` filter + migration `0006` + tests | ✅ |
 | 4.6 `EngagementRequest` hire-intent flow — send/list/accept/decline/complete, reveal-on-accept + Celery email notifications + tests. **Hire-intent only, no payments.** | ✅ |
 
-### Block C — Venue profiles ⬜
-- `Venue` model owned by a regular User (name, address, city, country, capacity) + CRUD + browse + tests.
-- Ties into the existing `venue` listing type; the Phase 5 "venue user-type" is a later auth refinement.
+### Block C — Venue profiles → `apps/venues` ✅ (code complete)
+
+| Sub-step | Status |
+|---|---|
+| 4.7 `Venue` model owned by a User (name, slug, description, address, city, country, capacity, website, soft-delete) + migration | ✅ |
+| 4.8 Venue CRUD (create/retrieve/update/soft-delete, owner-only) + public page by slug + browse/filter (city/country) + tests | ✅ |
+
+Ties into the existing `venue` listing type; the Phase 5 "venue user-type" is a later auth refinement.
 
 ---
 

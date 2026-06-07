@@ -256,6 +256,31 @@ Flow: send → accept/decline (musician only) → either party marks `completed`
 
 ---
 
+### `venues.Venue` (Phase 4 — Block C ✅)
+
+A user-owned venue profile (club, bar, studio, hall).
+**App:** `apps/venues` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `owner` | ForeignKey → `AUTH_USER_MODEL` | `related_name="venues"`. String ref. |
+| `name` | CharField(200) | |
+| `slug` | SlugField(120) | Unique. URL handle (`/api/venues/<slug>/`). Derived from name in the service layer with a numeric suffix on collision. |
+| `description` | TextField | Blank allowed. |
+| `address` | CharField(300) | Blank allowed. |
+| `city` | CharField(100) | Blank allowed. Browse filter `__iexact`. |
+| `country` | CharField(100) | Blank allowed. Browse filter `__iexact`. |
+| `capacity` | PositiveIntegerField | Optional (null/blank). |
+| `website` | URLField(500) | Optional. |
+| `is_active` | BooleanField | Default True. Soft-delete — browse + retrieve show active only. |
+| `created_at` / `updated_at` | DateTimeField | `auto_now_add` / `auto_now` |
+
+`Meta.ordering = ["-created_at"]`. Owner-only mutation enforced in the service layer.
+The Phase 5 "venue user-type" is a later auth refinement; for now a venue is owned by a regular user.
+
+---
+
 ## Design rules
 
 - Every model gets a UUIDv7 `id` as primary key.
