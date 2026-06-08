@@ -164,6 +164,24 @@ frikkinwave-backend/
 │
 │   # NOTE: listings.create_listing + bands.create_band call apps.social.services.record_activity
 │   # (service-to-service, no model import) to emit feed activities.
+│   #
+│   ├── reviews/                    # Ratings + reviews, gated on completed engagements (Phase 5, Block C)
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.reviews", label="reviews"
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py    # Review (unique per author+context, rating-range + no-self checks)
+│   │   ├── models.py              # Review (author/subject FKs; denormalized context_type/context_id — no cross-app FK)
+│   │   ├── serializers.py         # ReviewCreate (write) + ReviewRead (public)
+│   │   ├── services.py            # create_review (engagement-gated) + list_reviews_for + rating_summary
+│   │   ├── urls.py                # /, /<username>/, /<username>/summary/
+│   │   ├── views.py               # ReviewCreate + ReviewList + ReviewSummary views
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py        # requester + musician fixtures, make_engagement/auth helpers
+│   │       └── test_review.py     # 15 tests: gated create (happy/bidirectional/ineligible/dup/range), public list + summary
+│
+│   # NOTE: reviews.create_review gates via engagements.services.parties_of_completed_engagement
+│   # (service-to-service, no model import) — a review needs a COMPLETED engagement between the two users.
 │
 │   # NOTE: musicians gained session-work intent fields (is_open_to_session_work,
 │   # session_rate) in migration 0006 — see apps/musicians/tests/test_session_work.py (4 tests).
@@ -280,6 +298,9 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/social/<username>/following/` | None | Public list of who a user follows |
 | GET | `/api/social/<username>/followers/` | None | Public list of a user's followers |
 | GET | `/api/social/feed/` | Bearer | Activity feed — what followed users (+ self) did, newest first (cursor-paginated) |
+| POST | `/api/reviews/` | Bearer | Leave a review (gated on a completed engagement; body: subject_username, engagement_id, rating, comment) |
+| GET | `/api/reviews/<username>/` | None | Public list of reviews a user received (cursor-paginated) |
+| GET | `/api/reviews/<username>/summary/` | None | Public `{average_rating, count}` for a user |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 

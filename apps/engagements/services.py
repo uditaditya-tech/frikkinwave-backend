@@ -9,6 +9,7 @@ model import. apps.users.models.User is referenced only under TYPE_CHECKING.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -149,6 +150,23 @@ def complete_engagement_request(*, user: User, engagement_id: str) -> Engagement
     engagement.save(update_fields=["status", "updated_at"])
     logger.info("engagement_request_completed", extra={"engagement_id": str(engagement.id)})
     return engagement
+
+
+def parties_of_completed_engagement(*, engagement_id: str) -> set[uuid.UUID] | None:
+    """
+    Return the two party user-ids of a COMPLETED engagement, or None if no such
+    completed engagement exists.
+
+    Public cross-app gate for the reviews app: a caller verifies that two users
+    actually finished an engagement together (so a review can't be left against a
+    stranger) without importing the EngagementRequest model.
+    """
+    engagement = EngagementRequest.objects.filter(
+        id=engagement_id, status=EngagementRequest.Status.COMPLETED
+    ).first()
+    if engagement is None:
+        return None
+    return {engagement.requester_id, engagement.musician_id}
 
 
 # ---------------------------------------------------------------------------

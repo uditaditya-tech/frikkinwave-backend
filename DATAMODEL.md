@@ -350,6 +350,38 @@ mitigation. Activities recorded so far: posted-listing, created-band (creation e
 
 ---
 
+### `reviews.Review` (Phase 5 — Block C ✅)
+
+A 1-5 star rating + comment one user leaves about another, gated on a real completed
+interaction so it can't be spammed against strangers.
+**App:** `apps/reviews` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `author` | ForeignKey → `AUTH_USER_MODEL` | `related_name="reviews_written"`. The reviewer. String ref. |
+| `subject` | ForeignKey → `AUTH_USER_MODEL` | `related_name="reviews_received"`. The reviewed. String ref. |
+| `rating` | PositiveSmallIntegerField | 1-5, enforced by validators **and** a DB check constraint. |
+| `comment` | TextField | Blank allowed. |
+| `context_type` | CharField(32) | TextChoices: `engagement` (the gate kind). |
+| `context_id` | UUIDField | The gating interaction's id (a completed engagement), **denormalized — no cross-app FK**. |
+| `created_at` / `updated_at` | DateTimeField | `auto_now_add` / `auto_now` |
+
+`Meta.ordering = ["-created_at"]`, index on `(subject, -created_at)`. Constraints:
+`UniqueConstraint(author, context_id)` (one review per reviewer per interaction →
+blocks duplicate reviews of the same engagement), `CheckConstraint` rating 1-5, and
+`CheckConstraint` author ≠ subject.
+
+**Gate:** `reviews.services.create_review` verifies eligibility via
+`engagements.services.parties_of_completed_engagement(id)` (service-to-service, no model
+import) — the engagement must be `COMPLETED` and `{author, subject}` must be its two
+parties. **Bidirectional**: both the requester and the musician can review each other
+once per completed engagement. The model is **gate-agnostic** (`context_type`/`context_id`)
+so future gates (e.g. accepted listing applications) are additive. Embedding a user's
+average rating into the musician profile payload is a deliberate fast-follow.
+
+---
+
 ## Design rules
 
 - Every model gets a UUIDv7 `id` as primary key.

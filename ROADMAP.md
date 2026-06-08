@@ -135,9 +135,17 @@ Known trade-off: write-amplification on high-follower accounts (celebrity proble
 hybrid push/pull split is the future mitigation. No GenericForeignKey: producers supply a
 denormalized summary + opaque target fields, so `social` stays schema-ignorant of other apps.
 
-### Block C — Ratings + reviews ⬜
-Post-interaction feedback, gated on a real completed interaction (engagement / accepted application)
-so reviews can't be spammed. Mostly independent of A/B.
+### Block C — Ratings + reviews → `apps/reviews` ✅ (code complete)
+
+| Sub-step | Status |
+|---|---|
+| 5.6 `Review` model (author/subject, 1-5 rating, denormalized context_type/context_id, unique-per-author-per-context, rating-range + no-self checks) + migration `0001` | ✅ |
+| 5.7 `create_review` gated via `engagements.services.parties_of_completed_engagement` (service call, no model import) + bidirectional + dedupe; `GET /api/reviews/<username>/` list + `/summary/` (avg, count) + tests | ✅ |
+
+**Gate:** a review requires a COMPLETED `EngagementRequest` between the two users, verified
+through a new `engagements.services` function (no cross-app model import). Gate-agnostic
+model (`context_type`/`context_id`) so accepted-listing-application gating is additive.
+Fast-follow: embed average rating into the musician profile payload.
 
 ### Block D — Real-time messaging ⬜
 Django Channels + Redis (WebSockets). Heaviest lift — needs ASGI + an ALB/WS infra change
