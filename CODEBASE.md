@@ -144,20 +144,26 @@ frikkinwave-backend/
 │   │       ├── conftest.py        # owner + venue fixtures, auth/make_user helpers
 │   │       └── test_venue.py      # 15 tests: CRUD happy + negatives, slug derivation/collision, browse/filters
 │   │
-│   └── social/                    # Follow graph (Phase 5, Block A)
+│   └── social/                    # Follow graph + activity feed (Phase 5, Blocks A+B)
 │       ├── admin.py
 │       ├── apps.py                # name="apps.social", label="social"
 │       ├── migrations/
-│       │   └── 0001_initial.py    # Follow (unique edge + no-self-follow check constraint)
-│       ├── models.py              # Follow (follower/followed FKs via AUTH_USER_MODEL string ref)
-│       ├── serializers.py         # Following/Follower Read (surface the other end's username)
-│       ├── services.py            # follow (idempotent, savepoint)/unfollow + following/followers lists + counts
-│       ├── urls.py                # /follow/<username>/, /following/, /followers/, /<username>/(followers|following)/
-│       ├── views.py               # Follow + Following/Followers list + Public follower/following views
+│       │   ├── 0001_initial.py    # Follow (unique edge + no-self-follow check constraint)
+│       │   └── 0002_activity_feedentry_and_more.py  # Activity (event log) + FeedEntry (per-recipient inbox)
+│       ├── models.py              # Follow, Activity (canonical log), FeedEntry (fan-out inbox)
+│       ├── serializers.py         # Following/Follower Read + FeedEntry Read (flattens joined Activity)
+│       ├── services.py            # follow/unfollow (+ backfill/prune emit) + record_activity/fan_out/backfill/prune/get_feed + Verb alias
+│       ├── tasks.py               # Celery: fan_out_activity, backfill_feed, prune_feed (thin → services)
+│       ├── urls.py                # /feed/, /follow/<username>/, /following/, /followers/, /<username>/(followers|following)/
+│       ├── views.py               # Feed + Follow + Following/Followers list + Public follower/following views
 │       └── tests/
 │           ├── __init__.py
 │           ├── conftest.py        # alice + bob fixtures, auth/make_user helpers
-│           └── test_follow.py     # 14 tests: follow/idempotent/self/unknown, unfollow, lists, public lists, auth
+│           ├── test_follow.py     # 14 tests: follow/idempotent/self/unknown, unfollow, lists, public lists, auth
+│           └── test_feed.py       # 10 tests: fan-out, self-feed, band activity, ordering, backfill/prune, recording, rollback
+│
+│   # NOTE: listings.create_listing + bands.create_band call apps.social.services.record_activity
+│   # (service-to-service, no model import) to emit feed activities.
 │
 │   # NOTE: musicians gained session-work intent fields (is_open_to_session_work,
 │   # session_rate) in migration 0006 — see apps/musicians/tests/test_session_work.py (4 tests).
@@ -273,6 +279,7 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/social/followers/` | Bearer | Users following the caller (cursor-paginated) |
 | GET | `/api/social/<username>/following/` | None | Public list of who a user follows |
 | GET | `/api/social/<username>/followers/` | None | Public list of a user's followers |
+| GET | `/api/social/feed/` | Bearer | Activity feed — what followed users (+ self) did, newest first (cursor-paginated) |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 

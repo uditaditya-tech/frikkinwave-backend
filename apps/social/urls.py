@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.social.views import (
+    FeedView,
     FollowersListView,
     FollowingListView,
     FollowView,
@@ -10,6 +11,7 @@ from apps.social.views import (
 
 urlpatterns = [
     # Specific literal paths before the <username> catch-alls.
+    path("feed/", FeedView.as_view(), name="feed"),
     path("follow/<str:username>/", FollowView.as_view(), name="follow"),
     path("following/", FollowingListView.as_view(), name="following-list"),
     path("followers/", FollowersListView.as_view(), name="followers-list"),

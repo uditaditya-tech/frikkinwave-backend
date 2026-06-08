@@ -121,9 +121,19 @@ Ties into the existing `venue` listing type; the Phase 5 "venue user-type" is a 
 (needs the feed to consume them, and a polymorphic target conflicts with the no-cross-app-import rule).
 No follow notifications (follows are higher-volume than invites — kept silent by choice).
 
-### Block B — Activity feed ⬜
-What the users you follow are doing. Key design call: fan-out-on-write (Celery, fits the
-event-driven rule + scale constraint) vs fan-out-on-read. Depends on Block A.
+### Block B — Activity feed → `apps/social` ✅ (code complete)
+
+| Sub-step | Status |
+|---|---|
+| 5.3 `Activity` (canonical event log) + `FeedEntry` (per-recipient inbox) models + migration `0002` | ✅ |
+| 5.4 Fan-out-on-write pipeline: `record_activity` (producer service call) → post-commit Celery `fan_out_activity` → Activity + a FeedEntry per follower (+ actor); follow backfills, unfollow prunes | ✅ |
+| 5.5 `GET /api/social/feed/` (cursor-paginated) + wire `listings`/`bands` create services to record activities + tests | ✅ |
+
+**Architecture:** fan-out-on-write + async (Celery) recording — the heavier path, chosen
+to match the scale rules. Activities = creation events only (posted-listing, created-band).
+Known trade-off: write-amplification on high-follower accounts (celebrity problem) — a
+hybrid push/pull split is the future mitigation. No GenericForeignKey: producers supply a
+denormalized summary + opaque target fields, so `social` stays schema-ignorant of other apps.
 
 ### Block C — Ratings + reviews ⬜
 Post-interaction feedback, gated on a real completed interaction (engagement / accepted application)

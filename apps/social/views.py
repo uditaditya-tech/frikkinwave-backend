@@ -15,11 +15,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from apps.social.serializers import FollowerReadSerializer, FollowingReadSerializer
+from apps.social.serializers import (
+    FeedEntryReadSerializer,
+    FollowerReadSerializer,
+    FollowingReadSerializer,
+)
 from apps.social.services import (
     SelfFollowError,
     UserNotFoundError,
     follow_user,
+    get_feed,
     get_user_or_raise,
     list_followers,
     list_following,
@@ -70,6 +75,19 @@ class FollowView(APIView):
             return _user_not_found()
         # Idempotent: deleting a non-existent edge is still a 204.
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FeedView(APIView):
+    """GET /api/social/feed/ — the caller's activity feed (people they follow + self)."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        queryset = get_feed(user=cast(User, request.user))
+        paginator = SocialCursorPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        return paginator.get_paginated_response(FeedEntryReadSerializer(page, many=True).data)
 
 
 class FollowingListView(APIView):

@@ -61,6 +61,18 @@ def create_band(*, owner: User, name: str, **fields: Any) -> Band:
     """Create a band owned by `owner`, deriving a unique slug from the name."""
     band = Band.objects.create(owner=owner, name=name, slug=_unique_slug(name), **fields)
     logger.info("band_created", extra={"band_id": str(band.id), "owner_id": str(owner.pk)})
+
+    # Record a feed activity (cross-app service call, never a model import).
+    from apps.social.services import Verb, record_activity
+
+    record_activity(
+        actor=owner,
+        verb=Verb.CREATED_BAND,
+        summary=band.name,
+        target_type="band",
+        target_id=str(band.id),
+        target_slug=band.slug,
+    )
     return band
 
 

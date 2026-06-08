@@ -53,6 +53,17 @@ def create_listing(*, author: User, **fields: Any) -> Listing:
         "listing_created",
         extra={"listing_id": str(listing.id), "author_id": str(author.pk)},
     )
+
+    # Record a feed activity (cross-app service call, never a model import).
+    from apps.social.services import Verb, record_activity
+
+    record_activity(
+        actor=author,
+        verb=Verb.POSTED_LISTING,
+        summary=listing.title,
+        target_type="listing",
+        target_id=str(listing.id),
+    )
     return listing
 
 

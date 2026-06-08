@@ -302,6 +302,54 @@ consume them.
 
 ---
 
+### `social.Activity` (Phase 5 — Block B ✅)
+
+Canonical event-log row — one per thing a user did. **Source of truth** for the feed.
+**App:** `apps/social` | **Migration:** `0002`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `actor` | ForeignKey → `AUTH_USER_MODEL` | `related_name="activities"`. String ref. |
+| `verb` | CharField(32) | TextChoices: `posted_listing`, `created_band`. Vocabulary exposed to producers via `social.services.Verb`. |
+| `summary` | CharField(300) | Denormalized human string supplied by the producer (e.g. listing title). |
+| `target_type` | CharField(50) | Free string (`"listing"`, `"band"`). **No GenericForeignKey** — `social` stays ignorant of producers' schemas. |
+| `target_id` | UUIDField | Nullable. The target object's id, for the frontend to link. |
+| `target_slug` | CharField(120) | Blank allowed. Slug for linkable targets (bands, venues). |
+| `created_at` | DateTimeField | `auto_now_add` |
+
+`Meta.ordering = ["-created_at"]`, index on `(actor, -created_at)`. Written by the
+`social.fan_out_activity` Celery task, **not** inline — producers call
+`social.services.record_activity(...)` which emits the fan-out post-commit.
+
+---
+
+### `social.FeedEntry` (Phase 5 — Block B ✅)
+
+Per-recipient inbox row (fan-out-on-write): one copy of an Activity per follower (plus
+the actor). The feed read touches **only this table**.
+**App:** `apps/social` | **Migration:** `0002`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `owner` | ForeignKey → `AUTH_USER_MODEL` | `related_name="feed_entries"`. The recipient. String ref. |
+| `activity` | ForeignKey → `Activity` | `related_name="feed_entries"`. |
+| `created_at` | DateTimeField | **Denormalized** from `activity.created_at` so cursor pagination orders correctly even for follow-time backfilled entries (no `auto_now_add`). |
+
+`Meta.ordering = ["-created_at"]`, `UniqueConstraint(owner, activity)` (fan-out is
+idempotent via `ignore_conflicts`), index on `(owner, -created_at)`. Fan-out writes a
+row per follower + the actor; **follow** backfills the followee's recent activities into
+the new follower's inbox, **unfollow** prunes them — keeping the inbox consistent with
+the follow graph. Both run as Celery tasks (`social.backfill_feed` / `social.prune_feed`).
+
+**Architecture note:** fan-out-on-write was chosen deliberately (the heavier path) to
+match the project's scale rules. The known trade-off is write-amplification on
+high-follower accounts (the "celebrity problem"); a hybrid push/pull split is the future
+mitigation. Activities recorded so far: posted-listing, created-band (creation events only).
+
+---
+
 ## Design rules
 
 - Every model gets a UUIDv7 `id` as primary key.
