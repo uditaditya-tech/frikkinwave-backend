@@ -215,6 +215,13 @@ nameservers, and would require re-adding the NS records at GoDaddy.
   task's private IP as the Host header. `config/settings/production.py` appends that IP
   (from the ECS metadata endpoint) to `ALLOWED_HOSTS` so `/api/health/` returns 200.
 - **ARM64/Graviton** tasks — the push script builds `linux/arm64` to match.
+- **Future — Phase 5 Block D (real-time messaging), DEFERRED.** Not built yet. When picked
+  up it will need an **infra change** this stack doesn't have: an **ASGI** runtime for
+  WebSockets (Django Channels) — current web task is WSGI/gunicorn — most likely a **separate
+  ECS service + target group** for WS (keep REST on WSGI), an ALB listener rule that supports
+  the WebSocket upgrade (+ stickiness or a stateless channel layer), and a Redis **channel
+  layer** (can reuse the existing ElastiCache). Plan this before writing code — see
+  ROADMAP.md "Block D" for the open questions.
 
 ## Rough cost while running
 

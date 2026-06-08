@@ -148,9 +148,27 @@ through a new `engagements.services` function (no cross-app model import). Gate-
 model (`context_type`/`context_id`) so accepted-listing-application gating is additive.
 Fast-follow: embed average rating into the musician profile payload.
 
-### Block D — Real-time messaging ⬜
-Django Channels + Redis (WebSockets). Heaviest lift — needs ASGI + an ALB/WS infra change
-(current ECS setup is WSGI). Own mini-project; do last.
+### Block D — Real-time messaging ⬜ (DEFERRED — to be planned later)
+**Explicitly parked.** Blocks A–C shipped; Block D is intentionally postponed and will get
+its own planning pass before any code. It is **not** a drop-in new app like A–C — it's the
+one block that forces an infrastructure change, so it's treated as a separate mini-project.
+
+Django Channels + Redis (WebSockets). Open questions / known implications to work through
+when we pick it up:
+- **ASGI runtime.** Current prod serves WSGI via gunicorn; Channels needs ASGI (uvicorn/
+  daphne). Either swap the server or run a **separate ASGI service** alongside the WSGI web
+  service (likely cleaner — keep REST on WSGI, WebSockets on their own task/target group).
+- **ALB / infra.** WebSocket upgrade support + sticky sessions (or a stateless channel
+  layer), a new ECS service + target group, and health checks for the WS path. Terraform
+  app-stack changes — see infra/README.
+- **Channel layer.** Reuse the existing ElastiCache Redis (`channels_redis`) vs a dedicated
+  instance.
+- **Data model.** `Conversation` + `Message` (gating: who may DM whom — any user, or only
+  connected/followed/engaged users?). Persistence + read receipts are scope decisions.
+- **Auth over WS.** JWT in the connect handshake (query param / subprotocol), since headers
+  are awkward on browser WebSocket clients.
+
+No models, endpoints, or infra for this exist yet.
 
 ---
 
