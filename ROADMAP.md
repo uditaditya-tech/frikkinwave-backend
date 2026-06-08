@@ -146,7 +146,8 @@ denormalized summary + opaque target fields, so `social` stays schema-ignorant o
 **Gate:** a review requires a COMPLETED `EngagementRequest` between the two users, verified
 through a new `engagements.services` function (no cross-app model import). Gate-agnostic
 model (`context_type`/`context_id`) so accepted-listing-application gating is additive.
-Fast-follow: embed average rating into the musician profile payload.
+Fast-follow ✅ done: the musician profile payload embeds `{average_rating, count}` on
+single-profile responses (public / `/me` / create) via `reviews.services.rating_summary`.
 
 ### Block D — Real-time messaging ⬜ (DEFERRED — to be planned later)
 **Explicitly parked.** Blocks A–C shipped; Block D is intentionally postponed and will get

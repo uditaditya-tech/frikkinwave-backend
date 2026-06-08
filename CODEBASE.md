@@ -37,7 +37,7 @@ frikkinwave-backend/
 │   │   │   ├── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding + HNSW index
 │   │   │   └── 0005_compatibilityblurb.py # CompatibilityBlurb (cached per profile pair)
 │   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, ProfileEmbedding, CompatibilityBlurb
-│   │   ├── serializers.py         # Read + Write serializers + ProfileSearchResultSerializer (adds similarity)
+│   │   ├── serializers.py         # Read + Write + Detail (adds review rating) + ProfileSearchResultSerializer (adds similarity)
 │   │   ├── services.py            # profiles + embeddings/search/compatibility blurb/coach_profile
 │   │   ├── openai_client.py       # OpenAIClient (embed + complete) + get_openai_client() (swappable seam; mocked in tests)
 │   │   ├── tasks.py               # Celery task: generate_profile_embedding (emitted on profile save via on_commit)
@@ -249,11 +249,11 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/musicians/genres/` | None | Full genre catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/search/` | None | Semantic search (`?q=` NL query, `?limit=`, `?available=true`) — cosine kNN, ranked w/ similarity; drops results below `SEARCH_SIMILARITY_THRESHOLD` (default 0.4) |
 | GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated); filters incl. `?open_to_session=true` |
-| GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username |
+| GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username (incl. `rating` `{average_rating, count}`) |
 | GET | `/api/musicians/compatibility/<username>/` | Bearer | Cached gpt-4o-mini "why you might click" blurb between you and `<username>` |
-| POST | `/api/musicians/profile/` | Bearer | Create musician profile |
-| GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile |
-| PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile |
+| POST | `/api/musicians/profile/` | Bearer | Create musician profile (response incl. `rating`) |
+| GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile (incl. `rating`) |
+| PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile (incl. `rating`) |
 | GET | `/api/musicians/profile/coach/` | Bearer | Profile completeness score + field suggestions + LLM tip |
 | POST | `/api/connections/requests/` | Bearer | Send a contact request (by recipient username) |
 | GET | `/api/connections/requests/` | Bearer | List own requests (`?box=incoming\|outgoing`) |

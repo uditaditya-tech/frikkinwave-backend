@@ -11,6 +11,7 @@ from typing import Any
 from rest_framework import serializers
 
 from apps.musicians.models import Genre, Instrument, MusicianInstrument, MusicianProfile
+from apps.reviews.services import rating_summary
 
 # ---------------------------------------------------------------------------
 # Nested read serializers (responses)
@@ -67,6 +68,26 @@ class MusicianProfileReadSerializer(serializers.ModelSerializer[MusicianProfile]
             "created_at",
             "updated_at",
         ]
+
+
+class MusicianProfileDetailSerializer(MusicianProfileReadSerializer):
+    """
+    Single-profile payload — the base read fields plus the owner's aggregate
+    review rating (`{average_rating, count}`).
+
+    Used ONLY for single-object responses (public profile, /me, create). The
+    rating is one aggregate query per profile, so it is deliberately kept off the
+    paginated list + search feeds (which use the base serializer) to avoid an
+    N+1. The summary is fetched through reviews.services — no cross-app model import.
+    """
+
+    rating = serializers.SerializerMethodField()
+
+    class Meta(MusicianProfileReadSerializer.Meta):
+        fields = [*MusicianProfileReadSerializer.Meta.fields, "rating"]
+
+    def get_rating(self, obj: MusicianProfile) -> dict[str, Any]:
+        return rating_summary(subject=obj.user)
 
 
 class ProfileSearchResultSerializer(MusicianProfileReadSerializer):

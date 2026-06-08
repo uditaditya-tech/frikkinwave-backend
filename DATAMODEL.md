@@ -377,8 +377,11 @@ blocks duplicate reviews of the same engagement), `CheckConstraint` rating 1-5, 
 import) — the engagement must be `COMPLETED` and `{author, subject}` must be its two
 parties. **Bidirectional**: both the requester and the musician can review each other
 once per completed engagement. The model is **gate-agnostic** (`context_type`/`context_id`)
-so future gates (e.g. accepted listing applications) are additive. Embedding a user's
-average rating into the musician profile payload is a deliberate fast-follow.
+so future gates (e.g. accepted listing applications) are additive. The musician profile
+payload embeds a user's aggregate rating (`{average_rating, count}`) via
+`reviews.services.rating_summary` — on single-profile responses only
+(`MusicianProfileDetailSerializer`: public profile, `/me`, create), kept off the
+list/search feeds to avoid a per-row aggregate N+1.
 
 ---
 

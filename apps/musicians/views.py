@@ -20,6 +20,7 @@ from apps.musicians.models import MusicianProfile
 from apps.musicians.serializers import (
     GenreSerializer,
     InstrumentSerializer,
+    MusicianProfileDetailSerializer,
     MusicianProfileReadSerializer,
     MusicianProfileWriteSerializer,
     ProfileSearchResultSerializer,
@@ -104,7 +105,7 @@ class ProfileCreateView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
         return Response(
-            MusicianProfileReadSerializer(profile).data,
+            MusicianProfileDetailSerializer(profile).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -199,7 +200,7 @@ class ProfilePublicView(APIView):
         profile = get_public_profile(username=username)
         if profile is None:
             return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(MusicianProfileReadSerializer(profile).data)
+        return Response(MusicianProfileDetailSerializer(profile).data)
 
 
 class CompatibilityView(APIView):
@@ -294,7 +295,7 @@ class ProfileMeView(APIView):
         profile = self._get_profile(request)
         if profile is None:
             return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(MusicianProfileReadSerializer(profile).data)
+        return Response(MusicianProfileDetailSerializer(profile).data)
 
     def patch(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         profile = self._get_profile(request)
@@ -303,4 +304,4 @@ class ProfileMeView(APIView):
         serializer = MusicianProfileWriteSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         profile = update_profile(profile=profile, data=serializer.validated_data)
-        return Response(MusicianProfileReadSerializer(profile).data)
+        return Response(MusicianProfileDetailSerializer(profile).data)
