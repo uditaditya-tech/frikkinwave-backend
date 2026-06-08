@@ -108,12 +108,30 @@ Ties into the existing `venue` listing type; the Phase 5 "venue user-type" is a 
 ---
 
 ## Phase 5 — Social layer
-**Status: ⬜ Not started**
+**Status: 🟡 In progress** — sliced into independently-shippable blocks (like Phase 4).
 
-- Follow / unfollow
-- Activity feed
-- Ratings + reviews
-- Real-time messaging (Django Channels + Redis)
+### Block A — Follow graph → `apps/social` ✅ (code complete)
+
+| Sub-step | Status |
+|---|---|
+| 5.1 `Follow` model (follower/followed FKs, unique edge, no-self-follow check constraint) + migration `0001` | ✅ |
+| 5.2 Follow / unfollow endpoints (idempotent) + own following/followers lists + public per-user follower/following lists + tests | ✅ |
+
+**User→user only** for now; band / venue follow targets are a deliberate later extension
+(needs the feed to consume them, and a polymorphic target conflicts with the no-cross-app-import rule).
+No follow notifications (follows are higher-volume than invites — kept silent by choice).
+
+### Block B — Activity feed ⬜
+What the users you follow are doing. Key design call: fan-out-on-write (Celery, fits the
+event-driven rule + scale constraint) vs fan-out-on-read. Depends on Block A.
+
+### Block C — Ratings + reviews ⬜
+Post-interaction feedback, gated on a real completed interaction (engagement / accepted application)
+so reviews can't be spammed. Mostly independent of A/B.
+
+### Block D — Real-time messaging ⬜
+Django Channels + Redis (WebSockets). Heaviest lift — needs ASGI + an ALB/WS infra change
+(current ECS setup is WSGI). Own mini-project; do last.
 
 ---
 

@@ -30,6 +30,8 @@ urlpatterns = [
     path("api/engagements/", include("apps.engagements.urls")),
     # Venues — user-owned venue profiles
     path("api/venues/", include("apps.venues.urls")),
+    # Social — follow graph
+    path("api/social/", include("apps.social.urls")),
     # OpenAPI schema + docs (local / staging only — gated in production via SPECTACULAR_SETTINGS)
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),

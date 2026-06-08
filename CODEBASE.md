@@ -129,20 +129,35 @@ frikkinwave-backend/
 │   │       ├── conftest.py        # auth/make_user helpers
 │   │       └── test_engagement.py  # 19 tests: send, list (in/out), accept/decline/complete, reveal, notifications
 │   │
-│   └── venues/                    # User-owned venue profiles (Phase 4, Block C)
+│   ├── venues/                    # User-owned venue profiles (Phase 4, Block C)
+│   │   ├── admin.py
+│   │   ├── apps.py                # name="apps.venues", label="venues"
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py    # Venue
+│   │   ├── models.py              # Venue (owner FK via AUTH_USER_MODEL string ref)
+│   │   ├── serializers.py         # Venue Read/Create/Update
+│   │   ├── services.py            # venue CRUD (owner-only, slug derivation) + browse/filter
+│   │   ├── urls.py                # /, /<slug>/
+│   │   ├── views.py               # VenueListCreate/Detail views
+│   │   └── tests/
+│   │       ├── __init__.py
+│   │       ├── conftest.py        # owner + venue fixtures, auth/make_user helpers
+│   │       └── test_venue.py      # 15 tests: CRUD happy + negatives, slug derivation/collision, browse/filters
+│   │
+│   └── social/                    # Follow graph (Phase 5, Block A)
 │       ├── admin.py
-│       ├── apps.py                # name="apps.venues", label="venues"
+│       ├── apps.py                # name="apps.social", label="social"
 │       ├── migrations/
-│       │   └── 0001_initial.py    # Venue
-│       ├── models.py              # Venue (owner FK via AUTH_USER_MODEL string ref)
-│       ├── serializers.py         # Venue Read/Create/Update
-│       ├── services.py            # venue CRUD (owner-only, slug derivation) + browse/filter
-│       ├── urls.py                # /, /<slug>/
-│       ├── views.py               # VenueListCreate/Detail views
+│       │   └── 0001_initial.py    # Follow (unique edge + no-self-follow check constraint)
+│       ├── models.py              # Follow (follower/followed FKs via AUTH_USER_MODEL string ref)
+│       ├── serializers.py         # Following/Follower Read (surface the other end's username)
+│       ├── services.py            # follow (idempotent, savepoint)/unfollow + following/followers lists + counts
+│       ├── urls.py                # /follow/<username>/, /following/, /followers/, /<username>/(followers|following)/
+│       ├── views.py               # Follow + Following/Followers list + Public follower/following views
 │       └── tests/
 │           ├── __init__.py
-│           ├── conftest.py        # owner + venue fixtures, auth/make_user helpers
-│           └── test_venue.py      # 15 tests: CRUD happy + negatives, slug derivation/collision, browse/filters
+│           ├── conftest.py        # alice + bob fixtures, auth/make_user helpers
+│           └── test_follow.py     # 14 tests: follow/idempotent/self/unknown, unfollow, lists, public lists, auth
 │
 │   # NOTE: musicians gained session-work intent fields (is_open_to_session_work,
 │   # session_rate) in migration 0006 — see apps/musicians/tests/test_session_work.py (4 tests).
@@ -252,6 +267,12 @@ Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `
 | GET | `/api/venues/<slug>/` | None | Public venue page |
 | PATCH | `/api/venues/<slug>/` | Bearer | Update own venue (owner only) |
 | DELETE | `/api/venues/<slug>/` | Bearer | Soft-delete own venue (owner only) |
+| POST | `/api/social/follow/<username>/` | Bearer | Follow a user (idempotent — re-follow is a 200 no-op) |
+| DELETE | `/api/social/follow/<username>/` | Bearer | Unfollow a user (idempotent — 204 even if not following) |
+| GET | `/api/social/following/` | Bearer | Users the caller follows (cursor-paginated) |
+| GET | `/api/social/followers/` | Bearer | Users following the caller (cursor-paginated) |
+| GET | `/api/social/<username>/following/` | None | Public list of who a user follows |
+| GET | `/api/social/<username>/followers/` | None | Public list of a user's followers |
 | GET | `/api/schema/` | None | OpenAPI 3.0 schema (YAML/JSON) |
 | GET | `/api/docs/` | None | Swagger UI |
 

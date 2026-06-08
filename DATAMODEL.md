@@ -281,6 +281,27 @@ The Phase 5 "venue user-type" is a later auth refinement; for now a venue is own
 
 ---
 
+### `social.Follow` (Phase 5 — Block A ✅)
+
+A directed follow edge in the social graph: `follower` follows `followed`.
+**App:** `apps/social` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7 |
+| `follower` | ForeignKey → `AUTH_USER_MODEL` | `related_name="following_set"`. String ref. |
+| `followed` | ForeignKey → `AUTH_USER_MODEL` | `related_name="follower_set"`. String ref. |
+| `created_at` | DateTimeField | `auto_now_add` |
+
+`Meta.ordering = ["-created_at"]`. Constraints: `UniqueConstraint(follower, followed)`
+(one edge per pair → follow is idempotent) and `CheckConstraint` blocking self-follow
+(`follower != followed`; also guarded in the service). No soft-delete — unfollow is a
+hard delete, and re-following simply recreates the edge. **User→user only** for now;
+band / venue targets are a later extension once the activity feed (Block B) exists to
+consume them.
+
+---
+
 ## Design rules
 
 - Every model gets a UUIDv7 `id` as primary key.
