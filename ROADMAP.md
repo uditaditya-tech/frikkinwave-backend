@@ -109,6 +109,7 @@ Ties into the existing `venue` listing type; the Phase 5 "venue user-type" is a 
 
 ## Phase 5 — Social layer
 **Status: 🟡 In progress** — sliced into independently-shippable blocks (like Phase 4).
+Blocks A–C are **deployed & verified live** at https://api.frikkinwave.com (image `b21ba83`, 2026-06-09). Block D not started.
 
 ### Block A — Follow graph → `apps/social` ✅ (code complete)
 
