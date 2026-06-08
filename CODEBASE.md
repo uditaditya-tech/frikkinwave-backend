@@ -154,6 +154,9 @@ frikkinwave-backend/
 │       ├── serializers.py         # Following/Follower Read + FeedEntry Read (flattens joined Activity)
 │       ├── services.py            # follow/unfollow (+ backfill/prune emit) + record_activity/fan_out/backfill/prune/get_feed + Verb alias
 │       ├── tasks.py               # Celery: fan_out_activity, backfill_feed, prune_feed (thin → services)
+│       ├── management/
+│       │   └── commands/
+│       │       └── seed_demo_phase5.py  # Seeds demo-* data across Phase 5 (follows/feed/reviews); eager+dummy-email; --reset
 │       ├── urls.py                # /feed/, /follow/<username>/, /following/, /followers/, /<username>/(followers|following)/
 │       ├── views.py               # Feed + Follow + Following/Followers list + Public follower/following views
 │       └── tests/
