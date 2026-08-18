@@ -11,9 +11,10 @@ Concrete model types from other apps appear only under TYPE_CHECKING.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import uuid
+from typing import TYPE_CHECKING, cast
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count
 
 from apps.engagements.services import parties_of_completed_engagement
@@ -80,12 +81,21 @@ def create_review(
     except IntegrityError as exc:
         raise DuplicateReviewError from exc
 
+    # Push the subject's new rating rollup onto their musician profile once this
+    # row commits, so profile reads never touch the reviews tables. on_commit so a
+    # rolled-back review never propagates a phantom aggregate. Local import avoids
+    # a tasks <-> services cycle.
+    from apps.reviews.tasks import propagate_profile_rating
+
+    subject_id = str(subject.pk)
+    transaction.on_commit(lambda: propagate_profile_rating.delay(subject_id))
+
     logger.info(
         "review_created",
         extra={
             "review_id": str(review.id),
             "author_id": str(author.pk),
-            "subject_id": str(subject.pk),
+            "subject_id": subject_id,
             "rating": rating,
         },
     )
@@ -99,7 +109,20 @@ def list_reviews_for(*, subject: User) -> QuerySet[Review]:
 
 def rating_summary(*, subject: User) -> dict[str, object]:
     """Return {'average_rating': float | None, 'count': int} for a user."""
-    agg = Review.objects.filter(subject=subject).aggregate(avg=Avg("rating"), count=Count("id"))
+    return rating_summary_for_user_id(user_id=str(subject.pk))
+
+
+def rating_summary_for_user_id(*, user_id: str) -> dict[str, object]:
+    """
+    Same aggregate, keyed by user id instead of a User instance.
+
+    Keeps the async propagation path free of any user lookup — it only ever has
+    an id, and an id is all a future event payload would carry.
+    """
+    # django-stubs types `<fk>_id` lookups as UUID, and Celery hands us a str.
+    agg = Review.objects.filter(subject_id=uuid.UUID(user_id)).aggregate(
+        avg=Avg("rating"), count=Count("id")
+    )
     average = round(agg["avg"], 2) if agg["avg"] is not None else None
     return {"average_rating": average, "count": agg["count"]}
 
@@ -110,3 +133,27 @@ def get_user_or_raise(*, username: str) -> User:
     if subject is None:
         raise SubjectNotFoundError
     return subject
+
+
+def propagate_rating_to_profile(*, subject_user_id: str) -> None:
+    """
+    Recompute a user's rating aggregate and push it onto their musician profile.
+
+    Invoked by the `propagate_profile_rating` Celery task after a review commits.
+    Recomputes from source rather than incrementing, so it is **idempotent** and
+    self-healing: a retried task, a lost event, or a manual backfill all converge
+    to the same value.
+
+    This is the one place reviews writes into another context. It is a service
+    call today; when reviews is extracted it becomes publishing a
+    `review.rating.updated` event that the Profiles service consumes -- the
+    payload (user id + aggregate) is already the message shape.
+    """
+    from apps.musicians.services import set_profile_rating
+
+    summary = rating_summary_for_user_id(user_id=subject_user_id)
+    set_profile_rating(
+        user_id=subject_user_id,
+        average_rating=cast("float | None", summary["average_rating"]),
+        count=cast(int, summary["count"]),
+    )

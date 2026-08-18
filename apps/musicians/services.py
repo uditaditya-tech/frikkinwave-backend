@@ -112,6 +112,30 @@ def update_profile(*, profile: MusicianProfile, data: dict[str, Any]) -> Musicia
     return profile
 
 
+def set_profile_rating(*, user_id: str, average_rating: float | None, count: int) -> bool:
+    """
+    Write the denormalized review rollup onto a user's profile.
+
+    Public cross-app *write* entry point: the reviews app pushes its freshly
+    computed aggregate here after a review commits, so rendering a profile never
+    has to query the reviews tables. Returns False when the user has no profile
+    (a normal case -- reviews can exist for users without a musician profile).
+
+    Uses .update() rather than save() so it is a single UPDATE, cannot race with
+    a concurrent profile edit, and does not bump `updated_at`.
+    """
+    updated = MusicianProfile.objects.filter(user_id=user_id).update(
+        rating_avg=average_rating,
+        rating_count=count,
+    )
+    if updated:
+        logger.info(
+            "profile_rating_updated",
+            extra={"user_id": str(user_id), "avg": average_rating, "count": count},
+        )
+    return bool(updated)
+
+
 def list_profiles(*, filters: dict[str, Any]) -> QuerySet[MusicianProfile]:
     """
     Return the public discovery queryset, narrowed by the provided filters.

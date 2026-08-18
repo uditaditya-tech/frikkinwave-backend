@@ -135,6 +135,15 @@ class MusicianProfile(models.Model):
     is_open_to_session_work = models.BooleanField(default=False)
     session_rate = models.CharField(max_length=200, blank=True)
 
+    # Denormalized review rollup, owned by this app but *written* by the reviews
+    # app via services.set_profile_rating (a post-commit push after a review is
+    # created). Denormalized so rendering a profile never queries the reviews
+    # tables -- across a future service boundary that would be a network call on
+    # a hot read path. Eventually consistent by design; rebuild any drift with
+    # `manage.py backfill_profile_ratings`.
+    rating_avg = models.FloatField(null=True, blank=True)
+    rating_count = models.PositiveIntegerField(default=0)
+
     instruments = models.ManyToManyField(
         Instrument,
         through=MusicianInstrument,

@@ -43,11 +43,21 @@ One-to-one with `User`. The public-facing profile.
 | `sound_url` | URLField(500) | Optional. External track (SoundCloud/Spotify/YouTube) embedded on the profile. |
 | `is_open_to_session_work` | BooleanField | Default False. Session-musician marketplace flag (Phase 4 Block B). Filter: `?open_to_session=true`. |
 | `session_rate` | CharField(200) | Optional free-text rate, e.g. "₹5000/session". Hire-intent only — no payments. |
+| `rating_avg` | FloatField | Nullable. **Denormalized** review average (1-5), written by `reviews` — never computed here. |
+| `rating_count` | PositiveIntegerField | Default 0. **Denormalized** review count. |
 | `created_at` | DateTimeField | `auto_now_add` |
 | `updated_at` | DateTimeField | `auto_now` |
 
 > Session-work fields added in migration `0006`. They are **not** part of
 > `build_embedding_text`, so toggling them doesn't trigger re-embedding.
+
+> **Rating rollup (migration `0007`).** `rating_avg` / `rating_count` are owned by this
+> model but written *only* by `apps.reviews` via
+> `musicians.services.set_profile_rating`, invoked from the post-commit
+> `reviews.propagate_profile_rating` task. This app has **no dependency on reviews** —
+> rendering a profile is a pure local read. Eventually consistent; recomputed from source
+> (idempotent), with `manage.py backfill_profile_ratings` as the reconciliation path.
+> Also excluded from `build_embedding_text`.
 
 ---
 
@@ -378,10 +388,13 @@ import) — the engagement must be `COMPLETED` and `{author, subject}` must be i
 parties. **Bidirectional**: both the requester and the musician can review each other
 once per completed engagement. The model is **gate-agnostic** (`context_type`/`context_id`)
 so future gates (e.g. accepted listing applications) are additive. The musician profile
-payload embeds a user's aggregate rating (`{average_rating, count}`) via
-`reviews.services.rating_summary` — on single-profile responses only
-(`MusicianProfileDetailSerializer`: public profile, `/me`, create), kept off the
-list/search feeds to avoid a per-row aggregate N+1.
+payload embeds a user's aggregate rating (`{average_rating, count}`) on single-profile
+responses only (`MusicianProfileDetailSerializer`: public profile, `/me`, create) — kept
+off the list/search feeds to keep them light. It is served from the **denormalized**
+`MusicianProfile.rating_avg` / `rating_count` columns, which `reviews` pushes via the
+post-commit `reviews.propagate_profile_rating` task. Reading a profile therefore never
+touches the reviews tables. Eventually consistent by design; rebuild drift with
+`manage.py backfill_profile_ratings`.
 
 ---
 

@@ -56,13 +56,14 @@ function call inside a single ACID transaction.
 
 ### 1.1 The boundary audit (measured, not assumed)
 
-Runtime cross-app coupling is **exactly five seams**. Everything else is already clean.
+Runtime cross-app coupling was **exactly five seams** at audit time; seam #3 has since been
+eliminated (Stage 0), leaving four.
 
 | # | Caller → Callee | Call | Kind | Becomes |
 |---|---|---|---|---|
 | 1 | `bands`, `connections`, `engagements`, `listings`, `musicians`, `reviews`, `social`, `venues` → `users` | `get_user_by_username()` | **Query** | RPC to Identity (+ local cache) |
 | 2 | `reviews` → `engagements` | `parties_of_completed_engagement()` | **Query** | RPC to Marketplace (review gate) |
-| 3 | `musicians` → `reviews` | `rating_summary()` — called from `serializers.py:90` on every single-profile GET | **Query on a read path** | **Denormalize** — store `avg_rating` on the profile, updated by `review.created` |
+| ~~3~~ | ~~`musicians` → `reviews`~~ | ~~`rating_summary()` on every profile GET~~ | ✅ **ELIMINATED** | Denormalized to `MusicianProfile.rating_avg/​rating_count`, pushed by `reviews` post-commit. Direction reversed: `musicians` now has **zero** dependency on `reviews`. |
 | 4 | `listings` → `social` | `record_activity()` | **Event** | publish `listing.posted` |
 | 5 | `bands` → `social` | `record_activity()` | **Event** | publish `band.created` |
 
@@ -75,8 +76,8 @@ Notes from the audit:
 - `apps/social/management/commands/seed_demo_phase5.py` imports five other apps' services.
   That is **tooling**, not runtime coupling — it deliberately drives real pipelines. It will
   become a script that calls public APIs, or gets split per service.
-- Seam #3 is the one genuinely wrong shape today: a **synchronous cross-context read on a
-  hot read path**. It is cheap in-process and expensive over a network. Fix it first (§6).
+- Seam #3 was the one genuinely wrong shape: a **synchronous cross-context read on a hot
+  read path** — cheap in-process, expensive over a network. **Now fixed** (§6 item 2).
 
 ### 1.2 What the service rule did *not* buy us
 
@@ -228,10 +229,13 @@ Ordered by leverage. All can be done inside the monolith, before any service exi
    (`get_user_by_username`, `parties_of_completed_engagement`, `rating_summary`) to return
    dataclasses/dicts. This forces the contract to be serializable and stops callers walking
    the ORM graph. **Highest-leverage single change in this document.**
-2. **Kill seam #3 (`musicians → reviews` on every profile read).** Store
-   `rating_avg` + `rating_count` on the profile, updated by a `review.created` consumer.
-   Removes a sync cross-context call from a hot read path and is a straight win even in the
-   monolith (one less aggregate query per profile GET).
+2. ✅ **DONE — killed seam #3 (`musicians → reviews` on every profile read).**
+   `MusicianProfile.rating_avg` / `rating_count` are written by `reviews` via a post-commit
+   Celery task (`reviews.propagate_profile_rating` → `musicians.services.set_profile_rating`);
+   the serializer is now a pure local read. Recomputed from source, so it is idempotent and
+   self-healing, with `manage.py backfill_profile_ratings` as the reconciliation path.
+   The task payload (`subject_user_id`) is already the shape of the future
+   `review.rating.updated` event.
 3. **`db_constraint=False` on FKs that cross a future boundary.** Turns DB-enforced FKs into
    logical UUID references — same column, no cross-DB constraint. Do it at the planned cut
    points, not everywhere.

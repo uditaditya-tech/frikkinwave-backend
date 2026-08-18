@@ -175,7 +175,11 @@ frikkinwave-backend/
 │   │   │   └── 0001_initial.py    # Review (unique per author+context, rating-range + no-self checks)
 │   │   ├── models.py              # Review (author/subject FKs; denormalized context_type/context_id — no cross-app FK)
 │   │   ├── serializers.py         # ReviewCreate (write) + ReviewRead (public)
-│   │   ├── services.py            # create_review (engagement-gated) + list_reviews_for + rating_summary
+│   │   ├── services.py            # create_review (engagement-gated) + list_reviews_for + rating_summary + propagate_rating_to_profile
+│   │   ├── tasks.py               # Celery: propagate_profile_rating (pushes the rollup onto the profile, on_commit)
+│   │   ├── management/
+│   │   │   └── commands/
+│   │   │       └── backfill_profile_ratings.py  # reconciliation: rebuild every profile's rating rollup
 │   │   ├── urls.py                # /, /<username>/, /<username>/summary/
 │   │   ├── views.py               # ReviewCreate + ReviewList + ReviewSummary views
 │   │   └── tests/
