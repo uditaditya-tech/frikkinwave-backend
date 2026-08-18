@@ -10,6 +10,7 @@ See `PROJECT.md` for what this is and why.
 See `ROADMAP.md` for current phase and next sub-steps.
 See `DATAMODEL.md` for current and planned data models.
 See `CODEBASE.md` for directory structure and where things live.
+See `MICROSERVICES.md` for the (planning-only) service-extraction target architecture and scaling path — **nothing in it is built**.
 
 ---
 
