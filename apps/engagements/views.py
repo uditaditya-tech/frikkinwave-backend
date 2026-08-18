@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -31,7 +31,12 @@ from apps.engagements.services import (
     list_engagement_requests,
     send_engagement_request,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +59,7 @@ class EngagementListCreateView(APIView):
         box = request.query_params.get("box", "incoming")
         if box not in ("incoming", "outgoing"):
             box = "incoming"
-        queryset = list_engagement_requests(user=cast(User, request.user), box=box)
+        queryset = list_engagement_requests(user=cast("User", request.user), box=box)
         paginator = EngagementCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = EngagementRequestReadSerializer(page, many=True, context={"request": request}).data
@@ -65,7 +70,7 @@ class EngagementListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             engagement = send_engagement_request(
-                requester=cast(User, request.user),
+                requester=cast("User", request.user),
                 musician_username=serializer.validated_data["musician_username"],
                 message=serializer.validated_data.get("message", ""),
                 proposed_date=serializer.validated_data.get("proposed_date"),
@@ -95,7 +100,7 @@ class EngagementDetailView(APIView):
 
     def get(self, request: Request, engagement_id: str, *args: Any, **kwargs: Any) -> Response:
         engagement = get_engagement_request(
-            user=cast(User, request.user), engagement_id=engagement_id
+            user=cast("User", request.user), engagement_id=engagement_id
         )
         if engagement is None:
             return Response(
@@ -135,7 +140,7 @@ class EngagementCompleteView(APIView):
     def post(self, request: Request, engagement_id: str, *args: Any, **kwargs: Any) -> Response:
         try:
             engagement = complete_engagement_request(
-                user=cast(User, request.user), engagement_id=engagement_id
+                user=cast("User", request.user), engagement_id=engagement_id
             )
         except NotAcceptedError:
             return Response(
@@ -154,7 +159,7 @@ class EngagementCompleteView(APIView):
 def _resolve_view(request: Request, engagement_id: str, action: Any) -> Response:
     """Shared accept/decline handling — both differ only in the service called."""
     try:
-        engagement = action(user=cast(User, request.user), engagement_id=engagement_id)
+        engagement = action(user=cast("User", request.user), engagement_id=engagement_id)
     except NotPendingError:
         return Response(
             {"detail": "This request has already been resolved."},

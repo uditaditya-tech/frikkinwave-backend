@@ -18,7 +18,7 @@ from django.db.models import Q
 from django.utils.text import slugify
 
 from apps.bands.models import Band, BandMembership
-from apps.users.services import get_user_by_username
+from apps.users.services import get_user_ref
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -146,14 +146,15 @@ def invite_member(
     """
     band = _get_owned_band(owner=owner, slug=slug)
 
-    member = get_user_by_username(username=member_username)
+    member = get_user_ref(username=member_username)
     if member is None:
         raise MemberNotFoundError
-    if member.pk == owner.pk:
+    if member.id == owner.pk:
         raise SelfInviteError
 
     try:
-        membership = BandMembership.objects.create(band=band, member=member, role=role)
+        # FK assigned by id — `member` is a DTO, not an ORM instance.
+        membership = BandMembership.objects.create(band=band, member_id=member.id, role=role)
     except IntegrityError as exc:
         raise DuplicateMembershipError from exc
 

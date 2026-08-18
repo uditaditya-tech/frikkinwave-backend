@@ -235,7 +235,9 @@ frikkinwave-backend/
 │
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── tests/                         # Project-level tests not tied to one app
-│   └── test_celery_wiring.py      # Celery app wiring (2.1)
+│   ├── test_celery_wiring.py      # Celery app wiring (2.1)
+│   └── test_architecture.py       # 5 guardrails: no cross-app model imports, DTO identity
+│                                  # boundary, outbox-only emitting, topics have consumers
 ├── .env                           # Git-ignored. Copy from .env.example.
 ├── .env.example                   # Committed template for all env vars.
 ├── .gitignore

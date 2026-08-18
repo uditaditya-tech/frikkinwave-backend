@@ -61,8 +61,8 @@ eliminated (Stage 0), leaving four.
 
 | # | Caller → Callee | Call | Kind | Becomes |
 |---|---|---|---|---|
-| 1 | `bands`, `connections`, `engagements`, `listings`, `musicians`, `reviews`, `social`, `venues` → `users` | `get_user_by_username()` | **Query** | RPC to Identity (+ local cache) |
-| 2 | `reviews` → `engagements` | `parties_of_completed_engagement()` | **Query** | RPC to Marketplace (review gate) |
+| 1 | `bands`, `connections`, `engagements`, `reviews`, `social` → `users` | `get_user_ref()` → **`UserRef` DTO** ✅ | **Query** | RPC to Identity (+ local cache). Contract is already serializable. |
+| 2 | `reviews` → `engagements` | `parties_of_completed_engagement()` → `set[UUID]` ✅ | **Query** | RPC to Marketplace (review gate). Already returns primitives. |
 | ~~3~~ | ~~`musicians` → `reviews`~~ | ~~`rating_summary()` on every profile GET~~ | ✅ **ELIMINATED** | Denormalized to `MusicianProfile.rating_avg/​rating_count`, pushed by `reviews` post-commit. Direction reversed: `musicians` now has **zero** dependency on `reviews`. |
 | 4 | `listings` → `social` | `record_activity()` | **Event** | publish `listing.posted` |
 | 5 | `bands` → `social` | `record_activity()` | **Event** | publish `band.created` |
@@ -86,8 +86,10 @@ Talking through services solved **code** coupling. Two kinds of **data** couplin
 - **24 DB-enforced FKs to `AUTH_USER_MODEL`** across 8 apps
   (`social` 5, `bands`/`listings`/`engagements`/`connections`/`reviews` 3 each,
   `musicians`/`venues` 2 each). A foreign key cannot span two databases.
-- **Service functions return ORM objects.** `get_user_by_username()` hands back a `User`
-  and callers read `.email` / `.pk`. You cannot return an ORM instance over a wire.
+- ~~**Service functions return ORM objects.**~~ ✅ **RESOLVED (Stage 0.4).** The identity
+  boundary returns a frozen `UserRef` DTO (`id`, `username`, `email`); callers assign FKs by
+  id (`member_id=ref.id`) and compare by id. No ORM instance crosses an app boundary, and
+  `tests/test_architecture.py` fails the build if one starts to.
 
 The already-correct pattern is visible in Phase 5: `Activity.target_id` and
 `Review.context_id` are **plain `UUIDField`s with no FK** — deliberately denormalized
@@ -232,10 +234,12 @@ now keys the `Activity` on the event id.
 
 Ordered by leverage. All can be done inside the monolith, before any service exists.
 
-1. **Return DTOs, not ORM objects.** Change boundary-crossing service functions
-   (`get_user_by_username`, `parties_of_completed_engagement`, `rating_summary`) to return
-   dataclasses/dicts. This forces the contract to be serializable and stops callers walking
-   the ORM graph. **Highest-leverage single change in this document.**
+1. ✅ **DONE — boundary functions return DTOs, not ORM objects.** `users.services.get_user_ref()`
+   returns a frozen `UserRef`; `parties_of_completed_engagement()` returns `set[UUID]`;
+   `rating_summary()` / `list_reviews_for()` / `list_following()` are keyed by **user id**
+   rather than a `User` instance. `get_user_by_username()` still exists but is now internal
+   to the users app. Views import `User` only under `TYPE_CHECKING` (`cast("User", …)`), so
+   there is **no runtime cross-app model import anywhere** on a request path.
 2. ✅ **DONE — killed seam #3 (`musicians → reviews` on every profile read).**
    `MusicianProfile.rating_avg` / `rating_count` are written by `reviews` via a post-commit
    Celery task (`reviews.propagate_profile_rating` → `musicians.services.set_profile_rating`);
@@ -254,6 +258,22 @@ Ordered by leverage. All can be done inside the monolith, before any service exi
    far cheaper to find today.
 
 ---
+
+### 6.1 Guardrails
+
+These rules are invisible in code review and easy to break by accident, so they are asserted
+mechanically in `tests/test_architecture.py`:
+
+| Rule | Why it matters at extraction time |
+|---|---|
+| No runtime cross-app **model** imports | a FK cannot span two databases |
+| Outside `users`, identity lookups return **`UserRef`**, not `User` | an ORM object cannot cross a network |
+| Services never call `.delay()` / `.apply_async()` — only `publish()` | otherwise an event can be lost between COMMIT and enqueue |
+| Every registered topic resolves to a real consumer task | a typo'd topic would silently park events forever |
+| `UserRef` is frozen and JSON-serializable | it must survive a network hop unchanged |
+
+Tooling (management commands, the eval harness) is exempt: it is reconciliation/seeding, never
+on a request path.
 
 ## 7. The feed is the hard part
 

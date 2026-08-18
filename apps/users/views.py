@@ -6,7 +6,7 @@ No business logic here.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -17,9 +17,14 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.users.models import User
 from apps.users.serializers import RegisterSerializer, UserReadSerializer
 from apps.users.services import register_user
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +41,7 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        return Response(UserReadSerializer(cast(User, request.user)).data)
+        return Response(UserReadSerializer(cast("User", request.user)).data)
 
 
 class RegisterView(APIView):

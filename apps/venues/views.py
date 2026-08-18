@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -15,7 +15,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from apps.users.models import User
 from apps.venues.serializers import (
     VenueCreateSerializer,
     VenueReadSerializer,
@@ -30,6 +29,12 @@ from apps.venues.services import (
     list_venues,
     update_venue,
 )
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +71,7 @@ class VenueListCreateView(APIView):
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = VenueCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        venue = create_venue(owner=cast(User, request.user), **serializer.validated_data)
+        venue = create_venue(owner=cast("User", request.user), **serializer.validated_data)
         return Response(VenueReadSerializer(venue).data, status=status.HTTP_201_CREATED)
 
 
@@ -96,7 +101,7 @@ class VenueDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             venue = update_venue(
-                owner=cast(User, request.user), slug=slug, **serializer.validated_data
+                owner=cast("User", request.user), slug=slug, **serializer.validated_data
             )
         except VenueNotFoundError:
             return Response({"detail": "Venue not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -109,7 +114,7 @@ class VenueDetailView(APIView):
 
     def delete(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         try:
-            deactivate_venue(owner=cast(User, request.user), slug=slug)
+            deactivate_venue(owner=cast("User", request.user), slug=slug)
         except VenueNotFoundError:
             return Response({"detail": "Venue not found."}, status=status.HTTP_404_NOT_FOUND)
         except NotVenueOwnerError:

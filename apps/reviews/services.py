@@ -19,7 +19,7 @@ from django.db.models import Avg, Count
 
 from apps.engagements.services import parties_of_completed_engagement
 from apps.reviews.models import Review
-from apps.users.services import get_user_by_username
+from apps.users.services import UserRef, get_user_ref
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -59,20 +59,20 @@ def create_review(
             author tried to review themselves.
         DuplicateReviewError — author already reviewed this engagement.
     """
-    subject = get_user_by_username(username=subject_username)
+    subject = get_user_ref(username=subject_username)
     if subject is None:
         raise SubjectNotFoundError
-    if subject.pk == author.pk:
+    if subject.id == author.pk:
         raise NotEligibleError
 
     parties = parties_of_completed_engagement(engagement_id=engagement_id)
-    if parties is None or {author.pk, subject.pk} != parties:
+    if parties is None or {author.pk, subject.id} != parties:
         raise NotEligibleError
 
     try:
         review = Review.objects.create(
             author=author,
-            subject=subject,
+            subject_id=subject.id,
             rating=rating,
             comment=comment,
             context_type=Review.Context.ENGAGEMENT,
@@ -87,7 +87,7 @@ def create_review(
     # a tasks <-> services cycle.
     from apps.events.services import publish
 
-    subject_id = str(subject.pk)
+    subject_id = str(subject.id)
     publish(topic="review.created", payload={"subject_user_id": subject_id})
 
     logger.info(
@@ -102,22 +102,17 @@ def create_review(
     return review
 
 
-def list_reviews_for(*, subject: User) -> QuerySet[Review]:
-    """Return the reviews a user has received, newest first."""
-    return Review.objects.select_related("author").filter(subject=subject)
+def list_reviews_for(*, user_id: str) -> QuerySet[Review]:
+    """Return the reviews a user has received, newest first. Keyed by id, not model."""
+    return Review.objects.select_related("author").filter(subject_id=uuid.UUID(user_id))
 
 
-def rating_summary(*, subject: User) -> dict[str, object]:
-    """Return {'average_rating': float | None, 'count': int} for a user."""
-    return rating_summary_for_user_id(user_id=str(subject.pk))
-
-
-def rating_summary_for_user_id(*, user_id: str) -> dict[str, object]:
+def rating_summary(*, user_id: str) -> dict[str, object]:
     """
-    Same aggregate, keyed by user id instead of a User instance.
+    Return {'average_rating': float | None, 'count': int} for a user.
 
-    Keeps the async propagation path free of any user lookup — it only ever has
-    an id, and an id is all a future event payload would carry.
+    Keyed by **id**, never a `User` instance: an id is all a caller across a
+    service boundary would have, and all an event payload would carry.
     """
     # django-stubs types `<fk>_id` lookups as UUID, and Celery hands us a str.
     agg = Review.objects.filter(subject_id=uuid.UUID(user_id)).aggregate(
@@ -127,9 +122,9 @@ def rating_summary_for_user_id(*, user_id: str) -> dict[str, object]:
     return {"average_rating": average, "count": agg["count"]}
 
 
-def get_user_or_raise(*, username: str) -> User:
-    """Resolve a username to a user for the public review endpoints."""
-    subject = get_user_by_username(username=username)
+def get_user_or_raise(*, username: str) -> UserRef:
+    """Resolve a username to a `UserRef` for the public review endpoints."""
+    subject = get_user_ref(username=username)
     if subject is None:
         raise SubjectNotFoundError
     return subject
@@ -151,7 +146,7 @@ def propagate_rating_to_profile(*, subject_user_id: str) -> None:
     """
     from apps.musicians.services import set_profile_rating
 
-    summary = rating_summary_for_user_id(user_id=subject_user_id)
+    summary = rating_summary(user_id=subject_user_id)
     set_profile_rating(
         user_id=subject_user_id,
         average_rating=cast("float | None", summary["average_rating"]),

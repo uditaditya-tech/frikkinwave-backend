@@ -16,7 +16,7 @@ import uuid6
 from django.db import IntegrityError, transaction
 
 from apps.social.models import Activity, FeedEntry, Follow
-from apps.users.services import get_user_by_username
+from apps.users.services import UserRef, get_user_ref
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -51,27 +51,28 @@ def follow_user(*, follower: User, username: str) -> tuple[Follow, bool]:
         UserNotFoundError — no such user.
         SelfFollowError — follower tried to follow themselves.
     """
-    target = get_user_by_username(username=username)
+    target = get_user_ref(username=username)
     if target is None:
         raise UserNotFoundError
-    if target.pk == follower.pk:
+    if target.id == follower.pk:
         raise SelfFollowError
 
     try:
         # Savepoint so a unique-constraint hit rolls back only this INSERT,
         # leaving the surrounding transaction usable for the follow-up read.
+        # FK by id — `target` is a DTO, not an ORM instance.
         with transaction.atomic():
-            follow = Follow.objects.create(follower=follower, followed=target)
+            follow = Follow.objects.create(follower=follower, followed_id=target.id)
     except IntegrityError:
         # Unique edge already present — return it, keeping follow idempotent.
-        return Follow.objects.get(follower=follower, followed=target), False
+        return Follow.objects.get(follower=follower, followed_id=target.id), False
 
     # Backfill the new followee's recent activity into the follower's inbox so
     # the feed isn't empty until the followee next acts. Emitted post-commit so a
     # rolled-back follow never enqueues a fan-out. Local import avoids a cycle.
     from apps.events.services import publish
 
-    follower_id, followed_id = str(follower.pk), str(target.pk)
+    follower_id, followed_id = str(follower.pk), str(target.id)
     publish(
         topic="follow.created",
         payload={"follower_id": follower_id, "followed_id": followed_id},
@@ -89,17 +90,17 @@ def unfollow_user(*, follower: User, username: str) -> bool:
 
     Raises UserNotFoundError if no such user exists.
     """
-    target = get_user_by_username(username=username)
+    target = get_user_ref(username=username)
     if target is None:
         raise UserNotFoundError
 
-    deleted, _ = Follow.objects.filter(follower=follower, followed=target).delete()
+    deleted, _ = Follow.objects.filter(follower=follower, followed_id=target.id).delete()
     if deleted:
         # Prune the unfollowed user's entries from the inbox, keeping the feed
         # consistent with the follow graph. Emitted post-commit.
         from apps.events.services import publish
 
-        follower_id, followed_id = str(follower.pk), str(target.pk)
+        follower_id, followed_id = str(follower.pk), str(target.id)
         publish(
             topic="follow.removed",
             payload={"follower_id": follower_id, "followed_id": followed_id},
@@ -110,29 +111,30 @@ def unfollow_user(*, follower: User, username: str) -> bool:
     return bool(deleted)
 
 
-def list_following(*, user: User) -> QuerySet[Follow]:
-    """Return the follow edges where `user` is the follower (people they follow)."""
-    return Follow.objects.select_related("followed").filter(follower=user)
+def list_following(*, user_id: str) -> QuerySet[Follow]:
+    """Follow edges where the user is the follower (people they follow). Keyed by id."""
+    return Follow.objects.select_related("followed").filter(follower_id=uuid.UUID(user_id))
 
 
-def list_followers(*, user: User) -> QuerySet[Follow]:
-    """Return the follow edges where `user` is followed (their followers)."""
-    return Follow.objects.select_related("follower").filter(followed=user)
+def list_followers(*, user_id: str) -> QuerySet[Follow]:
+    """Follow edges where the user is followed (their followers). Keyed by id."""
+    return Follow.objects.select_related("follower").filter(followed_id=uuid.UUID(user_id))
 
 
-def get_user_or_raise(*, username: str) -> User:
-    """Resolve a username to a user for the public follower/following endpoints."""
-    target = get_user_by_username(username=username)
+def get_user_or_raise(*, username: str) -> UserRef:
+    """Resolve a username to a `UserRef` for the public follower/following endpoints."""
+    target = get_user_ref(username=username)
     if target is None:
         raise UserNotFoundError
     return target
 
 
-def follow_counts(*, user: User) -> dict[str, int]:
+def follow_counts(*, user_id: str) -> dict[str, int]:
     """Return {'followers': N, 'following': M} for a user."""
+    uid = uuid.UUID(user_id)
     return {
-        "followers": Follow.objects.filter(followed=user).count(),
-        "following": Follow.objects.filter(follower=user).count(),
+        "followers": Follow.objects.filter(followed_id=uid).count(),
+        "following": Follow.objects.filter(follower_id=uid).count(),
     }
 
 

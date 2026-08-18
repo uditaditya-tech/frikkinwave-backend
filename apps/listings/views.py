@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -39,7 +39,12 @@ from apps.listings.services import (
     list_listings,
     update_listing,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +83,7 @@ class ListingListCreateView(APIView):
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = ListingCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        listing = create_listing(author=cast(User, request.user), **serializer.validated_data)
+        listing = create_listing(author=cast("User", request.user), **serializer.validated_data)
         return Response(
             ListingReadSerializer(listing).data,
             status=status.HTTP_201_CREATED,
@@ -111,7 +116,7 @@ class ListingDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             listing = update_listing(
-                author=cast(User, request.user),
+                author=cast("User", request.user),
                 listing_id=listing_id,
                 **serializer.validated_data,
             )
@@ -126,7 +131,7 @@ class ListingDetailView(APIView):
 
     def delete(self, request: Request, listing_id: str, *args: Any, **kwargs: Any) -> Response:
         try:
-            deactivate_listing(author=cast(User, request.user), listing_id=listing_id)
+            deactivate_listing(author=cast("User", request.user), listing_id=listing_id)
         except ListingNotFoundError:
             return Response({"detail": "Listing not found."}, status=status.HTTP_404_NOT_FOUND)
         except NotListingAuthorError:
@@ -147,7 +152,7 @@ class ListingApplicationListView(APIView):
         box = request.query_params.get("box", "incoming")
         if box not in ("incoming", "outgoing"):
             box = "incoming"
-        queryset = list_applications(user=cast(User, request.user), box=box)
+        queryset = list_applications(user=cast("User", request.user), box=box)
         paginator = ListingCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = ListingApplicationReadSerializer(page, many=True, context={"request": request}).data
@@ -161,7 +166,9 @@ class ListingApplicationDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, application_id: str, *args: Any, **kwargs: Any) -> Response:
-        application = get_application(user=cast(User, request.user), application_id=application_id)
+        application = get_application(
+            user=cast("User", request.user), application_id=application_id
+        )
         if application is None:
             return Response({"detail": "Application not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(
@@ -180,7 +187,7 @@ class ListingApplyView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             application = apply_to_listing(
-                applicant=cast(User, request.user),
+                applicant=cast("User", request.user),
                 listing_id=listing_id,
                 message=serializer.validated_data.get("message", ""),
             )
@@ -225,7 +232,7 @@ class ListingApplicationDeclineView(APIView):
 def _resolve_application_view(request: Request, application_id: str, action: Any) -> Response:
     """Shared accept/decline handling — both differ only in the service called."""
     try:
-        application = action(user=cast(User, request.user), application_id=application_id)
+        application = action(user=cast("User", request.user), application_id=application_id)
     except NotPendingError:
         return Response(
             {"detail": "This application has already been resolved."},

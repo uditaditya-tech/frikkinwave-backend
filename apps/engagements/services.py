@@ -18,7 +18,7 @@ from django.core.mail import send_mail
 from django.db.models import Q
 
 from apps.engagements.models import EngagementRequest
-from apps.users.services import get_user_by_username
+from apps.users.services import get_user_ref
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -59,15 +59,15 @@ def send_engagement_request(
         MusicianNotFoundError — no such musician.
         SelfEngagementError — requester and musician are the same user.
     """
-    musician = get_user_by_username(username=musician_username)
+    musician = get_user_ref(username=musician_username)
     if musician is None:
         raise MusicianNotFoundError
-    if musician.pk == requester.pk:
+    if musician.id == requester.pk:
         raise SelfEngagementError
 
     engagement = EngagementRequest.objects.create(
         requester=requester,
-        musician=musician,
+        musician_id=musician.id,
         message=message,
         proposed_date=proposed_date,
         rate_offer=rate_offer,

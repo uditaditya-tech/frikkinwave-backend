@@ -6,7 +6,7 @@ No business logic here.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -37,7 +37,12 @@ from apps.musicians.services import (
     search_profiles,
     update_profile,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +103,9 @@ class ProfileCreateView(APIView):
         serializer = MusicianProfileWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            profile = create_profile(user=cast(User, request.user), data=serializer.validated_data)
+            profile = create_profile(
+                user=cast("User", request.user), data=serializer.validated_data
+            )
         except ProfileAlreadyExistsError:
             return Response(
                 {"detail": "A profile already exists for this user."},
@@ -219,7 +226,7 @@ class CompatibilityView(APIView):
     def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         viewer = (
             MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
-            .filter(user=cast(User, request.user))
+            .filter(user=cast("User", request.user))
             .first()
         )
         if viewer is None:
@@ -260,7 +267,7 @@ class ProfileCoachView(APIView):
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         profile = (
             MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
-            .filter(user=cast(User, request.user))
+            .filter(user=cast("User", request.user))
             .first()
         )
         if profile is None:
@@ -287,7 +294,7 @@ class ProfileMeView(APIView):
                 "musician_instruments__instrument",
                 "genres",
             )
-            .filter(user=cast(User, request.user))
+            .filter(user=cast("User", request.user))
             .first()
         )
 

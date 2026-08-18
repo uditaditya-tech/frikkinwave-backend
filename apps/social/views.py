@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -30,7 +30,12 @@ from apps.social.services import (
     list_following,
     unfollow_user,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +62,7 @@ class FollowView(APIView):
 
     def post(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
-            follow, created = follow_user(follower=cast(User, request.user), username=username)
+            follow, created = follow_user(follower=cast("User", request.user), username=username)
         except UserNotFoundError:
             return _user_not_found()
         except SelfFollowError:
@@ -70,7 +75,7 @@ class FollowView(APIView):
 
     def delete(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
-            unfollow_user(follower=cast(User, request.user), username=username)
+            unfollow_user(follower=cast("User", request.user), username=username)
         except UserNotFoundError:
             return _user_not_found()
         # Idempotent: deleting a non-existent edge is still a 204.
@@ -84,7 +89,7 @@ class FeedView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        queryset = get_feed(user=cast(User, request.user))
+        queryset = get_feed(user=cast("User", request.user))
         paginator = SocialCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(FeedEntryReadSerializer(page, many=True).data)
@@ -97,7 +102,7 @@ class FollowingListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        queryset = list_following(user=cast(User, request.user))
+        queryset = list_following(user_id=str(cast("User", request.user).pk))
         paginator = SocialCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(FollowingReadSerializer(page, many=True).data)
@@ -110,7 +115,7 @@ class FollowersListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        queryset = list_followers(user=cast(User, request.user))
+        queryset = list_followers(user_id=str(cast("User", request.user).pk))
         paginator = SocialCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(FollowerReadSerializer(page, many=True).data)
@@ -127,7 +132,7 @@ class PublicFollowingView(APIView):
             target = get_user_or_raise(username=username)
         except UserNotFoundError:
             return _user_not_found()
-        queryset = list_following(user=target)
+        queryset = list_following(user_id=str(target.id))
         paginator = SocialCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(FollowingReadSerializer(page, many=True).data)
@@ -144,7 +149,7 @@ class PublicFollowersView(APIView):
             target = get_user_or_raise(username=username)
         except UserNotFoundError:
             return _user_not_found()
-        queryset = list_followers(user=target)
+        queryset = list_followers(user_id=str(target.id))
         paginator = SocialCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(FollowerReadSerializer(page, many=True).data)

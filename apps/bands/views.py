@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -41,7 +41,12 @@ from apps.bands.services import (
     list_memberships,
     update_band,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +83,7 @@ class BandListCreateView(APIView):
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = BandCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        band = create_band(owner=cast(User, request.user), **serializer.validated_data)
+        band = create_band(owner=cast("User", request.user), **serializer.validated_data)
         return Response(BandReadSerializer(band).data, status=status.HTTP_201_CREATED)
 
 
@@ -109,7 +114,7 @@ class BandDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             band = update_band(
-                owner=cast(User, request.user), slug=slug, **serializer.validated_data
+                owner=cast("User", request.user), slug=slug, **serializer.validated_data
             )
         except BandNotFoundError:
             return Response({"detail": "Band not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -122,7 +127,7 @@ class BandDetailView(APIView):
 
     def delete(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         try:
-            deactivate_band(owner=cast(User, request.user), slug=slug)
+            deactivate_band(owner=cast("User", request.user), slug=slug)
         except BandNotFoundError:
             return Response({"detail": "Band not found."}, status=status.HTTP_404_NOT_FOUND)
         except NotBandOwnerError:
@@ -144,7 +149,7 @@ class BandInviteView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             membership = invite_member(
-                owner=cast(User, request.user),
+                owner=cast("User", request.user),
                 slug=slug,
                 member_username=serializer.validated_data["member_username"],
                 role=serializer.validated_data.get("role", ""),
@@ -184,7 +189,7 @@ class BandMembershipListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        queryset = list_memberships(user=cast(User, request.user))
+        queryset = list_memberships(user=cast("User", request.user))
         paginator = BandCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = BandMembershipReadSerializer(page, many=True, context={"request": request}).data
@@ -198,7 +203,7 @@ class BandMembershipDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, membership_id: str, *args: Any, **kwargs: Any) -> Response:
-        membership = get_membership(user=cast(User, request.user), membership_id=membership_id)
+        membership = get_membership(user=cast("User", request.user), membership_id=membership_id)
         if membership is None:
             return Response({"detail": "Membership not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(BandMembershipReadSerializer(membership, context={"request": request}).data)
@@ -227,7 +232,7 @@ class BandMembershipDeclineView(APIView):
 def _resolve_membership_view(request: Request, membership_id: str, action: Any) -> Response:
     """Shared accept/decline handling — both differ only in the service called."""
     try:
-        membership = action(user=cast(User, request.user), membership_id=membership_id)
+        membership = action(user=cast("User", request.user), membership_id=membership_id)
     except NotPendingError:
         return Response(
             {"detail": "This invitation has already been resolved."},

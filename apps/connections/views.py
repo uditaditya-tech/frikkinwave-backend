@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -30,7 +30,12 @@ from apps.connections.services import (
     list_contact_requests,
     send_contact_request,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +58,7 @@ class ContactRequestListCreateView(APIView):
         box = request.query_params.get("box", "incoming")
         if box not in ("incoming", "outgoing"):
             box = "incoming"
-        queryset = list_contact_requests(user=cast(User, request.user), box=box)
+        queryset = list_contact_requests(user=cast("User", request.user), box=box)
         paginator = ContactRequestCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = ContactRequestReadSerializer(page, many=True, context={"request": request}).data
@@ -64,7 +69,7 @@ class ContactRequestListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             contact_request = send_contact_request(
-                sender=cast(User, request.user),
+                sender=cast("User", request.user),
                 recipient_username=serializer.validated_data["recipient_username"],
                 message=serializer.validated_data.get("message", ""),
             )
@@ -96,7 +101,9 @@ class ContactRequestDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, request_id: str, *args: Any, **kwargs: Any) -> Response:
-        contact_request = get_contact_request(user=cast(User, request.user), request_id=request_id)
+        contact_request = get_contact_request(
+            user=cast("User", request.user), request_id=request_id
+        )
         if contact_request is None:
             return Response(
                 {"detail": "Contact request not found."}, status=status.HTTP_404_NOT_FOUND
@@ -129,7 +136,7 @@ class ContactRequestDeclineView(APIView):
 def _resolve_view(request: Request, request_id: str, action: Any) -> Response:
     """Shared accept/decline handling — both differ only in the service called."""
     try:
-        contact_request = action(user=cast(User, request.user), request_id=request_id)
+        contact_request = action(user=cast("User", request.user), request_id=request_id)
     except NotPendingError:
         return Response(
             {"detail": "This request has already been resolved."},

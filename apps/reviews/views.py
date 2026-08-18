@@ -5,7 +5,7 @@ HTTP shell only: parse request → call service → return Response.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
@@ -25,7 +25,12 @@ from apps.reviews.services import (
     list_reviews_for,
     rating_summary,
 )
-from apps.users.models import User
+
+if TYPE_CHECKING:
+    # Type-only: `request.user` is supplied by the auth middleware, so the
+    # model never needs importing at runtime (see tests/test_architecture.py).
+    from apps.users.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +57,7 @@ class ReviewCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             review = create_review(
-                author=cast(User, request.user),
+                author=cast("User", request.user),
                 subject_username=serializer.validated_data["subject_username"],
                 engagement_id=str(serializer.validated_data["engagement_id"]),
                 rating=serializer.validated_data["rating"],
@@ -84,7 +89,7 @@ class ReviewListView(APIView):
             subject = get_user_or_raise(username=username)
         except SubjectNotFoundError:
             return _subject_not_found()
-        queryset = list_reviews_for(subject=subject)
+        queryset = list_reviews_for(user_id=str(subject.id))
         paginator = ReviewCursorPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
         return paginator.get_paginated_response(ReviewReadSerializer(page, many=True).data)
@@ -101,4 +106,4 @@ class ReviewSummaryView(APIView):
             subject = get_user_or_raise(username=username)
         except SubjectNotFoundError:
             return _subject_not_found()
-        return Response(rating_summary(subject=subject))
+        return Response(rating_summary(user_id=str(subject.id)))

@@ -10,7 +10,7 @@ See `PROJECT.md` for what this is and why.
 See `ROADMAP.md` for current phase and next sub-steps.
 See `DATAMODEL.md` for current and planned data models.
 See `CODEBASE.md` for directory structure and where things live.
-See `MICROSERVICES.md` for the (planning-only) service-extraction target architecture and scaling path — **nothing in it is built**.
+See `MICROSERVICES.md` for the service-extraction target architecture and scaling path. Mostly planning, but the **Stage 0 groundwork is built**: the transactional outbox (`apps/events`), DTO identity boundary (`UserRef`), the denormalized rating rollup, and the guardrail tests. No services are extracted yet.
 
 ---
 
@@ -204,6 +204,8 @@ Manual run: `pre-commit run --all-files`
 - **mypy + django-stubs version pins:** `mypy<2.0` and `django-stubs<6.0`. mypy 2.0 + django-stubs 6.x are incompatible. Do not upgrade.
 - **RUF012 is globally ignored — do NOT add `ClassVar` to satisfy it.** The rule (mutable class defaults must be `ClassVar`) fires on Django `Meta` (`ordering`/`constraints`), `REQUIRED_FIELDS`, DRF view `authentication_classes`/`permission_classes`, admin attrs, and `ModelSerializer.Meta.fields` — all framework-defined slots, not accidental shared state. Annotating them added noise for zero safety, and `ClassVar` on `ModelSerializer.Meta.fields` actually crashes the django-stubs plugin. So `RUF012` lives in the top-level `ignore` list in `pyproject.toml`; leave these attributes as plain assignments.
   - Unrelated to RUF012 but nearby: `ModelAdmin[T]` generic is stubs-only — not subscriptable at runtime; suppressed via `disable_error_code = ["type-arg"]` mypy override for `apps.*.admin`.
+- **Cross-app identity lookups return a DTO, not a model.** Use `apps.users.services.get_user_ref(username=...)` → a frozen `UserRef(id, username, email)`. `get_user_by_username()` returns the `User` **model** and is now internal to the users app — other apps must not call it. Assign foreign keys **by id** (`member_id=ref.id`), and compare identity with `ref.id == other.pk`. Rationale: an ORM instance cannot cross a service boundary, so the contract has to be serializable from day one. Views import `User` under `TYPE_CHECKING` and use `cast("User", request.user)` (string form, so the name is never evaluated at runtime).
+- **Architectural rules are enforced by tests, not discipline.** `tests/test_architecture.py` fails the build on: a runtime cross-app model import, use of `get_user_by_username` outside the users app, a service calling `.delay()`/`.apply_async()` instead of `publish()`, a registered topic with no consumer task, or a mutable/non-serializable `UserRef`. If you're adding a legitimate exception, exempt it explicitly there with a reason — don't weaken the rule.
 - **Cross-app type references in services:** Import concrete model types under `TYPE_CHECKING` guard only (`if TYPE_CHECKING: from apps.users.models import User`). Use the type in annotations freely — no runtime coupling. In views, use `cast(User, request.user)` since `IsAuthenticated` guarantees a concrete user.
 - **environ missing stubs:** `django-environ` has no type stubs. Add `environ.*` to `ignore_missing_imports` in pyproject.toml.
 - **M2M with through model — model ordering:** Define the through model (e.g. `MusicianInstrument`) *before* the model that declares the M2M field. Use a string FK (`"MusicianProfile"`) in the through model to avoid a circular reference. This lets the M2M field use a direct `through=MusicianInstrument` reference and mypy resolves the type cleanly — no `Any` needed.

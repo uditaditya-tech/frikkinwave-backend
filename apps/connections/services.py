@@ -17,7 +17,7 @@ from django.db import IntegrityError
 from django.db.models import Q
 
 from apps.connections.models import ContactRequest
-from apps.users.services import get_user_by_username
+from apps.users.services import get_user_ref
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -58,17 +58,17 @@ def send_contact_request(
         SelfContactError — sender and recipient are the same user.
         DuplicateContactRequestError — a request for this pair already exists.
     """
-    recipient = get_user_by_username(username=recipient_username)
+    recipient = get_user_ref(username=recipient_username)
     if recipient is None:
         raise RecipientNotFoundError
 
-    if recipient.pk == sender.pk:
+    if recipient.id == sender.pk:
         raise SelfContactError
 
     try:
         request = ContactRequest.objects.create(
             sender=sender,
-            recipient=recipient,
+            recipient_id=recipient.id,
             message=message,
         )
     except IntegrityError as exc:
