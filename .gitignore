@@ -63,3 +63,9 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# EKS stack local state (same policy as the other Terraform stacks)
+infra/eks/.terraform/
+infra/eks/.terraform.lock.hcl
+infra/eks/terraform.tfstate
+infra/eks/terraform.tfstate.backup
