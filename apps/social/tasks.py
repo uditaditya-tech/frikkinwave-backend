@@ -32,6 +32,7 @@ def fan_out_activity(
     target_type: str,
     target_id: str | None,
     target_slug: str,
+    event_id: str,
 ) -> None:
     """Create the canonical Activity and fan it out to followers' inboxes."""
     services.fan_out_activity(
@@ -41,6 +42,7 @@ def fan_out_activity(
         target_type=target_type,
         target_id=target_id,
         target_slug=target_slug,
+        event_id=event_id,
     )
 
 

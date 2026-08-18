@@ -12,6 +12,21 @@ frikkinwave-backend/
 ├── apps/                          # All Django apps live here
 │   ├── __init__.py
 │   │
+│   ├── events/                    # PLATFORM app — transactional outbox (no domain concepts)
+│   │   ├── admin.py               # inspect pending / failed events
+│   │   ├── apps.py                # name="apps.events", label="events"
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py    # OutboxEvent (+ partial index on pending rows)
+│   │   ├── models.py              # OutboxEvent (topic, payload, published_at, attempts, last_error)
+│   │   ├── registry.py            # EVENT_HANDLERS: topic -> Celery task name (the subscription table)
+│   │   ├── services.py            # publish() (in-transaction) + relay_pending() + _dispatch()
+│   │   ├── tasks.py               # events.relay_outbox (the post-commit nudge)
+│   │   ├── management/
+│   │   │   └── commands/
+│   │   │       └── relay_outbox.py  # the sweep — schedule it (K8s CronJob) to guarantee delivery
+│   │   └── tests/
+│   │       └── test_outbox.py     # 10 tests: atomicity, rollback, relay, parking, registry, idempotency
+│   │
 │   ├── users/                     # Auth — custom User model + JWT auth endpoints
 │   │   ├── admin.py
 │   │   ├── apps.py                # name="apps.users", label="users"

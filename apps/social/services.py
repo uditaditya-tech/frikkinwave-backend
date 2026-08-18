@@ -12,6 +12,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
+import uuid6
 from django.db import IntegrityError, transaction
 
 from apps.social.models import Activity, FeedEntry, Follow
@@ -68,11 +69,12 @@ def follow_user(*, follower: User, username: str) -> tuple[Follow, bool]:
     # Backfill the new followee's recent activity into the follower's inbox so
     # the feed isn't empty until the followee next acts. Emitted post-commit so a
     # rolled-back follow never enqueues a fan-out. Local import avoids a cycle.
-    from apps.social.tasks import backfill_feed
+    from apps.events.services import publish
 
     follower_id, followed_id = str(follower.pk), str(target.pk)
-    transaction.on_commit(
-        lambda: backfill_feed.delay(follower_id=follower_id, followed_id=followed_id)
+    publish(
+        topic="follow.created",
+        payload={"follower_id": follower_id, "followed_id": followed_id},
     )
 
     logger.info("follow_created", extra={"follower_id": follower_id, "followed_id": followed_id})
@@ -95,11 +97,12 @@ def unfollow_user(*, follower: User, username: str) -> bool:
     if deleted:
         # Prune the unfollowed user's entries from the inbox, keeping the feed
         # consistent with the follow graph. Emitted post-commit.
-        from apps.social.tasks import prune_feed
+        from apps.events.services import publish
 
         follower_id, followed_id = str(follower.pk), str(target.pk)
-        transaction.on_commit(
-            lambda: prune_feed.delay(follower_id=follower_id, followed_id=followed_id)
+        publish(
+            topic="follow.removed",
+            payload={"follower_id": follower_id, "followed_id": followed_id},
         )
         logger.info(
             "follow_removed", extra={"follower_id": follower_id, "followed_id": followed_id}
@@ -162,18 +165,24 @@ def record_activity(
     Called by producing apps' services. Schedules the fan-out post-commit; does
     no DB write of its own, so it is safe to call inside the producer's action.
     """
-    from apps.social.tasks import fan_out_activity
+    from apps.events.services import publish
 
-    actor_id = str(actor.pk)
-    transaction.on_commit(
-        lambda: fan_out_activity.delay(
-            actor_id=actor_id,
-            verb=verb,
-            summary=summary,
-            target_type=target_type,
-            target_id=target_id,
-            target_slug=target_slug,
-        )
+    # Mint the event id up front so it can travel *inside* the payload: the
+    # consumer uses it as the Activity's primary key, which is what makes the
+    # fan-out idempotent under at-least-once delivery (see fan_out_activity).
+    event_id = uuid6.uuid7()
+    publish(
+        topic="activity.recorded",
+        event_id=event_id,
+        payload={
+            "actor_id": str(actor.pk),
+            "verb": verb,
+            "summary": summary,
+            "target_type": target_type,
+            "target_id": target_id,
+            "target_slug": target_slug,
+            "event_id": str(event_id),
+        },
     )
 
 
@@ -185,21 +194,32 @@ def fan_out_activity(
     target_type: str,
     target_id: str | None,
     target_slug: str,
+    event_id: str,
 ) -> None:
     """
     Create the canonical Activity and place a copy in every follower's inbox
-    (plus the actor's own, so they see their own posts). Idempotent on the
-    inbox via `ignore_conflicts`. Invoked by the `fan_out_activity` Celery task.
+    (plus the actor's own, so they see their own posts).
+
+    **Fully idempotent**, which at-least-once delivery requires: the outbox
+    `event_id` is used as the Activity's primary key, so a redelivered event
+    finds the row already present instead of duplicating the post in every
+    follower's feed. Inbox rows dedupe via `ignore_conflicts`.
     """
     actor_uuid = uuid.UUID(actor_id)
-    activity = Activity.objects.create(
-        actor_id=actor_uuid,
-        verb=verb,
-        summary=summary,
-        target_type=target_type,
-        target_id=uuid.UUID(target_id) if target_id else None,
-        target_slug=target_slug,
+    activity, created = Activity.objects.get_or_create(
+        id=uuid.UUID(event_id),
+        defaults={
+            "actor_id": actor_uuid,
+            "verb": verb,
+            "summary": summary,
+            "target_type": target_type,
+            "target_id": uuid.UUID(target_id) if target_id else None,
+            "target_slug": target_slug,
+        },
     )
+    if not created:
+        logger.info("activity_already_fanned_out", extra={"activity_id": str(activity.id)})
+        return
     recipient_ids = set(
         Follow.objects.filter(followed_id=actor_uuid).values_list("follower_id", flat=True)
     )

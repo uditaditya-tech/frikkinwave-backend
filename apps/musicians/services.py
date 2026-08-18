@@ -11,7 +11,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
-from django.db import transaction
 from pgvector.django import CosineDistance
 
 if TYPE_CHECKING:
@@ -418,15 +417,15 @@ def _set_genres(profile: MusicianProfile, genres: list[Genre]) -> None:
 
 def _enqueue_embedding(profile: MusicianProfile) -> None:
     """
-    Emit the "embed this profile" event after the transaction commits.
+    Emit the "profile changed, re-embed it" event.
 
-    on_commit so the task never runs against a half-written / rolled-back row.
-    Local import avoids a tasks ↔ services import cycle.
+    Written to the transactional outbox inside the caller's transaction, so the
+    event and the profile row commit together — a rollback discards both, and a
+    crash after COMMIT still leaves the event durably recorded for the relay.
     """
-    from apps.musicians.tasks import generate_profile_embedding_task
+    from apps.events.services import publish
 
-    profile_id = str(profile.id)
-    transaction.on_commit(lambda: generate_profile_embedding_task.delay(profile_id))
+    publish(topic="profile.updated", payload={"profile_id": str(profile.id)})
 
 
 # ---------------------------------------------------------------------------

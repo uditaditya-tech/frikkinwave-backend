@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Q
 from django.utils.text import slugify
 
@@ -159,9 +159,9 @@ def invite_member(
 
     # Emit once the row commits, so a rolled-back transaction never enqueues a
     # task pointing at a phantom row. Local import avoids a tasks ↔ services cycle.
-    from apps.bands.tasks import notify_band_invite
+    from apps.events.services import publish
 
-    transaction.on_commit(lambda: notify_band_invite.delay(str(membership.id)))
+    publish(topic="band.invite_created", payload={"membership_id": str(membership.id)})
 
     logger.info(
         "band_invite_created",
@@ -248,9 +248,9 @@ def _resolve_membership(
 
     # Notify the owner only when the invite is accepted (decline is silent).
     if new_status == BandMembership.Status.ACCEPTED:
-        from apps.bands.tasks import notify_band_invite_accepted
+        from apps.events.services import publish
 
-        transaction.on_commit(lambda: notify_band_invite_accepted.delay(str(membership.id)))
+        publish(topic="band.invite_accepted", payload={"membership_id": str(membership.id)})
 
     logger.info(
         "band_membership_resolved",

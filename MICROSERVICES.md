@@ -190,7 +190,7 @@ already an event; it just has not been named one. Convert those to real publishe
 
 ---
 
-## 5. The transactional outbox (prerequisite)
+## 5. The transactional outbox (prerequisite) — ✅ IMPLEMENTED
 
 Today services do `transaction.on_commit(lambda: task.delay(...))`. That is a good
 lightweight pattern, but it has a real gap: if the process dies **after** the DB commit and
@@ -216,8 +216,15 @@ sequenceDiagram
 ```
 
 Consumers must be **idempotent** (dedupe on event id), because the relay guarantees
-*at-least-once*, not exactly-once. Adopt this while still a monolith — it is reversible,
-low-risk, and it makes the eventual split mechanical rather than scary.
+*at-least-once*, not exactly-once.
+
+**Status: built and in use.** `apps/events` implements this — `OutboxEvent`,
+`publish()`, a relay (`events.relay_outbox` nudge + `manage.py relay_outbox` sweep), and a
+`topic -> task name` registry that dispatches without cross-app imports. **All 13 emitters
+across 7 apps are migrated**; no service calls `.delay()` directly any more. Adopting it
+inside the monolith surfaced a latent bug: `fan_out_activity` created a new `Activity` per
+call, so at-least-once delivery would have duplicated a post in every follower's feed — it
+now keys the `Activity` on the event id.
 
 ---
 
@@ -239,8 +246,9 @@ Ordered by leverage. All can be done inside the monolith, before any service exi
 3. **`db_constraint=False` on FKs that cross a future boundary.** Turns DB-enforced FKs into
    logical UUID references — same column, no cross-DB constraint. Do it at the planned cut
    points, not everywhere.
-4. **Convert `record_activity` to a published event** (`listing.posted`, `band.created`)
-   with `social` as the subscriber, instead of a direct call into `social`.
+4. ✅ **DONE — all 13 emitters publish to the outbox.** Producers publish domain events
+   (`activity.recorded`, `review.created`, `follow.created`, …) and consumers subscribe via
+   the registry; `record_activity` no longer reaches into `social`'s tasks.
 5. **Simulate DB-per-service now**: separate Postgres *schemas* + Django DB routers. Any
    cross-schema join that breaks is a join that would have become a network call later —
    far cheaper to find today.

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.db import transaction
 from django.db.models import Q
 
 from apps.engagements.models import EngagementRequest
@@ -76,9 +75,9 @@ def send_engagement_request(
 
     # Emit once the row commits, so a rolled-back transaction never enqueues a
     # task pointing at a phantom row. Local import avoids a tasks ↔ services cycle.
-    from apps.engagements.tasks import notify_new_engagement_request
+    from apps.events.services import publish
 
-    transaction.on_commit(lambda: notify_new_engagement_request.delay(str(engagement.id)))
+    publish(topic="engagement.requested", payload={"engagement_id": str(engagement.id)})
 
     logger.info(
         "engagement_request_sent",
@@ -189,9 +188,9 @@ def _resolve(*, user: User, engagement_id: str, new_status: str) -> EngagementRe
 
     # Notify the requester only when their request is accepted (decline is silent).
     if new_status == EngagementRequest.Status.ACCEPTED:
-        from apps.engagements.tasks import notify_engagement_request_accepted
+        from apps.events.services import publish
 
-        transaction.on_commit(lambda: notify_engagement_request_accepted.delay(str(engagement.id)))
+        publish(topic="engagement.accepted", payload={"engagement_id": str(engagement.id)})
 
     logger.info(
         "engagement_request_resolved",

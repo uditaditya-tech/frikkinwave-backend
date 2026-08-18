@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Q
 
 from apps.listings.models import Listing, ListingApplication
@@ -169,9 +169,9 @@ def apply_to_listing(
     # Emit the "new application" event once the row commits, so a rolled-back
     # transaction never enqueues a task pointing at a phantom row. Local import
     # avoids a tasks ↔ services import cycle.
-    from apps.listings.tasks import notify_new_application
+    from apps.events.services import publish
 
-    transaction.on_commit(lambda: notify_new_application.delay(str(application.id)))
+    publish(topic="listing.application_created", payload={"application_id": str(application.id)})
 
     logger.info(
         "listing_application_created",
@@ -239,9 +239,12 @@ def _resolve_application(
 
     # Notify the applicant only when accepted (decline is silent).
     if new_status == ListingApplication.Status.ACCEPTED:
-        from apps.listings.tasks import notify_application_accepted
+        from apps.events.services import publish
 
-        transaction.on_commit(lambda: notify_application_accepted.delay(str(application.id)))
+        publish(
+            topic="listing.application_accepted",
+            payload={"application_id": str(application.id)},
+        )
 
     logger.info(
         "listing_application_resolved",

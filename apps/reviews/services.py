@@ -14,7 +14,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, cast
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Avg, Count
 
 from apps.engagements.services import parties_of_completed_engagement
@@ -85,10 +85,10 @@ def create_review(
     # row commits, so profile reads never touch the reviews tables. on_commit so a
     # rolled-back review never propagates a phantom aggregate. Local import avoids
     # a tasks <-> services cycle.
-    from apps.reviews.tasks import propagate_profile_rating
+    from apps.events.services import publish
 
     subject_id = str(subject.pk)
-    transaction.on_commit(lambda: propagate_profile_rating.delay(subject_id))
+    publish(topic="review.created", payload={"subject_user_id": subject_id})
 
     logger.info(
         "review_created",

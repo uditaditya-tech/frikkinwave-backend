@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Q
 
 from apps.connections.models import ContactRequest
@@ -77,9 +77,9 @@ def send_contact_request(
     # Emit the "new contact request" event once the row actually commits, so a
     # rolled-back transaction never enqueues a task pointing at a phantom row.
     # Local import avoids a tasks ↔ services import cycle.
-    from apps.connections.tasks import notify_new_contact_request
+    from apps.events.services import publish
 
-    transaction.on_commit(lambda: notify_new_contact_request.delay(str(request.id)))
+    publish(topic="contact_request.created", payload={"request_id": str(request.id)})
 
     logger.info(
         "contact_request_sent",
@@ -154,9 +154,9 @@ def _resolve(*, user: User, request_id: str, new_status: str) -> ContactRequest 
 
     # Notify the sender only when their request is accepted (decline is silent).
     if new_status == ContactRequest.Status.ACCEPTED:
-        from apps.connections.tasks import notify_contact_request_accepted
+        from apps.events.services import publish
 
-        transaction.on_commit(lambda: notify_contact_request_accepted.delay(str(request.id)))
+        publish(topic="contact_request.accepted", payload={"request_id": str(request.id)})
 
     logger.info(
         "contact_request_resolved",

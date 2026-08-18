@@ -398,6 +398,28 @@ touches the reviews tables. Eventually consistent by design; rebuild drift with
 
 ---
 
+### `events.OutboxEvent` (platform — transactional outbox)
+
+One domain event, written **in the same transaction** as the state change it describes.
+**App:** `apps/events` | **Migration:** `0001_initial`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUIDField (PK) | UUIDv7. Doubles as the **idempotency key** consumers dedupe on. |
+| `topic` | CharField(100) | e.g. `review.created`, `activity.recorded`. Mapped to a consumer in `events/registry.py`. |
+| `payload` | JSONField | Passed straight through as the handler task's **kwargs**, so keys must match its signature. |
+| `created_at` | DateTimeField | `auto_now_add`. Relay processes oldest first. |
+| `published_at` | DateTimeField | Null until dispatched. |
+| `attempts` | PositiveIntegerField | Dispatch attempts; past `MAX_ATTEMPTS` the event is parked, not retried forever. |
+| `last_error` | TextField | Why the last dispatch failed (incl. "no consumer registered"). |
+
+Partial index on `created_at` where `published_at IS NULL` — the relay's only query.
+Delivery is **at-least-once**, so consumers must be idempotent. Not a domain model: this
+app owns no business concepts, only the durable record that decouples a write from its
+reaction. See MICROSERVICES.md §5.
+
+---
+
 ## Design rules
 
 - Every model gets a UUIDv7 `id` as primary key.

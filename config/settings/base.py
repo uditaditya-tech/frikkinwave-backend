@@ -46,6 +46,8 @@ THIRD_PARTY_APPS = [
 ]
 
 LOCAL_APPS = [
+    # Platform apps (no domain concepts) come first.
+    "apps.events",
     "apps.users",
     "apps.musicians",
     "apps.connections",
