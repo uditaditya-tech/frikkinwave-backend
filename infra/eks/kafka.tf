@@ -131,9 +131,17 @@ resource "kubernetes_secret_v1" "kafka_app_user_mirror" {
     name      = "kafka-app-user"
     namespace = var.app_namespace
   }
+  # try(), because `terraform destroy` re-evaluates data sources — and by the
+  # time it runs, eks-down.sh has already deleted the Kafka cluster and the
+  # Strimzi operator, so these Secrets no longer exist and `.data` is null.
+  #
+  # Without this the whole destroy ABORTS with "Attempt to index null value",
+  # leaving the EKS control plane and RDS running and billing. That is the exact
+  # failure eks-down.sh exists to prevent, and it was only ever going to show up
+  # by running the script end to end.
   data = {
-    "user.crt" = data.kubernetes_secret_v1.kafka_app_user.data["user.crt"]
-    "user.key" = data.kubernetes_secret_v1.kafka_app_user.data["user.key"]
+    "user.crt" = try(data.kubernetes_secret_v1.kafka_app_user.data["user.crt"], "")
+    "user.key" = try(data.kubernetes_secret_v1.kafka_app_user.data["user.key"], "")
   }
 }
 
@@ -145,7 +153,8 @@ resource "kubernetes_secret_v1" "kafka_ca_mirror" {
     name      = "kafka-cluster-ca"
     namespace = var.app_namespace
   }
+  # try() for the same reason as the user secret above.
   data = {
-    "ca.crt" = data.kubernetes_secret_v1.kafka_cluster_ca.data["ca.crt"]
+    "ca.crt" = try(data.kubernetes_secret_v1.kafka_cluster_ca.data["ca.crt"], "")
   }
 }

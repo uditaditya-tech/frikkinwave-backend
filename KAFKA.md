@@ -303,22 +303,21 @@ lifecycle. Revisit if the app ever handles payment or identity data.
 
 ---
 
-## Teardown: verified, and it was broken in a second way
+## Teardown: verified end to end, after three bugs
 
-`eks-down.sh`'s Kafka path had never actually executed — it was fixed by reasoning
-about how Strimzi reconciles, not by running it. Running it found a second bug the
-reasoning had missed.
+`eks-down.sh`'s Kafka path had never executed — it was written by reasoning about
+how Strimzi reconciles. Running it found two more bugs the reasoning had missed,
+the second of which was the worst kind: **the destroy aborted and left the stack
+billing.**
 
-**Bug 1 (already fixed, now confirmed):** deleting PVCs while the operator lives
-lets it recreate them, orphaning EBS volumes past the destroy. Verified fixed —
-all three broker volumes released, `describe-volumes` returned empty.
+**Bug 1 (fixed by reasoning, then confirmed):** deleting PVCs while the operator
+lives lets it recreate them, orphaning EBS volumes past the destroy.
 
 **Bug 2 (found by running it):** `KafkaTopic` and `KafkaUser` carry the
 finalizers `strimzi.io/topic-operator` and `strimzi.io/user-operator`, and **only
-the Entity Operator removes them — it dies with the Kafka resource.** The script
-deleted `kafka` and `kafkanodepool` but never the topics, so every topic stranded
-in `Terminating` forever, which blocked `helm uninstall` and would have blocked
-`terraform destroy`:
+the Entity Operator clears them — it dies with the Kafka resource.** Deleting
+`kafka` first stranded every topic in `Terminating` forever, blocking
+`helm uninstall` and, behind it, `terraform destroy`:
 
 ```
 resource KafkaTopic/kafka/follow-created still exists.
@@ -332,10 +331,41 @@ Recovery is manual finalizer surgery:
 kubectl patch kafkatopic <name> -n kafka --type=merge -p '{"metadata":{"finalizers":[]}}'
 ```
 
-The script now deletes `kafkatopic` and `kafkauser` **first**, while their
-operators are alive, and sweeps any survivors' finalizers as a fallback. Re-tested
-end to end afterwards: topics and users deleted cleanly, `helm uninstall kafka`
-succeeded where it had timed out, and every EBS volume released.
+**Bug 3 (found by the FULL run, and the reason a partial test is not a test):**
+`terraform destroy` re-evaluates data sources. By the time it runs, the script has
+already deleted the Kafka cluster and Strimzi, so the mirrored-credential data
+sources return null and the destroy aborts outright:
+
+```
+Error: Attempt to index null value
+  on kafka.tf line 135, in resource "kubernetes_secret_v1" "kafka_app_user_mirror":
+  "user.crt" = data.kubernetes_secret_v1.kafka_app_user.data["user.crt"]
+```
+
+The result was the worst possible outcome for a teardown script: the ALB and the
+broker volumes were gone, and **the EKS control plane and RDS were still running
+and billing**, with the script reporting nothing wrong. Fixed with `try(..., "")`
+on each lookup so the destroy can evaluate them when the source no longer exists.
+
+### Verified end to end
+
+Full `eks-down.sh` run after the fixes:
+
+```
+==> Checking for orphaned resources in vpc-0598c08838cc512da
+    None found.
+==> Data preserved in snapshot: frikkinwave-prod-final-38cea2fd
+==> Destroyed. Back to $0/hr.
+```
+
+Confirmed independently against AWS: no clusters, no RDS instance, no tagged
+volumes, and the final snapshot `available`. The next `eks-up.sh` restores from it
+automatically.
+
+**The lesson worth keeping:** every one of these three bugs was invisible to
+review and to partial testing. Bug 3 in particular only appears on a run that
+reaches `terraform destroy` — testing the Kafka half twice, as was done earlier,
+passed cleanly and proved nothing about it.
 
 ---
 
