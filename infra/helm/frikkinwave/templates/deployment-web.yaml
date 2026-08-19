@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/component: web
 spec:
   replicas: {{ .Values.web.replicaCount }}
+  # Three is enough to roll back through; the default of 10 just leaves
+  # scaled-to-zero ReplicaSets cluttering `kubectl get rs`.
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "frikkinwave.name" . }}

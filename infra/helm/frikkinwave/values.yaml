@@ -120,6 +120,8 @@ migrations:
   # Generous: a migration that needs a table rewrite should not be killed halfway.
   backoffLimit: 1
   activeDeadlineSeconds: 600
+  # Keep finished Jobs for a day, then let the TTL controller remove them.
+  ttlSecondsAfterFinished: 86400
 
 # `manage.py relay_outbox` — the sweep that makes event delivery guaranteed.
 # The post-commit nudge is best-effort and is lost if the process dies between

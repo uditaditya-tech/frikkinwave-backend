@@ -26,6 +26,15 @@ metadata:
 spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  # Self-cleaning. The revision suffix above gives every deploy its own Job
+  # name, which is what keeps a failed run's logs — but it also means
+  # `before-hook-creation` never matches an existing name, so nothing was ever
+  # deleted and Jobs accumulated one per deploy, forever.
+  #
+  # The TTL controller removes them a day after they finish, successful or not:
+  # long enough to debug a failure, short enough that the namespace does not
+  # fill with history nobody reads.
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
   template:
     metadata:
       labels:
