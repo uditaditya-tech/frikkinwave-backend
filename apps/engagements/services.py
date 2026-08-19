@@ -13,8 +13,6 @@ import uuid
 from datetime import date
 from typing import TYPE_CHECKING
 
-from django.conf import settings
-from django.core.mail import send_mail
 from django.db.models import Q
 
 from apps.engagements.models import EngagementRequest
@@ -77,7 +75,24 @@ def send_engagement_request(
     # task pointing at a phantom row. Local import avoids a tasks ↔ services cycle.
     from apps.events.services import publish
 
-    publish(topic="engagement.requested", payload={"engagement_id": str(engagement.id)})
+    # Self-contained payload: the consumer is a separate service and must not
+    # need a database read to send this.
+    publish(
+        topic="engagement.requested",
+        payload={
+            "recipient_email": musician.email,
+            "requester_username": requester.username,
+            # Nullable field. The old notify task called .isoformat() on it
+            # unguarded — that crashed too, but inside a Celery retry loop where
+            # it was invisible. Building the payload in the request path makes
+            # the same bug a 500, so it has to be handled honestly.
+            "proposed_date": (
+                engagement.proposed_date.isoformat() if engagement.proposed_date else ""
+            ),
+            "rate_offer": engagement.rate_offer,
+            "message": engagement.message,
+        },
+    )
 
     logger.info(
         "engagement_request_sent",
@@ -190,79 +205,17 @@ def _resolve(*, user: User, engagement_id: str, new_status: str) -> EngagementRe
     if new_status == EngagementRequest.Status.ACCEPTED:
         from apps.events.services import publish
 
-        publish(topic="engagement.accepted", payload={"engagement_id": str(engagement.id)})
+        publish(
+            topic="engagement.accepted",
+            payload={
+                "recipient_email": engagement.requester.email,
+                "musician_username": engagement.musician.username,
+                "musician_email": engagement.musician.email,
+            },
+        )
 
     logger.info(
         "engagement_request_resolved",
         extra={"engagement_id": str(engagement.id), "status": new_status},
     )
     return engagement
-
-
-# ---------------------------------------------------------------------------
-# Email notifications (invoked by Celery tasks in apps/engagements/tasks.py)
-# ---------------------------------------------------------------------------
-
-
-def notify_musician_of_request(*, engagement_id: str) -> None:
-    """
-    Email the musician that someone wants to hire them.
-
-    A missing request (deleted before the task ran) is logged and ignored rather
-    than raised — the task must not retry forever on a row that is gone.
-    """
-    engagement = (
-        EngagementRequest.objects.select_related("requester", "musician")
-        .filter(id=engagement_id)
-        .first()
-    )
-    if engagement is None:
-        logger.warning("notify_musician_skipped_missing_request", extra={"id": engagement_id})
-        return
-
-    requester_name = engagement.requester.username
-    body = f"{requester_name} wants to hire you for session work on frikkinwave."
-    if engagement.proposed_date:
-        body += f"\n\nProposed date: {engagement.proposed_date.isoformat()}"
-    if engagement.rate_offer:
-        body += f"\nRate offered: {engagement.rate_offer}"
-    if engagement.message:
-        body += f'\n\nThey said:\n"{engagement.message}"'
-    body += "\n\nLog in to frikkinwave to accept or decline."
-
-    send_mail(
-        subject=f"{requester_name} wants to hire you on frikkinwave",
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[engagement.musician.email],
-    )
-    logger.info("engagement_request_notification_sent", extra={"id": engagement_id})
-
-
-def notify_requester_of_acceptance(*, engagement_id: str) -> None:
-    """
-    Email the requester that the musician accepted, revealing the musician's
-    contact email (the reveal-on-accept rule). Missing request: logged, ignored.
-    """
-    engagement = (
-        EngagementRequest.objects.select_related("requester", "musician")
-        .filter(id=engagement_id)
-        .first()
-    )
-    if engagement is None:
-        logger.warning("notify_requester_skipped_missing_request", extra={"id": engagement_id})
-        return
-
-    musician_name = engagement.musician.username
-    body = (
-        f"{musician_name} accepted your hire request on frikkinwave.\n\n"
-        f"You can now reach them at: {engagement.musician.email}"
-    )
-
-    send_mail(
-        subject=f"{musician_name} accepted your hire request",
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[engagement.requester.email],
-    )
-    logger.info("engagement_request_acceptance_sent", extra={"id": engagement_id})

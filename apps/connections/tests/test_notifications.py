@@ -15,7 +15,6 @@ import pytest
 from django.core.mail import EmailMessage
 from rest_framework.test import APIClient
 
-from apps.connections import services
 from apps.connections.models import ContactRequest
 from apps.users.models import User
 
@@ -101,17 +100,4 @@ class TestAcceptNotification:
             response = api_client.post(f"{REQUESTS_URL}{request.id}/decline/")
 
         assert response.status_code == 200
-        assert len(mailoutbox) == 0
-
-
-@pytest.mark.django_db
-class TestNotificationQueueHygiene:
-    """A task firing for a request that no longer exists must not blow up."""
-
-    def test_notify_recipient_missing_request_is_noop(self, mailoutbox: list[EmailMessage]) -> None:
-        services.notify_recipient_of_request(request_id="00000000-0000-0000-0000-000000000000")
-        assert len(mailoutbox) == 0
-
-    def test_notify_sender_missing_request_is_noop(self, mailoutbox: list[EmailMessage]) -> None:
-        services.notify_sender_of_acceptance(request_id="00000000-0000-0000-0000-000000000000")
         assert len(mailoutbox) == 0

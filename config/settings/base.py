@@ -48,6 +48,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     # Platform apps (no domain concepts) come first.
     "apps.events",
+    "apps.notifications",
     "apps.users",
     "apps.musicians",
     "apps.connections",
@@ -193,6 +194,23 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = "UTC"
 # When True, tasks run inline in the calling process (used in tests via the
 # autouse fixture in conftest.py). Real workers run with this False.
+# ---------------------------------------------------------------------------
+# Queue routing.
+#
+# Notifications run on their own queue, consumed by their own Deployment, so a
+# slow or wedged mail provider cannot starve embedding generation or feed
+# fan-out — everything shared one queue and one worker before this.
+#
+# The failure mode this introduces: a task routed to a queue no worker consumes
+# is never executed and never errors. tests/test_architecture.py asserts every
+# registered handler lands on a queue some Deployment in the Helm chart is
+# actually started with.
+# ---------------------------------------------------------------------------
+CELERY_TASK_DEFAULT_QUEUE = "celery"
+CELERY_TASK_ROUTES = {
+    "notifications.*": {"queue": "notifications"},
+}
+
 CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TASK_EAGER_PROPAGATES = True
 

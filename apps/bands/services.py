@@ -11,8 +11,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from django.conf import settings
-from django.core.mail import send_mail
 from django.db import IntegrityError
 from django.db.models import Q
 from django.utils.text import slugify
@@ -162,7 +160,17 @@ def invite_member(
     # task pointing at a phantom row. Local import avoids a tasks ↔ services cycle.
     from apps.events.services import publish
 
-    publish(topic="band.invite_created", payload={"membership_id": str(membership.id)})
+    # Self-contained payload: the consumer is a separate service and must not
+    # need a database read to send this.
+    publish(
+        topic="band.invite_created",
+        payload={
+            "recipient_email": member.email,
+            "owner_username": owner.username,
+            "band_name": band.name,
+            "role": membership.role,
+        },
+    )
 
     logger.info(
         "band_invite_created",
@@ -251,70 +259,17 @@ def _resolve_membership(
     if new_status == BandMembership.Status.ACCEPTED:
         from apps.events.services import publish
 
-        publish(topic="band.invite_accepted", payload={"membership_id": str(membership.id)})
+        publish(
+            topic="band.invite_accepted",
+            payload={
+                "recipient_email": membership.band.owner.email,
+                "member_username": membership.member.username,
+                "band_name": membership.band.name,
+            },
+        )
 
     logger.info(
         "band_membership_resolved",
         extra={"membership_id": str(membership.id), "status": new_status},
     )
     return membership
-
-
-# ---------------------------------------------------------------------------
-# Email notifications (invoked by Celery tasks in apps/bands/tasks.py)
-# ---------------------------------------------------------------------------
-
-
-def notify_member_of_invite(*, membership_id: str) -> None:
-    """
-    Email the invited user that a band invited them.
-
-    A missing membership (deleted before the task ran) is logged and ignored
-    rather than raised — the task must not retry forever on a row that is gone.
-    """
-    membership = (
-        BandMembership.objects.select_related("band", "band__owner", "member")
-        .filter(id=membership_id)
-        .first()
-    )
-    if membership is None:
-        logger.warning("notify_invite_skipped_missing_membership", extra={"id": membership_id})
-        return
-
-    band = membership.band
-    body = f'{band.owner.username} invited you to join "{band.name}" on frikkinwave.'
-    if membership.role:
-        body += f"\n\nRole: {membership.role}"
-    body += "\n\nLog in to frikkinwave to accept or decline."
-
-    send_mail(
-        subject=f'You\'re invited to join "{band.name}"',
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[membership.member.email],
-    )
-    logger.info("band_invite_notification_sent", extra={"id": membership_id})
-
-
-def notify_owner_of_acceptance(*, membership_id: str) -> None:
-    """Email the band owner that an invitee accepted. Missing membership: logged, ignored."""
-    membership = (
-        BandMembership.objects.select_related("band", "band__owner", "member")
-        .filter(id=membership_id)
-        .first()
-    )
-    if membership is None:
-        logger.warning("notify_accept_skipped_missing_membership", extra={"id": membership_id})
-        return
-
-    band = membership.band
-    member_name = membership.member.username
-    body = f'{member_name} accepted your invitation to join "{band.name}" on frikkinwave.'
-
-    send_mail(
-        subject=f'{member_name} joined "{band.name}"',
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[band.owner.email],
-    )
-    logger.info("band_invite_acceptance_sent", extra={"id": membership_id})

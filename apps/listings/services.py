@@ -11,8 +11,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from django.conf import settings
-from django.core.mail import send_mail
 from django.db import IntegrityError
 from django.db.models import Q
 
@@ -171,7 +169,17 @@ def apply_to_listing(
     # avoids a tasks ↔ services import cycle.
     from apps.events.services import publish
 
-    publish(topic="listing.application_created", payload={"application_id": str(application.id)})
+    # Self-contained payload: the consumer is a separate service and must not
+    # need a database read to send this.
+    publish(
+        topic="listing.application_created",
+        payload={
+            "recipient_email": listing.author.email,
+            "applicant_username": applicant.username,
+            "listing_title": listing.title,
+            "message": application.message,
+        },
+    )
 
     logger.info(
         "listing_application_created",
@@ -243,7 +251,12 @@ def _resolve_application(
 
         publish(
             topic="listing.application_accepted",
-            payload={"application_id": str(application.id)},
+            payload={
+                "recipient_email": application.applicant.email,
+                "author_username": application.listing.author.username,
+                "author_email": application.listing.author.email,
+                "listing_title": application.listing.title,
+            },
         )
 
     logger.info(
@@ -251,70 +264,3 @@ def _resolve_application(
         extra={"application_id": str(application.id), "status": new_status},
     )
     return application
-
-
-# ---------------------------------------------------------------------------
-# Email notifications (invoked by Celery tasks in apps/listings/tasks.py)
-# ---------------------------------------------------------------------------
-
-
-def notify_author_of_application(*, application_id: str) -> None:
-    """
-    Email the listing author that a new application arrived.
-
-    A missing application (deleted before the task ran) is logged and ignored
-    rather than raised — the task must not retry forever on a row that is gone.
-    """
-    application = (
-        ListingApplication.objects.select_related("applicant", "listing", "listing__author")
-        .filter(id=application_id)
-        .first()
-    )
-    if application is None:
-        logger.warning("notify_author_skipped_missing_application", extra={"id": application_id})
-        return
-
-    applicant_name = application.applicant.username
-    listing = application.listing
-    body = f'{applicant_name} applied to your listing "{listing.title}" on frikkinwave.'
-    if application.message:
-        body += f'\n\nThey said:\n"{application.message}"'
-    body += "\n\nLog in to frikkinwave to accept or decline."
-
-    send_mail(
-        subject=f'New application for "{listing.title}"',
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[listing.author.email],
-    )
-    logger.info("listing_application_notification_sent", extra={"id": application_id})
-
-
-def notify_applicant_of_acceptance(*, application_id: str) -> None:
-    """
-    Email the applicant that they were accepted, revealing the author's contact
-    email (the reveal-on-accept rule). Missing application: logged, ignored.
-    """
-    application = (
-        ListingApplication.objects.select_related("applicant", "listing", "listing__author")
-        .filter(id=application_id)
-        .first()
-    )
-    if application is None:
-        logger.warning("notify_applicant_skipped_missing_application", extra={"id": application_id})
-        return
-
-    listing = application.listing
-    author = listing.author
-    body = (
-        f'{author.username} accepted your application to "{listing.title}" on frikkinwave.\n\n'
-        f"You can now reach them at: {author.email}"
-    )
-
-    send_mail(
-        subject=f'Your application to "{listing.title}" was accepted',
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[application.applicant.email],
-    )
-    logger.info("listing_application_acceptance_sent", extra={"id": application_id})

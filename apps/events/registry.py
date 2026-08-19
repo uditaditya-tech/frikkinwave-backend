@@ -16,18 +16,19 @@ from __future__ import annotations
 
 # topic -> Celery task name
 EVENT_HANDLERS: dict[str, str] = {
-    # connections
-    "contact_request.created": "connections.notify_new_contact_request",
-    "contact_request.accepted": "connections.notify_contact_request_accepted",
-    # engagements
-    "engagement.requested": "engagements.notify_new_engagement_request",
-    "engagement.accepted": "engagements.notify_engagement_request_accepted",
-    # listings
-    "listing.application_created": "listings.notify_new_application",
-    "listing.application_accepted": "listings.notify_application_accepted",
-    # bands
-    "band.invite_created": "bands.notify_band_invite",
-    "band.invite_accepted": "bands.notify_band_invite_accepted",
+    # notifications — extracted service (own queue, own Deployment).
+    #
+    # These topics used to point at notify_* tasks inside each producing app,
+    # which took an id and re-read the row. The payloads now carry the facts the
+    # email needs, so the consumer touches no models and no other app's code.
+    "contact_request.created": "notifications.contact_request_created",
+    "contact_request.accepted": "notifications.contact_request_accepted",
+    "engagement.requested": "notifications.engagement_requested",
+    "engagement.accepted": "notifications.engagement_accepted",
+    "listing.application_created": "notifications.listing_application_created",
+    "listing.application_accepted": "notifications.listing_application_accepted",
+    "band.invite_created": "notifications.band_invite_created",
+    "band.invite_accepted": "notifications.band_invite_accepted",
     # social
     "follow.created": "social.backfill_feed",
     "follow.removed": "social.prune_feed",

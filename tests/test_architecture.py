@@ -122,3 +122,76 @@ class TestUserRefContract:
             ref.username = "changed"  # type: ignore[misc]
         # Everything on the DTO must survive a JSON round trip (i.e. a network hop).
         json.dumps({**dataclasses.asdict(ref), "id": str(ref.id)})
+
+
+# ---------------------------------------------------------------------------
+# Queue routing must match what the cluster actually consumes.
+#
+# Splitting notifications onto their own queue introduced a failure mode that is
+# completely silent: route a task to a queue no worker is started with and it is
+# never executed, never retried, and never logged as an error. It simply sits in
+# Redis. Nothing in Celery, Kubernetes, or the outbox notices.
+#
+# This ties the two halves together — Celery's routing table on one side, the
+# Helm chart's worker commands on the other — so the drift fails the build.
+# ---------------------------------------------------------------------------
+
+CHART_VALUES = APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "values.yaml"
+
+
+def _queues_consumed_by_the_cluster() -> set[str]:
+    """Every queue named by a worker Deployment in the chart's values."""
+    import yaml
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    consumed: set[str] = set()
+    for section in ("worker", "notifications"):
+        block = values.get(section) or {}
+        if block.get("enabled", True) and block.get("queues"):
+            consumed.update(q.strip() for q in str(block["queues"]).split(","))
+    return consumed
+
+
+def _queue_for_task(task_name: str) -> str:
+    """Resolve a task to its queue exactly as Celery would at publish time."""
+    from django.conf import settings
+
+    from config.celery import app as celery_app
+
+    route = celery_app.amqp.router.route({}, task_name)
+    queue = route.get("queue")
+    # No matching route means the default queue.
+    return getattr(queue, "name", None) or settings.CELERY_TASK_DEFAULT_QUEUE
+
+
+def test_every_registered_handler_lands_on_a_consumed_queue() -> None:
+    """
+    A task routed to a queue no Deployment consumes is silently never run.
+
+    If this fails, either add the queue to a worker's `queues` in the chart, or
+    fix CELERY_TASK_ROUTES. Do not "fix" it by deleting the assertion — the
+    whole point is that the runtime symptom is invisible.
+    """
+    from apps.events.registry import EVENT_HANDLERS
+
+    consumed = _queues_consumed_by_the_cluster()
+    assert consumed, "No worker queues found in the Helm values — parsing broke."
+
+    stranded = {
+        task: _queue_for_task(task)
+        for task in EVENT_HANDLERS.values()
+        if _queue_for_task(task) not in consumed
+    }
+    assert not stranded, (
+        f"These tasks route to queues no worker consumes {sorted(consumed)}: {stranded}. "
+        "They would be enqueued and never executed, with no error anywhere."
+    )
+
+
+def test_the_outbox_relay_itself_is_consumed() -> None:
+    """
+    The relay is the backstop that makes delivery guaranteed. If *it* were
+    stranded on an unconsumed queue, every event would silently stop being
+    dispatched — the one failure that breaks all the others at once.
+    """
+    assert _queue_for_task("events.relay_outbox") in _queues_consumed_by_the_cluster()

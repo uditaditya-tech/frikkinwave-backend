@@ -44,10 +44,14 @@ web:
       cpu: 500m
       memory: 640Mi
 
+# The general worker: embeddings, feed fan-out, rating rollups, the outbox relay.
+# Pinned to the default queue — it must NOT drain `notifications`, or the
+# isolation below is decorative.
 worker:
   replicaCount: 1
   # Concurrency 2 on a shared t4g.small; the work is IO-bound (OpenAI calls, DB).
   concurrency: 2
+  queues: celery
   resources:
     requests:
       cpu: 100m
@@ -55,6 +59,27 @@ worker:
     limits:
       cpu: 500m
       memory: 512Mi
+
+# The extracted notifications service. Same image, different entrypoint and
+# queue — the seam that matters is that its consumers touch no models, so it
+# could move to its own image tomorrow without changing a line of its code.
+#
+# Separate from `worker` so a wedged mail provider cannot starve embedding
+# generation or feed fan-out, and so it scales on its own.
+notifications:
+  enabled: true
+  replicaCount: 1
+  # Email delivery is almost entirely waiting on SMTP, so concurrency buys a lot
+  # per unit of memory.
+  concurrency: 4
+  queues: notifications
+  resources:
+    requests:
+      cpu: 50m
+      memory: 224Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
 
 redis:
   enabled: true

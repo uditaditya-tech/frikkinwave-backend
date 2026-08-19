@@ -13,7 +13,6 @@ import pytest
 from django.core.mail import EmailMessage
 from rest_framework.test import APIClient
 
-from apps.bands import services
 from apps.bands.models import Band, BandMembership
 from apps.bands.tests.conftest import auth, make_user
 
@@ -212,12 +211,4 @@ class TestMembershipNotifications:
         with django_capture_on_commit_callbacks(execute=True):
             response = api_client.post(_decline_url(str(membership.id)))
         assert response.status_code == 200
-        assert len(mailoutbox) == 0
-
-    def test_notify_invite_missing_membership_is_noop(self, mailoutbox: list[EmailMessage]) -> None:
-        services.notify_member_of_invite(membership_id="00000000-0000-0000-0000-000000000000")
-        assert len(mailoutbox) == 0
-
-    def test_notify_accept_missing_membership_is_noop(self, mailoutbox: list[EmailMessage]) -> None:
-        services.notify_owner_of_acceptance(membership_id="00000000-0000-0000-0000-000000000000")
         assert len(mailoutbox) == 0

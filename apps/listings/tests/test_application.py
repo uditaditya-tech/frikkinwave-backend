@@ -14,7 +14,6 @@ import pytest
 from django.core.mail import EmailMessage
 from rest_framework.test import APIClient
 
-from apps.listings import services
 from apps.listings.models import Listing, ListingApplication
 from apps.listings.tests.conftest import auth, make_user
 
@@ -244,18 +243,4 @@ class TestApplicationNotifications:
         with django_capture_on_commit_callbacks(execute=True):
             response = api_client.post(_decline_url(str(application.id)))
         assert response.status_code == 200
-        assert len(mailoutbox) == 0
-
-    def test_notify_author_missing_application_is_noop(
-        self, mailoutbox: list[EmailMessage]
-    ) -> None:
-        services.notify_author_of_application(application_id="00000000-0000-0000-0000-000000000000")
-        assert len(mailoutbox) == 0
-
-    def test_notify_applicant_missing_application_is_noop(
-        self, mailoutbox: list[EmailMessage]
-    ) -> None:
-        services.notify_applicant_of_acceptance(
-            application_id="00000000-0000-0000-0000-000000000000"
-        )
         assert len(mailoutbox) == 0

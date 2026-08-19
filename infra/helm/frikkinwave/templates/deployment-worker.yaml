@@ -29,6 +29,10 @@ spec:
             - worker
             - --loglevel=info
             - --concurrency={{ .Values.worker.concurrency }}
+            # Explicit queue list. Without -Q a worker consumes the default
+            # queue only, which happens to be right here — but stating it makes
+            # the split visible and survives the default changing.
+            - --queues={{ .Values.worker.queues }}
           envFrom:
             {{- include "frikkinwave.envFrom" . | nindent 12 }}
           env:

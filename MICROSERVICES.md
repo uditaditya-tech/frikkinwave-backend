@@ -323,7 +323,44 @@ flowchart LR
 
 | Step | Why this one, at this point |
 |---|---|
-| **3. Notifications** | Pure event consumer, zero read dependencies, already Celery tasks. Trivial first cut whose real purpose is to build the Kafka + deploy + observability muscle on something that cannot break a user request. |
+| **3. Notifications** — ✅ **EXTRACTED** | See the correction below. |
+
+### Step 3 correction — "zero read dependencies" was not true
+
+This plan claimed Notifications was a *pure event consumer* and therefore a
+trivial first cut. It was not. All eight `notify_*` tasks took an **id** and
+called back into their producing app's service layer, which re-read the row from
+Postgres. Extracting them as they stood would have produced a "service" that
+still reached into the monolith's database — the worst of both worlds, and a
+seam that could never be cut.
+
+The real work was inverting that: producers now publish the **facts** the email
+needs, so the consumer touches no models at all. What shipped:
+
+- `apps/notifications/` — renderers (copy), services (delivery), 8 tasks. Imports
+  no other app; a test asserts it, since the boundary erodes silently otherwise.
+- Producers publish self-contained payloads. This is also *more* correct than
+  re-reading: the email describes the state at event time, not whatever the row
+  looks like whenever the worker gets to it.
+- A dedicated `notifications` Celery queue with its own Deployment, so a wedged
+  mail provider cannot starve embedding generation or feed fan-out.
+- A guardrail test tying Celery's routing table to the chart's worker commands.
+  Routing a task to a queue no worker consumes is **silent** — never runs, never
+  errors, no signal anywhere.
+
+Two things worth carrying into the next extraction:
+
+**Building the payload in the producer moves failures into the request path.**
+`engagement.proposed_date` is nullable and the old code called `.isoformat()` on
+it unguarded. That crashed before too — inside a Celery retry loop, where it was
+invisible. Constructing the payload inside the transaction turned the same bug
+into a user-facing 500. Check every field's nullability when you move it into an
+event.
+
+**What is still shared.** The image and the database *configuration* — it simply
+no longer uses the latter. Giving notifications its own image is packaging work,
+not design work, which is the point: the design boundary is already cut.
+
 | **4. Search / Matching** | Genuinely different scaling profile (vector search, external API latency, spiky). Already isolated behind `openai_client.py` **with graceful degradation** — the resilience contract exists. |
 | **5. Social / Feed** | The hot path and the one with write amplification. Already event-driven, so the seam is real. |
 | **6. Messaging** | Stateful WebSockets — build it standalone rather than retrofit it out later. |
