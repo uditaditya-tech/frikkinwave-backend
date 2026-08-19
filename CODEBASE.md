@@ -180,7 +180,7 @@ frikkinwave-backend/
 │   │       ├── conftest.py        # owner + venue fixtures, auth/make_user helpers
 │   │       └── test_venue.py      # 15 tests: CRUD happy + negatives, slug derivation/collision, browse/filters
 │   │
-│   └── social/                    # Follow graph + activity feed (Phase 5, Blocks A+B)
+│   ├── social/                    # Follow graph + activity feed (Phase 5, Blocks A+B)
 │       ├── admin.py
 │       ├── apps.py                # name="apps.social", label="social"
 │       ├── migrations/
@@ -204,7 +204,7 @@ frikkinwave-backend/
 │   # NOTE: listings.create_listing + bands.create_band call apps.social.services.record_activity
 │   # (service-to-service, no model import) to emit feed activities.
 │   #
-│   ├── reviews/                    # Ratings + reviews, gated on completed engagements (Phase 5, Block C)
+│   └── reviews/                   # Ratings + reviews, gated on completed engagements (Phase 5, Block C)
 │   │   ├── admin.py
 │   │   ├── apps.py                # name="apps.reviews", label="reviews"
 │   │   ├── migrations/

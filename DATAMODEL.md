@@ -324,6 +324,12 @@ hard delete, and re-following simply recreates the edge. **User→user only** fo
 band / venue targets are a later extension once the activity feed (Block B) exists to
 consume them.
 
+**Events:** follow publishes `follow.created` and unfollow publishes
+`follow.removed` to the outbox, consumed by `social.backfill_feed` /
+`social.prune_feed` — a new follow backfills the follower's inbox with recent
+activity, and an unfollow prunes it. Both are idempotent, because delivery is
+at-least-once.
+
 ---
 
 ### `social.Activity` (Phase 5 — Block B ✅)
