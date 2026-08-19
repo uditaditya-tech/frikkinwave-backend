@@ -360,23 +360,28 @@ class TestKafkaSecurity:
                 assert marker not in body, f"{f.name} looks like it carries a credential."
 
 
-class TestTopicsMatchTheEventRegistry:
+class TestTopicsMatchWhatIsPublished:
     """
     The chart's topic list IS the authorization surface: `simple` authorization
-    denies anything ungranted, and an ACL has to name a topic. A topic in the
-    registry but not here means stage 3 publishes into a denial; one here but not
-    in the registry means an ACL granting access to something nothing produces.
+    denies anything ungranted, and an ACL has to name a topic.
+
+    Compared against the `publish()` call sites rather than a registry — stage 5
+    deleted the registry, and the call sites are the real source of truth.
     """
 
     def test_chart_topics_match_registry_exactly(self) -> None:
-        from apps.events.registry import EVENT_HANDLERS
+        from tests.test_architecture import _published_topics
 
         chart = set(_values()["topics"])
-        registry = set(EVENT_HANDLERS)
-        assert chart == registry, (
-            f"Chart topics and apps/events/registry.py disagree. "
-            f"Only in chart: {sorted(chart - registry)}. "
-            f"Only in registry: {sorted(registry - chart)}."
+        published = _published_topics()
+        assert published <= chart, (
+            f"These topics are published but the chart grants no KafkaTopic or ACL "
+            f"for them: {sorted(published - chart)}. `authorization: simple` denies "
+            "anything ungranted, so every produce would be REJECTED in production "
+            "and fine in tests."
+        )
+        assert not (chart - published), (
+            f"The chart declares topics nothing publishes: {sorted(chart - published)}."
         )
 
     def test_declaring_a_kafkauser_requires_the_user_operator(self) -> None:

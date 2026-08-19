@@ -82,7 +82,7 @@ class TestIdentityBoundary:
 
 
 class TestOutboxDiscipline:
-    """Domain services publish to the outbox; they never enqueue Celery directly,
+    """Domain services publish to the outbox; they never dispatch directly,
     which is what could silently lose an event between COMMIT and enqueue."""
 
     def test_services_do_not_call_delay_directly(self) -> None:
@@ -96,17 +96,28 @@ class TestOutboxDiscipline:
                 if ".delay(" in line or ".apply_async(" in line:
                     violations.append(f"{path.relative_to(APPS_DIR.parent)}:{lineno}")
         assert not violations, (
-            "Services must publish() to the outbox, not enqueue Celery directly:\n  "
+            "Services must publish() to the outbox, not dispatch directly:\n  "
             + "\n  ".join(violations)
         )
 
-    def test_every_registered_topic_has_a_consumer(self) -> None:
-        from apps.events.registry import EVENT_HANDLERS
-        from config.celery import app as celery_app
+    def test_every_published_topic_has_a_subscriber(self) -> None:
+        """
+        A topic nobody consumes is legal under Kafka — that decoupling is the
+        point of stage 4 — but it is almost never intentional here. Flagging it
+        catches the typo'd topic name, which otherwise publishes happily into a
+        topic no group reads and reports nothing.
 
-        celery_app.loader.import_default_modules()
-        missing = [t for t, name in EVENT_HANDLERS.items() if name not in celery_app.tasks]
-        assert not missing, f"Topics with no registered consumer task: {missing}"
+        Exempt a topic explicitly below if it really is fire-and-forget.
+        """
+        deliberately_unconsumed: set[str] = set()
+
+        orphans = sorted(
+            _published_topics() - set(_kafka_subscriptions()) - deliberately_unconsumed
+        )
+        assert not orphans, (
+            f"These topics are published but nothing subscribes: {orphans}. "
+            "A misspelled topic looks exactly like this and is silent."
+        )
 
 
 class TestUserRefContract:
@@ -134,73 +145,13 @@ class TestUserRefContract:
 #
 # This ties the two halves together — Celery's routing table on one side, the
 # Helm chart's worker commands on the other — so the drift fails the build.
-# ---------------------------------------------------------------------------
-
 CHART_VALUES = APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "values.yaml"
-
-
-def _queues_consumed_by_the_cluster() -> set[str]:
-    """Every queue named by a worker Deployment in the chart's values."""
-    import yaml
-
-    values = yaml.safe_load(CHART_VALUES.read_text())
-    consumed: set[str] = set()
-    # Every entry under `workers` becomes a Deployment started with --queues.
-    for block in (values.get("workers") or {}).values():
-        if block.get("enabled", True) and block.get("queues"):
-            consumed.update(q.strip() for q in str(block["queues"]).split(","))
-    return consumed
-
-
-def _queue_for_task(task_name: str) -> str:
-    """Resolve a task to its queue exactly as Celery would at publish time."""
-    from django.conf import settings
-
-    from config.celery import app as celery_app
-
-    route = celery_app.amqp.router.route({}, task_name)
-    queue = route.get("queue")
-    # No matching route means the default queue.
-    return getattr(queue, "name", None) or settings.CELERY_TASK_DEFAULT_QUEUE
-
-
-def test_every_registered_handler_lands_on_a_consumed_queue() -> None:
-    """
-    A task routed to a queue no Deployment consumes is silently never run.
-
-    If this fails, either add the queue to a worker's `queues` in the chart, or
-    fix CELERY_TASK_ROUTES. Do not "fix" it by deleting the assertion — the
-    whole point is that the runtime symptom is invisible.
-    """
-    from apps.events.registry import EVENT_HANDLERS
-
-    consumed = _queues_consumed_by_the_cluster()
-    assert consumed, "No worker queues found in the Helm values — parsing broke."
-
-    stranded = {
-        task: _queue_for_task(task)
-        for task in EVENT_HANDLERS.values()
-        if _queue_for_task(task) not in consumed
-    }
-    assert not stranded, (
-        f"These tasks route to queues no worker consumes {sorted(consumed)}: {stranded}. "
-        "They would be enqueued and never executed, with no error anywhere."
-    )
-
-
-def test_the_outbox_relay_itself_is_consumed() -> None:
-    """
-    The relay is the backstop that makes delivery guaranteed. If *it* were
-    stranded on an unconsumed queue, every event would silently stop being
-    dispatched — the one failure that breaks all the others at once.
-    """
-    assert _queue_for_task("events.relay_outbox") in _queues_consumed_by_the_cluster()
 
 
 # ---------------------------------------------------------------------------
 # Kafka credentials reach only the components that run the outbox relay.
 #
-# EVENT_TRANSPORT=kafka needs broker credentials in the worker Deployment and the
+# The relay and the consumer Deployments are the Kafka clients; they need the
 # relay CronJob. Nothing else: web pods write the outbox row and nudge Celery,
 # and the notifications/search workers consume their own queues. Handing them a
 # credential they never use widens the blast radius of any one pod being
@@ -209,67 +160,53 @@ def test_the_outbox_relay_itself_is_consumed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_kafka_credentials_are_scoped_to_the_relay() -> None:
+def test_the_relay_is_a_single_writer() -> None:
+    """
+    Concurrent relays are SAFE — rows are claimed with
+    select_for_update(skip_locked=True) — but there is nothing to gain, and one
+    writer keeps the logs readable during a deploy. More importantly this pins
+    that a relay exists at all: with publish() no longer dispatching, it is the
+    only path from the outbox to Kafka, and nothing is delivered without it.
+    """
     import yaml
 
     values = yaml.safe_load(CHART_VALUES.read_text())
-    relay_workers = {
-        name
-        for name, cfg in (values.get("workers") or {}).items()
-        if cfg.get("enabled", True) and cfg.get("runsOutboxRelay")
-    }
-    assert relay_workers == {"worker"}, (
-        f"Expected only the general worker to carry Kafka credentials, got "
-        f"{sorted(relay_workers)}. Every extra one is a pod holding a broker "
-        "credential it never uses."
+    assert "relay" in values, "No relay config in the chart — nothing would deliver events."
+
+    template = (
+        APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "templates" / "deployment-relay.yaml"
+    ).read_text()
+    assert "replicas: 1" in template
+    assert "relay_outbox" in template and "--loop" in template
+
+
+def test_nothing_dispatches_from_the_request_path() -> None:
+    """
+    publish() must not produce to Kafka inline. The produce is synchronous, so
+    during a broker outage it would add up to KAFKA_FLUSH_TIMEOUT to every
+    user-facing request — a Kafka problem becoming a website problem.
+
+    EVENT_RELAY_INLINE exists only so tests can drive an event end to end; it
+    must default to off.
+    """
+    import yaml
+    from django.conf import settings
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    assert values["config"].get("EVENT_RELAY_INLINE") in (None, False, "false"), (
+        "EVENT_RELAY_INLINE must not be enabled in the deployed config."
     )
-
-
-def test_the_relay_worker_consumes_the_queue_the_relay_task_routes_to() -> None:
-    """
-    The worker flagged `runsOutboxRelay` must actually be the one that runs it.
-    Flag the wrong Deployment and the credentials land on a pod that never
-    produces, while the pod that does produce has none — which fails only once
-    the transport is flipped, in production.
-    """
-    import yaml
-
-    values = yaml.safe_load(CHART_VALUES.read_text())
-    relay_queue = _queue_for_task("events.relay_outbox")
-    flagged = {
-        name for name, cfg in (values.get("workers") or {}).items() if cfg.get("runsOutboxRelay")
-    }
-    for name in flagged:
-        queues = {q.strip() for q in str(values["workers"][name]["queues"]).split(",")}
-        assert relay_queue in queues, (
-            f"Worker '{name}' is flagged runsOutboxRelay but consumes {sorted(queues)}, "
-            f"not '{relay_queue}' where events.relay_outbox is routed."
-        )
-
-
-def test_the_default_event_transport_is_celery() -> None:
-    """
-    Deploying stage 3 must change nothing until the flag is flipped
-    deliberately. The event backbone works today; it is not worth betting on
-    one deploy.
-    """
-    import yaml
-
-    values = yaml.safe_load(CHART_VALUES.read_text())
-    assert values["config"]["EVENT_TRANSPORT"] == "celery"
+    # True under pytest by design (config/settings/local.py); the check above is
+    # the one that matters, since production.py never sets it.
+    assert settings.EVENT_RELAY_INLINE is True
 
 
 # ---------------------------------------------------------------------------
 # Kafka consumer groups (KAFKA.md stage 4).
 #
-# The Celery tests above stay while EVENT_TRANSPORT defaults to celery; stage 5
-# deletes them. These are their Kafka equivalents, guarding the same class of
-# failure: work that is never done, with nothing anywhere reporting an error.
-#
-# What CHANGES under Kafka is the direction. A topic with no subscriber is no
-# longer a bug — that decoupling is the entire point of stage 4. What is still a
-# bug is a declared subscription nobody runs, and a topic that had a consumer
-# under Celery losing it under Kafka.
+# Kafka is the only transport; there is no registry left to compare against, so
+# the source of truth is the code itself — what producers publish, and what apps
+# subscribe to. These guard work that is never done with nothing reporting it.
 # ---------------------------------------------------------------------------
 
 
@@ -286,41 +223,42 @@ def _kafka_subscriptions() -> dict[str, set[str]]:
     return out
 
 
-def test_every_celery_consumed_topic_also_has_a_kafka_subscription() -> None:
+def _published_topics() -> set[str]:
     """
-    The flip-safety guardrail, and the reason stage 4 is riskier than it looks.
+    Every topic any service publishes, read off the `publish(topic=...)` call
+    sites.
 
-    While both transports exist, a topic handled under Celery but not declared in
-    any consumers.py is processed today and silently stops being processed the
-    moment EVENT_TRANSPORT is flipped to kafka. Nothing errors: the producer
-    publishes happily, the message sits in a topic, and no consumer group ever
-    reads it.
+    Derived from the code rather than a hand-maintained table, because the table
+    is what stage 5 deleted — and because this checks the real runtime
+    requirement: `authorization: simple` denies any topic not granted, so a
+    topic missing from the chart is a DENIED produce, not a warning.
     """
-    from apps.events.registry import EVENT_HANDLERS
+    topics: set[str] = set()
+    for _app, path in _app_modules():
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+            if name != "publish":
+                continue
+            for kw in node.keywords:
+                if kw.arg == "topic" and isinstance(kw.value, ast.Constant):
+                    topics.add(kw.value.value)
+    return topics
 
-    subscribed = _kafka_subscriptions()
-    missing = sorted(set(EVENT_HANDLERS) - set(subscribed))
-    assert not missing, (
-        f"These topics have a Celery consumer but no Kafka subscription: {missing}. "
-        "Flipping EVENT_TRANSPORT=kafka would stop processing them, with no error "
-        "anywhere. Declare them in the owning app's consumers.py."
+
+def test_publish_call_sites_use_literal_topics() -> None:
+    """
+    The scan above can only see literal topic names. A computed one would be
+    invisible to every guardrail here — silently unchecked against the chart's
+    topics and ACLs, and therefore a produce that is denied in production and
+    fine in tests.
+    """
+    assert len(_published_topics()) >= 13, (
+        "Fewer literal publish(topic=...) call sites than expected — a topic is "
+        "probably being built dynamically, which no guardrail here can see."
     )
-
-
-def test_no_subscription_exists_for_a_topic_nothing_publishes() -> None:
-    """
-    The reverse drift: a handler wired to a topic no producer writes to. Harmless
-    at runtime and therefore invisible — it just never runs, and reads in review
-    as working code.
-    """
-    from apps.events.registry import EVENT_HANDLERS
-
-    orphans = {
-        topic: sorted(apps)
-        for topic, apps in _kafka_subscriptions().items()
-        if topic not in EVENT_HANDLERS
-    }
-    assert not orphans, f"These subscriptions listen to topics nothing publishes: {orphans}."
 
 
 def test_a_consumer_group_maps_to_an_app_that_declares_subscriptions() -> None:

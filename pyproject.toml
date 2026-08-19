@@ -54,14 +54,13 @@ disable_error_code = ["type-arg"]
 [[tool.mypy.overrides]]
 # Celery's task decorators are untyped in the shipped stubs, so @app.task /
 # @shared_task trip `untyped-decorator` under strict mode. Suppress it in the
-# Celery app and every app's tasks.py — the task bodies themselves stay typed.
-module = ["config.celery", "apps.*.tasks"]
+# Django management commands use untyped BaseCommand hooks; bodies stay typed.
+module = ["apps.*.management.commands.*"]
 disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]
 module = [
     "environ.*",
-    "celery.*",
     # confluent-kafka ships no stubs. Imported lazily inside functions in
     # apps/events/{kafka,consumer}.py, so nothing breaks without it installed.
     "confluent_kafka.*",

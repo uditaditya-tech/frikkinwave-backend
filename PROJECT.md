@@ -19,8 +19,7 @@ A global, profile-centric social network for musicians and live-shows industry p
 | Framework | Django 6.x + DRF | Three-layer architecture fits naturally; battle-tested |
 | Auth | simplejwt + blacklist app | Refresh token rotation with blacklisting |
 | Database | PostgreSQL + pgvector | One store for relational data AND embeddings |
-| Event backbone | Transactional outbox → Kafka (Strimzi) | Events commit with the state change; Kafka is the transport. `EVENT_TRANSPORT` selects celery or kafka |
-| Background jobs | Celery + Redis (being replaced) | Still the default transport; Kafka consumers run alongside. See `KAFKA.md` |
+| Async work | Transactional outbox → Kafka (Strimzi) | The only transport. Events commit with the state change; a relay produces them; consumer groups handle them. See `KAFKA.md` |
 | AI | OpenAI text-embedding-3-small + gpt-4o-mini | Cheapest capable models; swap-able behind a service interface |
 | API contract | drf-spectacular → OpenAPI schema | Contract-first; schema exposed at /api/schema/ |
 | Deployment | AWS EKS (Kubernetes) + Helm | Same Docker image; per-service Deployments as apps are extracted |

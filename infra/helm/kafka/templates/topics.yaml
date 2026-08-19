@@ -6,8 +6,7 @@
   and the topic list are the same list. tests/test_infrastructure.py compares
   it against apps/events/registry.py and fails the build if they drift.
 
-  Nothing produces to these yet — the app is still on Celery. They exist so
-  stage 3 inherits a broker that is already authorized correctly.
+  The relay produces to these; the consumer groups read them.
 */}}
 {{- range .Values.topics }}
 ---

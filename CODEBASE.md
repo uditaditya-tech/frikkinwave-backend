@@ -18,19 +18,17 @@ frikkinwave-backend/
 │   │   ├── migrations/
 │   │   │   └── 0001_initial.py    # OutboxEvent (+ partial index on pending rows)
 │   │   ├── models.py              # OutboxEvent (topic, payload, published_at, attempts, last_error)
-│   │   ├── registry.py            # EVENT_HANDLERS: topic -> Celery task name. CELERY ONLY —
-│   │   │                          # under Kafka each app declares its own consumers.py (stage 4)
-│   │   ├── services.py            # publish() (in-transaction) + relay_pending() + _dispatch(),
-│   │   │                          # which branches on EVENT_TRANSPORT (celery | kafka)
+│   │   ├── services.py            # publish() (in-transaction) + relay_pending() + _dispatch().
+│   │   │                          # publish() dispatches NOTHING — the relay Deployment does
 │   │   ├── kafka.py               # Kafka PRODUCER. Synchronous produce+flush: the relay marks an
 │   │   │                          # event published only after the broker acknowledges it
 │   │   ├── consumer.py            # Kafka CONSUMER runtime. Manual offset commits, bounded retry,
 │   │   │                          # dead-letter topic. Every failure path commits — a poison
 │   │   │                          # message otherwise blocks its whole partition
-│   │   ├── tasks.py               # events.relay_outbox (the post-commit nudge)
 │   │   ├── management/
 │   │   │   └── commands/
-│   │   │       ├── relay_outbox.py    # the sweep — schedule it (K8s CronJob) to guarantee delivery
+│   │   │       ├── relay_outbox.py    # `--loop` is the relay Deployment: the ONLY path from
+│   │   │       │                      # the outbox to Kafka. Single pass without it
 │   │   │       └── consume_events.py  # `--group <app>` — one process per consumer group,
 │   │   │                              # replaces `celery worker --queues=<queue>`
 │   │   └── tests/
@@ -44,14 +42,12 @@ frikkinwave-backend/
 │   ├── notifications/             # EXTRACTED SERVICE — own queue, own Deployment
 │   │   ├── renderers.py           # topic -> (subject, body) from primitives only
 │   │   ├── services.py            # deliver(); the only service layer touching no model
-│   │   ├── tasks.py               # 8 consumers, named notifications.* (routed to the notifications queue)
 │   │   ├── consumers.py           # KAFKA subscriptions: 8 topics -> services.deliver(); imports no other app
 │   │   └── tests/                 # incl. a test asserting it imports no other app
 │
 │   ├── search/                    # EXTRACTED SERVICE — semantic search + embedding index
 │   │   ├── models.py              # ProfileEmbedding: profile_id is a bare UUID (NO FK), is_available replica
 │   │   ├── services.py            # search() -> [(profile_id, similarity)] — ids, never ORM objects
-│   │   ├── tasks.py               # search.index_profile (routed to the search queue)
 │   │   ├── consumers.py           # KAFKA subscriptions: profile.updated -> index_profile
 │   │   ├── migrations/
 │   │   │   ├── 0001_initial.py    # VectorExtension (owned here) + ProfileEmbedding + HNSW
@@ -117,7 +113,6 @@ frikkinwave-backend/
 │   │   ├── models.py              # ContactRequest (sender/recipient FKs via AUTH_USER_MODEL string ref)
 │   │   ├── serializers.py         # Read (conditional contact_email reveal) + Create
 │   │   ├── services.py            # send / list / get / accept / decline + email notify fns; calls users.services for username lookup
-│   │   ├── tasks.py               # Celery tasks: notify recipient on send, notify sender on accept (emitted via on_commit)
 │   │   ├── urls.py                # /requests/, /requests/<id>/, /requests/<id>/accept/, /decline/
 │   │   ├── views.py               # ListCreate, Detail, Accept, Decline views
 │   │   └── tests/
@@ -134,7 +129,6 @@ frikkinwave-backend/
 │   │   ├── models.py              # Listing, ListingApplication (FKs via AUTH_USER_MODEL string ref)
 │   │   ├── serializers.py         # Listing Read/Create/Update + Application Read (reveal-on-accept)/Create
 │   │   ├── services.py            # listing CRUD (author-only) + apply/list/accept/decline + email notify fns
-│   │   ├── tasks.py               # Celery tasks: notify author on apply, notify applicant on accept (on_commit)
 │   │   ├── urls.py                # /, /<id>/, /<id>/apply/, /applications/, /applications/<id>/(accept|decline)
 │   │   ├── views.py               # ListingListCreate/Detail/Apply + ApplicationList/Detail/Accept/Decline views
 │   │   └── tests/
@@ -151,7 +145,6 @@ frikkinwave-backend/
 │   │   ├── models.py              # Band, BandMembership (owner/member FKs via AUTH_USER_MODEL string ref)
 │   │   ├── serializers.py         # Band Read (w/ accepted roster)/Create/Update + Membership Read (reveal-on-accept)/Invite
 │   │   ├── services.py            # band CRUD (owner-only, slug derivation) + invite/list/accept/decline + email notify fns
-│   │   ├── tasks.py               # Celery tasks: notify member on invite, notify owner on accept (on_commit)
 │   │   ├── urls.py                # /, /<slug>/, /<slug>/invite/, /memberships/, /memberships/<id>/(accept|decline)
 │   │   ├── views.py               # BandListCreate/Detail/Invite + MembershipList/Detail/Accept/Decline views
 │   │   └── tests/
@@ -168,7 +161,6 @@ frikkinwave-backend/
 │   │   ├── models.py              # EngagementRequest (requester/musician FKs via AUTH_USER_MODEL string ref)
 │   │   ├── serializers.py         # Read (reveal-on-accept/completed) + Create
 │   │   ├── services.py            # send/list/get/accept/decline/complete + email notify fns
-│   │   ├── tasks.py               # Celery tasks: notify musician on send, notify requester on accept (on_commit)
 │   │   ├── urls.py                # /, /<id>/, /<id>/(accept|decline|complete)
 │   │   ├── views.py               # EngagementListCreate/Detail/Accept/Decline/Complete views
 │   │   └── tests/
@@ -200,7 +192,6 @@ frikkinwave-backend/
 │       ├── models.py              # Follow, Activity (canonical log), FeedEntry (fan-out inbox)
 │       ├── serializers.py         # Following/Follower Read + FeedEntry Read (flattens joined Activity)
 │       ├── services.py            # follow/unfollow (+ backfill/prune emit) + record_activity/fan_out/backfill/prune/get_feed + Verb alias
-│       ├── tasks.py               # Celery: fan_out_activity, backfill_feed, prune_feed (thin → services)
 │       ├── consumers.py           # KAFKA subscriptions: activity.recorded, follow.created, follow.removed
 │       ├── management/
 │       │   └── commands/
@@ -224,7 +215,6 @@ frikkinwave-backend/
 │   │   ├── models.py              # Review (author/subject FKs; denormalized context_type/context_id — no cross-app FK)
 │   │   ├── serializers.py         # ReviewCreate (write) + ReviewRead (public)
 │   │   ├── services.py            # create_review (engagement-gated) + list_reviews_for + rating_summary + propagate_rating_to_profile
-│   │   ├── tasks.py               # Celery: propagate_profile_rating (pushes the rollup onto the profile, on_commit)
 │   │   ├── consumers.py           # KAFKA subscription: review.created
 │   │   ├── management/
 │   │   │   └── commands/
@@ -244,7 +234,6 @@ frikkinwave-backend/
 │
 ├── config/                        # Django project config (not an app)
 │   ├── __init__.py                # Loads the Celery app so @shared_task binds
-│   ├── celery.py                  # Celery app (Redis broker, autodiscovers tasks.py)
 │   ├── asgi.py
 │   ├── wsgi.py
 │   ├── urls.py                    # Root URL conf — all routes wired here

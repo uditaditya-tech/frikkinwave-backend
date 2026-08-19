@@ -281,3 +281,43 @@ def run(
         logger.info("consumer_stopped", extra={"group": group, "handled": handled})
 
     return handled
+
+
+def deliver_inline(*, topic: str, payload: dict[str, Any]) -> int:
+    """
+    Deliver an event to every in-process subscriber. **Tests only.**
+
+    A stand-in for the broker, and the direct descendant of
+    `CELERY_TASK_ALWAYS_EAGER`: it lets a test drive an event from the producing
+    service all the way through its handler without a Kafka cluster, so the 60+
+    `django_capture_on_commit_callbacks(execute=True)` call sites keep working
+    unchanged.
+
+    Deliberately mirrors real delivery semantics rather than being convenient:
+
+    - **every** subscribing app runs, not just the first, because that is what
+      separate consumer groups do;
+    - a topic nobody subscribes to is a **no-op**, not an error — under Kafka a
+      produce to an unconsumed topic succeeds;
+    - handler exceptions **propagate**, so a test asserting a failure path sees
+      the real error instead of a dead-lettered shrug.
+
+    Returns the number of handlers invoked.
+    """
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    invoked = 0
+    for config in django_apps.get_app_configs():
+        if not config.name.startswith("apps."):
+            continue
+        try:
+            module = importlib.import_module(f"{config.name}.consumers")
+        except ModuleNotFoundError:
+            continue
+        handler = getattr(module, "SUBSCRIPTIONS", {}).get(topic)
+        if handler is not None:
+            handler(**payload)
+            invoked += 1
+    return invoked

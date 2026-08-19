@@ -168,11 +168,14 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ setup
 
     def _make_eager_and_silence_email(self) -> None:
-        """Run Celery in-process and drop all outgoing mail for THIS process only."""
-        from config.celery import app as celery_app
+        """
+        Relay events in-process and drop all outgoing mail for THIS process only.
 
-        celery_app.conf.task_always_eager = True
-        celery_app.conf.task_eager_propagates = True
+        Was Celery eager mode; the seeder needs the same thing for the same
+        reason — it must produce a fully populated demo without a broker or a
+        relay process running alongside it.
+        """
+        settings.EVENT_RELAY_INLINE = True
         settings.EMAIL_BACKEND = "django.core.mail.backends.dummy.EmailBackend"
 
     # ----------------------------------------------------------------- users

@@ -9,15 +9,17 @@ from .base import *
 
 DEBUG = True
 
-# Under pytest, run Celery tasks inline so tests need no broker or worker.
-# Set here (the test settings module) rather than in conftest: Celery reads
-# CELERY_TASK_ALWAYS_EAGER from Django settings once at finalize, and Django
-# loads settings before any conftest body runs. PYTEST_VERSION is set by pytest
-# at startup, so it is reliably present by the time this module is imported.
-# Plain `runserver` dev keeps eager off and talks to the real Redis broker.
+# Under pytest, relay the outbox inline on commit so tests drive events end to
+# end without a broker or a relay process.
+#
+# Set here rather than in conftest for the same reason the Celery eager flag was:
+# Django loads settings before any conftest body runs. PYTEST_VERSION is set by
+# pytest at startup, so it is reliably present by the time this module imports.
+#
+# Plain `runserver` leaves it off — run `manage.py relay_outbox --loop` alongside
+# the server, which is what production does.
 if os.environ.get("PYTEST_VERSION") is not None:
-    CELERY_TASK_ALWAYS_EAGER = True
-    CELERY_TASK_EAGER_PROPAGATES = True
+    EVENT_RELAY_INLINE = True
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
 

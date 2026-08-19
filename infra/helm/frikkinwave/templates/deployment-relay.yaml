@@ -1,0 +1,62 @@
+{{- /*
+The outbox relay (KAFKA.md stage 5).
+
+Replaces both halves of the old Celery arrangement: the post-commit `.delay()`
+nudge AND the CronJob sweep. `publish()` now dispatches nothing — a synchronous
+Kafka produce inside a request would add up to KAFKA_FLUSH_TIMEOUT to every
+user-facing request during a broker outage — so this process polls the outbox
+and is the ONLY thing that moves events to Kafka.
+
+Single replica on purpose. Concurrent relays are safe (rows are claimed with
+select_for_update(skip_locked=True)), but there is nothing to gain: the bottleneck
+is Kafka, not the poll, and one process keeps the ordering easy to reason about.
+
+If this is down, NOTHING is delivered. It is the highest-consequence pod here.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-relay
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/component: relay
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  # Recreate, not RollingUpdate: two relays briefly overlapping is harmless but
+  # pointless, and a single writer makes the logs readable during a deploy.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: relay
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "frikkinwave.configChecksum" . }}
+      labels:
+        {{- include "frikkinwave.labels" . | nindent 8 }}
+        app.kubernetes.io/component: relay
+    spec:
+      securityContext:
+        {{- include "frikkinwave.kafkaPodSecurityContext" . | nindent 8 }}
+      # Long enough for an in-flight batch to finish and mark itself published;
+      # anything abandoned is redelivered, and redelivery is a cost.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: relay
+          image: {{ include "frikkinwave.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "manage.py", "relay_outbox", "--loop"]
+          envFrom:
+            {{- include "frikkinwave.envFrom" . | nindent 12 }}
+          env:
+            {{- include "frikkinwave.podIpEnv" . | nindent 12 }}
+          volumeMounts:
+            {{- include "frikkinwave.kafkaVolumeMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.relay.resources | nindent 12 }}
+      volumes:
+        {{- include "frikkinwave.kafkaVolumes" . | nindent 8 }}

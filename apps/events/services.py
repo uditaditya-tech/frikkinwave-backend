@@ -16,7 +16,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.events.models import OutboxEvent
-from apps.events.registry import EVENT_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +37,13 @@ def publish(
     change commit together, so a rollback discards the event and a crash after
     COMMIT still leaves it durably recorded.
 
-    The relay nudge *is* fired on_commit: it is a pure latency optimisation and
-    is allowed to be lost, because the periodic sweep re-picks anything missed.
+    Nothing is dispatched from here. The relay Deployment
+    (`relay_outbox --loop`) picks the row up within a second; putting a
+    synchronous Kafka produce in the request path would add up to
+    KAFKA_FLUSH_TIMEOUT to every user-facing request during a broker outage.
+
+    The one exception is `EVENT_RELAY_INLINE` (tests), where the on_commit hook
+    relays inline so a test can drive an event end to end without a broker.
     """
     # An explicit id lets a producer put the event id *inside* the payload (so a
     # consumer can use it as an idempotency key) without a second write.
@@ -47,9 +51,8 @@ def publish(
         **({"id": event_id} if event_id else {}), topic=topic, payload=payload
     )
 
-    from apps.events.tasks import relay_outbox
-
-    transaction.on_commit(lambda: relay_outbox.delay())
+    if settings.EVENT_RELAY_INLINE:
+        transaction.on_commit(relay_pending)
 
     logger.info("event_published", extra={"event_id": str(event.id), "topic": topic})
     return event
@@ -83,23 +86,12 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
             if event is None:
                 continue  # already claimed by another relay
 
-            # The consumer lookup is a CELERY concern only. Under Kafka the
-            # producer deliberately does not know who listens — that is the
-            # whole point of stage 4 — so a topic with no entry here is not an
-            # error, it is just a topic nobody has subscribed to yet.
-            task_name = EVENT_HANDLERS.get(event.topic)
-            if task_name is None and settings.EVENT_TRANSPORT != "kafka":
-                event.attempts += 1
-                event.last_error = f"No consumer registered for topic '{event.topic}'"
-                event.save(update_fields=["attempts", "last_error"])
-                logger.warning(
-                    "event_no_consumer",
-                    extra={"event_id": str(event.id), "topic": event.topic},
-                )
-                continue
-
+            # No consumer lookup. The producer does not know who listens — that
+            # is the point of stage 4, and there is no longer a registry to ask.
+            # A topic nobody subscribes to is not an error; it is a topic nobody
+            # has subscribed to yet.
             try:
-                _dispatch(topic=event.topic, task_name=task_name, payload=event.payload)
+                _dispatch(topic=event.topic, payload=event.payload)
             except Exception as exc:
                 event.attempts += 1
                 event.last_error = repr(exc)
@@ -117,52 +109,27 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
     return published
 
 
-def _dispatch(*, topic: str, task_name: str | None, payload: dict[str, Any]) -> None:
+def _dispatch(*, topic: str, payload: dict[str, Any]) -> None:
     """
-    Hand an event off, by whichever transport is configured.
+    Produce the event to its Kafka topic.
 
-    This function IS stage 3 (KAFKA.md). `publish()` and the outbox are
-    untouched: Kafka does not solve dual-write, so the event row still commits
-    with the state change and the sweep still recovers anything stranded. Only
-    the hand-off moves.
+    `publish()` and the outbox are unaffected by any of this — Kafka does not
+    solve dual-write, so the event row still commits with the state change and
+    the sweep still recovers anything stranded. Only the hand-off lives here.
 
     Raising propagates to `relay_pending`, which increments `attempts`, records
-    `last_error`, and leaves the event unpublished for the next sweep.
+    `last_error`, and leaves the event unpublished for the next pass.
     """
-    if settings.EVENT_TRANSPORT == "kafka":
-        from apps.events.kafka import produce
+    if settings.EVENT_RELAY_INLINE:
+        # Tests only. Delivers to in-process subscribers instead of a broker —
+        # see apps.events.consumer.deliver_inline. Imported from the consumer
+        # RUNTIME, never from an app's consumers module, so the producer still
+        # has no idea who listens.
+        from apps.events.consumer import deliver_inline
 
-        # The event id would be the natural key, but it is not passed down here
-        # and partition-by-topic is right for these events anyway: ordering
-        # matters per aggregate, and nothing today depends on cross-topic order.
-        produce(topic=topic, payload=payload)
+        deliver_inline(topic=topic, payload=payload)
         return
 
-    if task_name is None:
-        raise LookupError(f"No consumer registered for topic '{topic}'")
+    from apps.events.kafka import produce
 
-    _dispatch_celery(task_name=task_name, payload=payload)
-
-
-def _dispatch_celery(*, task_name: str, payload: dict[str, Any]) -> None:
-    """
-    Hand an event to its consumer, resolving the task **by name**.
-
-    Deliberately not `send_task`: that pushes straight to the broker and bypasses
-    `task_always_eager`, which would make every eager context (the test suite, the
-    demo seeder) silently skip consumers. Resolving through the registry and
-    calling `apply_async` keeps eager mode working while still avoiding any
-    cross-app import — the registry stays the only coupling.
-    """
-    from config.celery import app as celery_app
-
-    task = celery_app.tasks.get(task_name)
-    if task is None:
-        # Registry not populated yet (e.g. a web process that has imported no
-        # tasks module). Autodiscovery does this at worker boot.
-        celery_app.loader.import_default_modules()
-        task = celery_app.tasks.get(task_name)
-    if task is None:
-        raise LookupError(f"Task '{task_name}' is not registered")
-
-    task.apply_async(kwargs=payload)
+    produce(topic=topic, payload=payload)

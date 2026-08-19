@@ -13,7 +13,6 @@ from django.core.management import call_command
 from django.db import transaction
 
 from apps.events.models import OutboxEvent
-from apps.events.registry import EVENT_HANDLERS
 from apps.events.services import MAX_ATTEMPTS, publish, relay_pending
 from apps.social.models import Activity, FeedEntry, Follow
 from apps.users.models import User
@@ -69,13 +68,19 @@ class TestRelay:
         assert relay_pending() == 1
         assert relay_pending() == 0  # nothing left pending
 
-    def test_unknown_topic_is_parked_not_lost(self) -> None:
-        publish(topic="nope.unknown", payload={})
-        assert relay_pending() == 0
-        event = OutboxEvent.objects.get()
-        assert event.published_at is None  # retained for inspection
-        assert event.attempts == 1
-        assert "No consumer registered" in event.last_error
+    def test_an_unconsumed_topic_is_published_not_parked(self) -> None:
+        """
+        The producer no longer knows who consumes, so it cannot park an event for
+        having no consumer — see KAFKA.md stage 4. Delivery is the broker's
+        problem now; a topic nobody reads is a valid, if usually accidental,
+        state.
+        """
+        event = publish(topic="nobody.listens", payload={"x": 1})
+
+        assert relay_pending() == 1
+        event.refresh_from_db()
+        assert event.published_at is not None
+        assert event.last_error == ""
 
     def test_exhausted_events_stop_being_retried(self) -> None:
         publish(topic="nope.unknown", payload={})
@@ -91,13 +96,18 @@ class TestRelay:
 
 @pytest.mark.django_db
 class TestRegistry:
-    def test_every_registered_topic_maps_to_a_real_task(self) -> None:
-        from config.celery import app as celery_app
+    def test_every_subscribed_topic_resolves_to_a_callable(self) -> None:
+        """
+        Replaces the old "every registry entry names a real Celery task" check.
+        The registry is gone; the equivalent breakage now is a consumers.py
+        entry pointing at something that is not callable, which fails only when
+        that topic is next delivered.
+        """
+        from apps.events.consumer import load_subscriptions
 
-        # Importing tasks registers them; autodiscovery does this at worker boot.
-        celery_app.loader.import_default_modules()
-        for topic, task_name in EVENT_HANDLERS.items():
-            assert task_name in celery_app.tasks, f"{topic} -> missing task {task_name}"
+        for app in ("notifications", "search", "social", "reviews"):
+            for topic, handler in load_subscriptions(app).items():
+                assert callable(handler), f"{app}: {topic} -> {handler!r} is not callable"
 
 
 @pytest.mark.django_db

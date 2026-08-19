@@ -13,8 +13,8 @@ from __future__ import annotations
 import pytest
 from django.core.mail import EmailMessage
 
-from apps.events.registry import EVENT_HANDLERS
 from apps.notifications import services
+from apps.notifications.consumers import SUBSCRIPTIONS
 from apps.notifications.renderers import RENDERERS
 from apps.notifications.services import UnknownNotificationKind
 
@@ -22,21 +22,18 @@ from apps.notifications.services import UnknownNotificationKind
 class TestContract:
     def test_every_topic_routed_here_has_a_renderer(self) -> None:
         """
-        The registry and the renderers must not drift. A topic pointed at this
+        The subscriptions and the renderers must not drift. A topic pointed at this
         service with no renderer raises at delivery time — in a worker, where
         nobody is watching — so it is caught here instead.
         """
-        routed = {
-            topic for topic, task in EVENT_HANDLERS.items() if task.startswith("notifications.")
-        }
-        assert routed, "No topics route to notifications — the registry lost them."
+        routed = set(SUBSCRIPTIONS)
+        assert routed, "notifications/consumers.py declares no subscriptions."
         assert routed <= set(RENDERERS), f"No renderer for: {sorted(routed - set(RENDERERS))}"
 
     def test_renderer_keys_match_their_topics(self) -> None:
         """Renderer keys are the topic strings, so copy is greppable from a topic."""
-        for topic, task in EVENT_HANDLERS.items():
-            if task.startswith("notifications."):
-                assert topic in RENDERERS
+        for topic in SUBSCRIPTIONS:
+            assert topic in RENDERERS
 
 
 class TestDeliver:
@@ -86,7 +83,7 @@ class TestDeliver:
         assert len(mailoutbox) == 0
 
     def test_unknown_kind_raises(self, mailoutbox: list[EmailMessage]) -> None:
-        """Contract drift between registry and renderers must be loud."""
+        """Contract drift between subscriptions and renderers must be loud."""
         with pytest.raises(UnknownNotificationKind):
             services.deliver(kind="nope.not_a_thing", recipient_email="a@example.com")
         assert len(mailoutbox) == 0
@@ -113,7 +110,7 @@ class TestIsolation:
         import pathlib
 
         pkg = pathlib.Path(services.__file__).parent
-        for module in ("services.py", "renderers.py", "tasks.py"):
+        for module in ("services.py", "renderers.py", "consumers.py"):
             tree = ast.parse((pkg / module).read_text())
             imported = [n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
             offenders = [

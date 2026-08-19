@@ -182,59 +182,30 @@ OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
 SEARCH_SIMILARITY_THRESHOLD = env.float("SEARCH_SIMILARITY_THRESHOLD", default=0.4)
 
 # ---------------------------------------------------------------------------
-# Celery (Redis broker)
-# Async work runs through Celery; tasks are wired as event handlers, not inline
-# view calls (see "Events for async work" in CLAUDE.md). Locally the broker is
-# the docker-compose Redis; in production it is ElastiCache (set via env).
-# ---------------------------------------------------------------------------
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
-CELERY_TASK_SERIALIZER = "json"
-CELERY_RESULT_SERIALIZER = "json"
-CELERY_ACCEPT_CONTENT = ["json"]
-CELERY_TIMEZONE = "UTC"
-# When True, tasks run inline in the calling process (used in tests via the
-# autouse fixture in conftest.py). Real workers run with this False.
-# ---------------------------------------------------------------------------
-# Queue routing.
+# Events (KAFKA.md)
 #
-# Notifications run on their own queue, consumed by their own Deployment, so a
-# slow or wedged mail provider cannot starve embedding generation or feed
-# fan-out — everything shared one queue and one worker before this.
-#
-# The failure mode this introduces: a task routed to a queue no worker consumes
-# is never executed and never errors. tests/test_architecture.py asserts every
-# registered handler lands on a queue some Deployment in the Helm chart is
-# actually started with.
+# Kafka is the only transport. The EVENT_TRANSPORT flag is gone with stage 5 —
+# it existed to make the switchover reversible, and it did its job twice.
 # ---------------------------------------------------------------------------
-CELERY_TASK_DEFAULT_QUEUE = "celery"
-CELERY_TASK_ROUTES = {
-    "notifications.*": {"queue": "notifications"},
-    # Embedding work is spiky and bound by OpenAI latency, so it gets its own
-    # worker rather than competing with feed fan-out for the general queue.
-    "search.*": {"queue": "search"},
-}
 
-CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
-CELERY_TASK_EAGER_PROPAGATES = True
+#: Run the outbox relay INLINE in the producer's process, on commit.
+#:
+#: False in production: a synchronous Kafka produce in the request path would
+#: add up to KAFKA_FLUSH_TIMEOUT to every user-facing request during a broker
+#: outage. The relay Deployment (`relay_outbox --loop`) does the work instead.
+#:
+#: True under pytest, so `django_capture_on_commit_callbacks(execute=True)`
+#: still drives events end to end without a broker or a relay process — the same
+#: trick CELERY_TASK_ALWAYS_EAGER used to play. Set in local.py for the same
+#: reason it was: settings load before any conftest body runs.
+EVENT_RELAY_INLINE = env.bool("EVENT_RELAY_INLINE", default=False)
 
-# ---------------------------------------------------------------------------
-# Event transport (KAFKA.md stage 3)
-#
-# Which way the outbox relay hands an event off. `publish()` and the outbox are
-# NOT affected by this — they still write a row inside the producer's
-# transaction, because Kafka does not solve dual-write. Only _dispatch() looks
-# at this setting.
-#
-# Defaults to celery so this setting changing nothing is the safe state. Flip it
-# in production without an image rebuild:
-#     helm upgrade ... --reset-then-reuse-values --set config.EVENT_TRANSPORT=kafka
-# and flip it straight back if anything looks wrong. The event backbone works
-# today; it is not worth betting on one deploy.
-# ---------------------------------------------------------------------------
-EVENT_TRANSPORT = env("EVENT_TRANSPORT", default="celery")
+#: Seconds the relay loop sleeps when it finds nothing. The upper bound on event
+#: latency, so keep it short — this is what replaced the Celery post-commit
+#: nudge. A full batch skips the sleep entirely so a backlog drains at speed.
+EVENT_RELAY_INTERVAL = env.float("EVENT_RELAY_INTERVAL", default=1.0)
 
-# Only read when EVENT_TRANSPORT=kafka. The credential and CA come from the
+# The credential and CA come from the
 # Strimzi-generated Secrets (KafkaUser `frikkinwave-app` and the cluster CA),
 # mounted into the worker and the relay CronJob — never baked into the image and
 # never in the chart's values.

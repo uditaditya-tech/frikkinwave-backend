@@ -4,8 +4,7 @@ anyio==4.13.0
 asgiref==3.11.1
 attrs==26.1.0
 billiard==4.2.4
-celery==5.6.3
-# Kafka client for EVENT_TRANSPORT=kafka (see KAFKA.md stage 3). librdkafka-backed;
+# Kafka client — the only event transport (KAFKA.md). librdkafka-backed;
 # ships manylinux_2_28_aarch64 wheels, so the Graviton image needs no source build.
 confluent-kafka==2.15.0
 certifi==2026.5.20

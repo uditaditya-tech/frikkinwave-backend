@@ -25,15 +25,8 @@ config:
   ALLOWED_HOSTS: api.frikkinwave.com
   CORS_ALLOWED_ORIGINS: https://frikkinwave.com,https://www.frikkinwave.com
   CSRF_TRUSTED_ORIGINS: https://api.frikkinwave.com,https://frikkinwave.com
-  # In-cluster Redis, addressed by its Service DNS name.
-  CELERY_BROKER_URL: redis://frikkinwave-redis:6379/0
   # Semantic-search relevance floor. 0.8 is unusable for text-embedding-3-small.
   SEARCH_SIMILARITY_THRESHOLD: "0.4"
-  # How the outbox relay hands events off: celery | kafka. Defaults to celery so
-  # deploying stage 3 changes nothing. Flip live, no image rebuild:
-  #   helm upgrade ... --reset-then-reuse-values --set config.EVENT_TRANSPORT=kafka
-  # and flip straight back if anything looks wrong.
-  EVENT_TRANSPORT: celery
   KAFKA_BOOTSTRAP_SERVERS: frikkinwave-kafka-bootstrap.kafka.svc.cluster.local:9093
   # mTLS: SSL, not SASL_SSL. There is no SASL mechanism, no username and no
   # password — the client certificate below IS the identity, and Kafka authorizes
@@ -58,67 +51,21 @@ web:
       memory: 640Mi
 
 # ---------------------------------------------------------------------------
-# Celery workers — one Deployment per queue.
+# The outbox relay.
 #
-# A map rather than three near-identical blocks: adding a service is a queue and
-# a few limits, not another template. Each key becomes a Deployment named
-# <release>-<key>.
-#
-# The split is the point. Everything shared one queue and one worker until the
-# notifications and search extractions; a slow mail provider or a stalled OpenAI
-# call could stall feed fan-out behind it.
-#
-# NOTE: a task routed to a queue that appears in no entry here is enqueued and
-# never executed, with no error anywhere. tests/test_architecture.py reads this
-# map and fails the build on that drift.
+# One Deployment running `relay_outbox --loop`. Replaces the Celery worker that
+# ran the nudge AND the CronJob sweep — publish() no longer dispatches anything,
+# so this is the only path from the outbox to Kafka. If it is down, nothing is
+# delivered.
 # ---------------------------------------------------------------------------
-workers:
-  # General: feed fan-out, rating rollups, the outbox relay.
-  worker:
-    enabled: true
-    # This Deployment runs events.relay_outbox, so it is the only worker that
-    # needs Kafka credentials when EVENT_TRANSPORT=kafka.
-    runsOutboxRelay: true
-    replicaCount: 1
-    concurrency: 2
-    queues: celery
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
-
-  # Extracted service — email delivery. Almost entirely waiting on SMTP, so
-  # concurrency buys a lot per unit of memory.
-  notifications:
-    enabled: true
-    replicaCount: 1
-    concurrency: 4
-    queues: notifications
-    resources:
-      requests:
-        cpu: 50m
-        memory: 224Mi
-      limits:
-        cpu: 300m
-        memory: 384Mi
-
-  # Extracted service — profile embedding. Spiky and bound by OpenAI latency,
-  # which is precisely why it must not share a queue with anything user-facing.
-  search:
-    enabled: true
-    replicaCount: 1
-    concurrency: 2
-    queues: search
-    resources:
-      requests:
-        cpu: 50m
-        memory: 224Mi
-      limits:
-        cpu: 300m
-        memory: 448Mi
+relay:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 224Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
 
 # ---------------------------------------------------------------------------
 # Kafka consumer groups (KAFKA.md stage 4b).
@@ -130,13 +77,10 @@ workers:
 # The group name IS the app label: `search` runs apps/search/consumers.py. There
 # is no mapping between them and therefore nothing to drift.
 #
-# These run alongside the Celery workers while EVENT_TRANSPORT is celery, where
-# they simply poll topics nothing is publishing to. That idle cost is the price
-# of the flag staying reversible; stage 5 deletes the Celery side.
-#
-# SAME SILENT FAILURE as the Celery queues: a group declared in a consumers.py
-# with no Deployment here is never run, and nothing anywhere reports it.
-# tests/test_architecture.py ties the two together.
+# SILENT FAILURE to watch: a group declared in an app's consumers.py with no
+# Deployment here is never run, and nothing anywhere reports it — the same shape
+# as the Celery queue bug this replaced. tests/test_architecture.py ties the two
+# together.
 # ---------------------------------------------------------------------------
 consumers:
   enabled: true
@@ -178,17 +122,6 @@ kafka:
   # This is what makes the 0440 client key readable by a non-root container.
   fsGroup: 10001
 
-redis:
-  enabled: true
-  image: redis:7-alpine
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-
 migrations:
   enabled: true
   # Generous: a migration that needs a table rewrite should not be killed halfway.
@@ -196,13 +129,6 @@ migrations:
   activeDeadlineSeconds: 600
   # Keep finished Jobs for a day, then let the TTL controller remove them.
   ttlSecondsAfterFinished: 86400
-
-# `manage.py relay_outbox` — the sweep that makes event delivery guaranteed.
-# The post-commit nudge is best-effort and is lost if the process dies between
-# COMMIT and the enqueue; this is what recovers those.
-outboxRelay:
-  enabled: true
-  schedule: "*/5 * * * *"
 
 ingress:
   enabled: true

@@ -1,10 +1,9 @@
 # Kafka migration — working plan
 
-**Status: stages 0–4 DONE (2026-08-19/20). Stage 5 deferred.**
-Kafka runs on the cluster with TLS + mTLS + deny-by-default ACLs, four consumer
-groups are deployed, and both transports are verified live. `EVENT_TRANSPORT`
-still defaults to `celery`, so the app dispatches through Celery until the flag
-is flipped — which is the escape hatch stage 5 removes.
+**Status: COMPLETE. Stages 0–5 done (2026-08-19/20).**
+Celery is gone. Kafka is the only event transport, with TLS + mTLS +
+deny-by-default ACLs, four consumer groups, and a dedicated relay Deployment.
+Verified live end to end with no Celery in the cluster.
 
 Written 2026-08-19 as a handoff. Read this with `MICROSERVICES.md` (why) and
 `infra/eks/README.md` (the cluster it runs on).
@@ -700,10 +699,64 @@ reversible. Stage 5 deletes the Celery side and the cost with it.
 
 ---
 
-## Stage 5 — remove Celery (DEFERRED)
+## Stage 5 — Celery removed ✅ DONE (2026-08-19)
 
-Delete `config/celery.py`, `CELERY_*` settings, the `--queues` worker args, and
-the Celery dependency. Redis stays parked per the decision above.
+Deleted: `config/celery.py`, all five `tasks.py`, `apps/events/registry.py`,
+`tests/test_celery_wiring.py`, every `CELERY_*` setting, the `EVENT_TRANSPORT`
+flag, the worker Deployments, the relay CronJob, **and Redis** — Celery was its
+only consumer, and the project's own rule is that a component with no consumer
+is dead weight, not "kept for later".
+
+### It was not just deletion
+
+**The nudge had to be replaced.** `publish()` fired
+`on_commit(relay_outbox.delay())` for low latency; the CronJob sweep was the
+5-minute backstop. Deleting Celery removes the nudge and leaves only the sweep —
+every notification would wait up to five minutes.
+
+The obvious fix is wrong: relaying inline on commit puts a **synchronous** Kafka
+produce in the request path, so a broker outage would add up to
+`KAFKA_FLUSH_TIMEOUT` to every user-facing request. A Kafka problem would become
+a website problem.
+
+So `relay_outbox --loop` runs as its own Deployment, polling the outbox with a
+1s idle interval and skipping the sleep entirely when a batch comes back full, so
+a backlog drains at speed. `publish()` now dispatches **nothing**.
+
+**Single replica, `Recreate` strategy.** Concurrent relays are safe — rows are
+claimed with `select_for_update(skip_locked=True)` — but there is nothing to gain
+and one writer keeps a deploy readable. **If the relay is down, nothing is
+delivered**; it is the highest-consequence pod in the namespace.
+
+**The test suite needed an in-process broker.** 67 call sites use
+`django_capture_on_commit_callbacks(execute=True)` to drive events end to end.
+`EVENT_RELAY_INLINE` (False in production, True under pytest, set in `local.py`
+for exactly the reason `CELERY_TASK_ALWAYS_EAGER` was) makes `_dispatch` deliver
+to in-process subscribers instead of producing. It mirrors real semantics
+deliberately: every subscribing app runs, an unconsumed topic is a no-op, and
+handler exceptions propagate.
+
+**The registry needed replacing, not deleting.** `EVENT_HANDLERS` was the source
+of truth for five guardrails, including "the chart grants a KafkaTopic and ACL
+for every topic". Topics are now derived by AST-scanning `publish(topic=...)`
+call sites — strictly better, because it checks the real runtime requirement:
+`authorization: simple` denies anything ungranted, so a topic missing from the
+chart is a **denied produce**, not a warning. A companion test fails if the count
+drops, which is what a dynamically-built topic name would look like.
+
+### Verified live
+
+```
+event_published  topic=follow.created            (web pod; published_at None)
+relay_started    interval=1.0                    (relay Deployment)
+kafka_produced   topic=follow.created
+outbox_relayed   published=1
+feed_backfilled                                  (social consumer)
+event_consumed   topic=follow.created group=social attempt=1
+```
+
+No manual relay call, no Celery, no Redis. `published_at` was `None` immediately
+after `publish()` — proof that nothing dispatches from the request path.
 
 ---
 
