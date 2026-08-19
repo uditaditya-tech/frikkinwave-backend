@@ -350,7 +350,7 @@ Canonical event-log row — one per thing a user did. **Source of truth** for th
 | `created_at` | DateTimeField | `auto_now_add` |
 
 `Meta.ordering = ["-created_at"]`, index on `(actor, -created_at)`. Written by the
-`social.fan_out_activity` Celery task, **not** inline — producers call
+`social` consumer group's `fan_out_activity` handler, **not** inline — producers call
 `social.services.record_activity(...)` which emits the fan-out post-commit.
 
 ---
@@ -372,7 +372,7 @@ the actor). The feed read touches **only this table**.
 idempotent via `ignore_conflicts`), index on `(owner, -created_at)`. Fan-out writes a
 row per follower + the actor; **follow** backfills the followee's recent activities into
 the new follower's inbox, **unfollow** prunes them — keeping the inbox consistent with
-the follow graph. Both run as Celery tasks (`social.backfill_feed` / `social.prune_feed`).
+the follow graph. Both run in the `social` consumer group (`backfill_feed` / `prune_feed`).
 
 **Architecture note:** fan-out-on-write was chosen deliberately (the heavier path) to
 match the project's scale rules. The known trade-off is write-amplification on

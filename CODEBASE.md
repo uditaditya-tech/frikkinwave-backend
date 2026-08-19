@@ -39,7 +39,7 @@ frikkinwave-backend/
 │   │                              #   Neutral home: musicians (blurbs/coach) and search (embeddings)
 │   │                              #   both need it, so neither can own it.
 │
-│   ├── notifications/             # EXTRACTED SERVICE — own queue, own Deployment
+│   ├── notifications/             # EXTRACTED SERVICE — own consumer group, own Deployment
 │   │   ├── renderers.py           # topic -> (subject, body) from primitives only
 │   │   ├── services.py            # deliver(); the only service layer touching no model
 │   │   ├── consumers.py           # KAFKA subscriptions: 8 topics -> services.deliver(); imports no other app
@@ -233,7 +233,7 @@ frikkinwave-backend/
 │   # session_rate) in migration 0006 — see apps/musicians/tests/test_session_work.py (4 tests).
 │
 ├── config/                        # Django project config (not an app)
-│   ├── __init__.py                # Loads the Celery app so @shared_task binds
+│   ├── __init__.py                # Django project package (nothing to bootstrap)
 │   ├── asgi.py
 │   ├── wsgi.py
 │   ├── urls.py                    # Root URL conf — all routes wired here
@@ -253,7 +253,7 @@ frikkinwave-backend/
 │   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
 │   ├── eks/                       # APP stack: VPC, EKS, RDS, ECR, IAM/IRSA, LB controller, secrets
 │   ├── helm/frikkinwave/          # Application chart
-│   │   └── templates/             # web Deployment+Service, workers (map-driven), redis,
+│   │   └── templates/             # web Deployment+Service, relay, consumers (map-driven),
 │   │                              #   migrate Job (pre-upgrade hook), relay CronJob, Ingress, PDB
 │   └── scripts/
 │       ├── eks-up.sh              # terraform apply: cluster, RDS, ECR, LB controller (~15 min)
@@ -262,12 +262,11 @@ frikkinwave-backend/
 │
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── tests/                         # Project-level tests not tied to one app
-│   ├── test_celery_wiring.py      # Celery app wiring (2.1)
 │   ├── test_architecture.py       # Guardrails on things that fail SILENTLY: no cross-app model
 │   │                              # imports, the DTO identity boundary, outbox-only emitting,
-│   │                              # every Celery handler on a consumed queue, every declared
-│   │                              # consumer group backed by a Deployment, and the Celery/Kafka
-│   │                              # topic coverage that makes flipping EVENT_TRANSPORT safe
+│   │                              # every declared consumer group backed by a Deployment,
+│   │                              # every published topic subscribed, and nothing dispatching
+│   │                              # from the request path
 │   └── test_infrastructure.py     # Terraform + Helm guardrails: storage class exists and is not
 │                                  # a dead in-tree provisioner, Kafka durability (RF 3 / ISR 2),
 │                                  # broker/node fit, TLS+auth+ACLs on, nothing exposed publicly
@@ -275,7 +274,8 @@ frikkinwave-backend/
 ├── .env.example                   # Committed template for all env vars.
 ├── .gitignore
 ├── .pre-commit-config.yaml        # Hooks: whitespace, yaml, detect-private-key, ruff
-├── docker-compose.yml             # Postgres 16 + Redis 7 for local dev
+├── docker-compose.yml             # Postgres 16 (pgvector) for local dev. No Redis: Celery
+│                                  # was its only consumer and both are gone
 ├── Dockerfile                     # Multi-stage prod image (uv venv → slim runtime, gunicorn, non-root)
 ├── .dockerignore                  # Keeps build context lean; excludes .env, tests, .venv, docs
 ├── manage.py                      # Defaults to config.settings.local
@@ -446,7 +446,7 @@ No cross-app model imports — use `TYPE_CHECKING` guard for type hints only.
 ## Running locally
 
 ```bash
-docker compose up -d                     # Postgres 16 + Redis 7
+docker compose up -d                     # Postgres 16 (pgvector)
 source .venv/bin/activate
 python manage.py migrate
 python manage.py seed_music_data         # 44 instruments + 31 genres

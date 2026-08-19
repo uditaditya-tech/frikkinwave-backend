@@ -117,7 +117,8 @@ ALB, with the demo dataset paginating and the event backbone delivering.
 | RDS | `rds.tf` | Restored from a snapshot, in the public subnets, reachable only from the cluster SG. |
 | Secrets | `secrets.tf` | Terraform writes both a Kubernetes Secret (read today) and SSM params (for Phase 3). |
 | LB controller | `lb-controller.tf` | IRSA role + vendored IAM policy + `helm_release`. |
-| App chart | `../helm/frikkinwave/` | web, worker, Redis, migration Job, outbox CronJob, Ingress. |
+| App chart | `../helm/frikkinwave/` | web, outbox relay, 4 consumer groups, migration Job, Ingress. |
+| Kafka chart | `../helm/kafka/` | `Kafka` + `KafkaNodePool` CRs, 26 topics (13 event + 13 DLT), the `KafkaUser` and its ACLs. |
 | Deploy | `../scripts/app-deploy.sh` | Build/push, `helm upgrade`, Route 53 alias, verify. |
 
 ### Flow
@@ -160,10 +161,11 @@ before *any* ordinary resource, so a plain ConfigMap would not exist yet when
 the migration Job's pod starts, and a first install would hang in
 `CreateContainerConfigError`.
 
-**Redis is in-cluster with no persistence.** Saves ~$13/mo against ElastiCache,
-and losing the queue is survivable *because of the transactional outbox*: events
-commit to Postgres with the state change, and the relay CronJob re-dispatches
-anything unpublished. Redis holds work in flight, not the record of it.
+**Redis is gone (2026-08-19).** It was the Celery broker and nothing else; when
+Celery went, it had no consumer left. The rule this project applies — a component
+with no consumer is dead weight, not "kept for later" — pointed one way. If the
+read-through cache in `MICROSERVICES.md` §3 is ever built, it comes back as ~30
+lines of chart; nothing persisted in it.
 
 **The outbox relay CronJob is new here.** Nothing scheduled `relay_outbox`
 before, so "guaranteed delivery" was theoretical — only the best-effort
@@ -184,9 +186,9 @@ alias to it. `eks-down.sh` removes the record.
 | Demo data | profiles/followers/following all paginate (`has_next: true`) |
 | Rating rollup | profile embed and reviews endpoint agree (4.33 / 24) |
 | List feed | carries no `rating` key — the N+1 guard holds |
-| Outbox end-to-end | `publish()` → nudge → relay → worker ran the consumer, `published_at` set, 1 attempt, no error |
-| Relay CronJob | fires on schedule, `Complete` |
-| Worker | connected to `redis://frikkinwave-redis:6379/0`, ready |
+| Outbox end-to-end | `publish()` → relay Deployment → Kafka → consumer group ran the handler, `published_at` set, 1 attempt, no error |
+| Relay | `relay_outbox --loop`, 1s idle interval, sole path from outbox to Kafka |
+| Consumers | 4 groups subscribed to 13 topics, offsets committed after each handler |
 
 ### Trap: a restored snapshot can predate a denormalization
 
@@ -322,9 +324,9 @@ account, where no snapshot exists and the lookup would fail — set
 ## Kafka stages 0-2 — done ✅ (2026-08-19)
 
 Strimzi 1.1.0 + Kafka 4.2.1, 3 KRaft combined controller+broker nodes, one per
-node and one per AZ, 10 Gi gp3 each. **The application is still entirely on
-Celery** — Kafka runs alongside with no producer and no consumer. Full detail
-and the deferred stages are in `KAFKA.md`; the cluster-level traps are here.
+node and one per AZ, 10 Gi gp3 each. **Kafka is now the only event transport** —
+Celery and Redis are gone. Full detail is in `KAFKA.md`; the cluster-level traps
+are here.
 
 ### Trap: this cluster could not provision ANY persistent storage
 
@@ -484,7 +486,16 @@ aws elbv2 describe-target-health --region ap-south-1 --target-group-arn <arn>
 ## Phase 3 — next
 
 IRSA + External Secrets (syncs the SSM params written in Phase 2) + HPA →
-Helm/ArgoCD → KEDA scale-to-zero on the Celery worker + Prometheus/Grafana.
+Helm/ArgoCD → Prometheus/Grafana + KEDA scaling the consumer groups on **consumer
+lag** (the meaningful signal now — queue depth is gone with Celery).
+
+Two things the migration left that observability should cover first:
+
+- **The relay is a single point of failure.** One replica, and if it is down
+  *nothing* is delivered — Celery's worker pool at least degraded gracefully.
+  Alert on it before anything else.
+- **Consumer lag is unmonitored.** A group that is running but stuck looks
+  identical to a healthy one from `kubectl`.
 
 ---
 
@@ -492,10 +503,13 @@ Helm/ArgoCD → KEDA scale-to-zero on the Celery worker + Prometheus/Grafana.
 
 Ordered by consequence, not effort.
 
-- **`KAFKA.md` stages 3-5** — the switchover, the consumers, and removing
-  Celery. Stages 0-2 are done (storage, nodes, Kafka itself); stage 3 is the
-  first one that touches application code and the first that is not trivially
-  reversible.
+- **Nothing Kafka-related has run under load or failure.** Every verification was
+  hand-published events. Consumer rebalancing during a rollout, backlog drain,
+  partition assignment across replicas and relay restart behaviour are all
+  untested — and this session's surprises all arrived exactly this way.
+- **No alert on the relay.** It is the highest-consequence pod in the namespace
+  and its failure is silent: events accumulate unpublished in the outbox and
+  nothing reports it.
 - **The budget alarm lives in this disposable stack**, so `eks-down.sh` destroys
   it exactly when it would be most useful, since orphaned resources bill *after*
   teardown. Should move to `infra/dns/` or its own tiny stack. Matters more than

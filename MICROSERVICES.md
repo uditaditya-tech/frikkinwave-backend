@@ -38,15 +38,18 @@ flowchart LR
     C[Clients] --> ALB[ALB + ACM/HTTPS]
     ALB --> WEB["EKS — web pods<br/>gunicorn / Django"]
     WEB --> PG[("RDS Postgres 16<br/>+ pgvector")]
-    WEB -- enqueue --> R[(ElastiCache Redis<br/>Celery broker)]
-    R --> WKR["EKS — worker pods<br/>Celery"]
-    WKR --> PG
-    WKR --> OAI[OpenAI API]
+    WEB -- "publish() in-transaction" --> OB[("outbox table<br/>in Postgres")]
+    OB --> RLY["EKS — relay pod<br/>relay_outbox --loop"]
+    RLY --> K{{"Kafka (Strimzi)<br/>TLS + mTLS + ACLs"}}
+    K --> CG["EKS — 4 consumer groups<br/>notifications / search / social / reviews"]
+    CG --> PG
+    CG --> OAI[OpenAI API]
     WEB --> OAI
 
     subgraph MONO["One image, one codebase, one DB"]
       WEB
-      WKR
+      RLY
+      CG
     end
 ```
 
@@ -168,7 +171,7 @@ Highest value per hour of work, and none of it is wasted if you later split.
 | **RDS Proxy / PgBouncer** | Django opens a connection per worker; Postgres dies on connection count long before CPU. **Non-negotiable past a few replicas.** | infra |
 | **RDS read replica + read routing** | Public profiles, browse, search, feed reads are read-heavy | infra + DB router |
 | **CloudFront in front of public GETs** | Public profiles / follower lists / reviews are cacheable and currently hit Django every time | infra |
-| **Redis read-through cache** for hot objects | Profile payloads, rating summaries | small code |
+| **Redis read-through cache** for hot objects | Profile payloads, rating summaries | small code **+ reintroducing Redis** — it was deleted with Celery (2026-08-19), since it had no consumer left |
 | **Move the feed inbox off Postgres** | `FeedEntry` is write-amplified *and* read-hot — the first table to hurt | medium code |
 
 This alone carries the product a very long way on essentially today's architecture.
@@ -184,10 +187,10 @@ Every cross-service interaction is either a **Query** or an **Event**. Classify 
 - **Event** — "this happened, whoever cares can react." → published to Kafka, consumed
   asynchronously. Never blocks the producer.
 
-**The tell for a hidden event:** a call that is synchronous today but internally does
-`transaction.on_commit(... .delay())`. `record_activity()` is exactly this — `listings` and
-`bands` call it synchronously, and it immediately turns into a background task. It is
-already an event; it just has not been named one. Convert those to real publishes
+**The tell for a hidden event:** a call that is synchronous to its caller but internally
+hands work off to be done later. `record_activity()` was exactly this — `listings` and
+`bands` call it synchronously and it becomes background work. It is already an event; it
+just had not been named one. Convert those to real publishes
 **before** extracting anything.
 
 ---
@@ -199,7 +202,7 @@ already an event; it just has not been named one. Convert those to real publishe
 > transport under it, and the *direction of subscription*: consumers now declare
 > what they listen to instead of a producer-side table naming them. See `KAFKA.md`.
 
-Today services do `transaction.on_commit(lambda: task.delay(...))`. That is a good
+Services *used to* do `transaction.on_commit(lambda: task.delay(...))`. That is a good
 lightweight pattern, but it has a real gap: if the process dies **after** the DB commit and
 **before** the broker enqueue, the event is silently lost. On one node that is rare. Across
 services it is unacceptable — it means permanent state divergence.
@@ -226,9 +229,10 @@ Consumers must be **idempotent** (dedupe on event id), because the relay guarant
 *at-least-once*, not exactly-once.
 
 **Status: built and in use.** `apps/events` implements this — `OutboxEvent`,
-`publish()`, a relay (`events.relay_outbox` nudge + `manage.py relay_outbox` sweep), and a
-`topic -> task name` registry that dispatches without cross-app imports. **All 13 emitters
-across 7 apps are migrated**; no service calls `.delay()` directly any more. Adopting it
+`publish()` plus a relay. (The relay was a post-commit nudge and a cron sweep at the time;
+since stage 5 it is a dedicated Deployment running `relay_outbox --loop`, and the
+`topic -> task` registry is gone entirely — consumers declare their own subscriptions.)
+**All 13 emitters across 7 apps are migrated**; no service dispatches directly. Adopting it
 inside the monolith surfaced a latent bug: `fan_out_activity` created a new `Activity` per
 call, so at-least-once delivery would have duplicated a post in every follower's feed — it
 now keys the `Activity` on the event id.
@@ -246,8 +250,8 @@ Ordered by leverage. All can be done inside the monolith, before any service exi
    to the users app. Views import `User` only under `TYPE_CHECKING` (`cast("User", …)`), so
    there is **no runtime cross-app model import anywhere** on a request path.
 2. ✅ **DONE — killed seam #3 (`musicians → reviews` on every profile read).**
-   `MusicianProfile.rating_avg` / `rating_count` are written by `reviews` via a post-commit
-   Celery task (`reviews.propagate_profile_rating` → `musicians.services.set_profile_rating`);
+   `MusicianProfile.rating_avg` / `rating_count` are written by the `reviews` consumer
+   group (`review.created` → `musicians.services.set_profile_rating`);
    the serializer is now a pure local read. Recomputed from source, so it is idempotent and
    self-healing, with `manage.py backfill_profile_ratings` as the reconciliation path.
    The task payload (`subject_user_id`) is already the shape of the future
@@ -273,8 +277,8 @@ mechanically in `tests/test_architecture.py`:
 |---|---|
 | No runtime cross-app **model** imports | a FK cannot span two databases |
 | Outside `users`, identity lookups return **`UserRef`**, not `User` | an ORM object cannot cross a network |
-| Services never call `.delay()` / `.apply_async()` — only `publish()` | otherwise an event can be lost between COMMIT and enqueue |
-| Every registered topic resolves to a real consumer task | a typo'd topic would silently park events forever |
+| Services never dispatch directly — only `publish()` | otherwise an event can be lost between COMMIT and the hand-off |
+| Every published topic has a subscriber, and every group has a Deployment | a typo'd topic, or a group nobody runs, is completely silent |
 | `UserRef` is frozen and JSON-serializable | it must survive a network hop unchanged |
 
 Tooling (management commands, the eval harness) is exempt: it is reconciliation/seeding, never
@@ -346,12 +350,13 @@ needs, so the consumer touches no models at all. What shipped:
   no other app; a test asserts it, since the boundary erodes silently otherwise.
 - Producers publish self-contained payloads. This is also *more* correct than
   re-reading: the email describes the state at event time, not whatever the row
-  looks like whenever the worker gets to it.
-- A dedicated `notifications` Celery queue with its own Deployment, so a wedged
+  looks like whenever the consumer gets to it.
+- A dedicated `notifications` consumer group with its own Deployment, so a wedged
   mail provider cannot starve embedding generation or feed fan-out.
-- A guardrail test tying Celery's routing table to the chart's worker commands.
-  Routing a task to a queue no worker consumes is **silent** — never runs, never
-  errors, no signal anywhere.
+- A guardrail test tying declared subscriptions to the chart's Deployments. A
+  group nobody runs is **silent** — never runs, never errors, no signal anywhere.
+  (This began life as the Celery queue-routing test and guards the identical
+  failure; only the mechanism changed.)
 
 Two things worth carrying into the next extraction:
 
@@ -408,7 +413,7 @@ data with all that implies. Worth deciding deliberately.
 | **Deploy unit** | 1 image, 5 Deployments | ~6–8 services, each its own image + pipeline |
 | **Orchestration** | EKS, `helm upgrade` by hand | **EKS + HPA** (CPU, p95 latency, **Kafka consumer lag**), GitOps, canary/blue-green |
 | **Data** | 1 RDS Postgres (pgvector) | **DB per service**; Aurora + read replicas; dedicated vector store; Redis clusters; DynamoDB/Cassandra feed inbox |
-| **Async** | Celery + single Redis broker | **Kafka/MSK backbone**; Celery/Kafka consumers per service |
+| **Async** | Kafka (Strimzi, 3 brokers) + outbox relay; 4 consumer groups | Same model, more groups; per-service clusters or MSK if operating Strimzi stops being worth it |
 | **Inter-module comms** | in-process calls, one ACID txn | RPC for queries, events for propagation, **eventual consistency** |
 | **Edge** | ALB → gunicorn | **CDN + WAF + gateway** → Ingress; optional service mesh (mTLS, retries, circuit breaking) |
 | **Auth** | JWT verified in Django | Identity issues; verified at gateway **and** per service (JWT already stateless — this part is done) |
@@ -460,7 +465,7 @@ three. Every RPC seam needs, explicitly:
 |---|---|---|
 | Event backbone | MSK (Kafka) vs Kinesis vs SNS/SQS | Kafka matches the "event shape today = Kafka schema tomorrow" rule already in `CLAUDE.md`; SNS/SQS is cheaper and simpler to start |
 | Orchestration | ~~ECS vs EKS~~ — **decided: EKS**, applied 2026-08-19 | The ECS stack is deleted; git history has it if the decision ever needs revisiting |
-| Event transport | ~~Celery/Redis vs Kafka~~ — **decided: Kafka**, 2026-08-19. Infra stages 0-2 done; app still on Celery. | See `KAFKA.md`. Replaces Celery *and* Redis-as-broker: every Celery task here is an event consumer. The outbox is unaffected — Kafka does not solve dual-write. Bought for replay and multi-consumer-per-topic, which the current registry structurally cannot express; **not** because durability is lacking, since the outbox already covers that. |
+| Event transport | ~~Celery/Redis vs Kafka~~ — **decided: Kafka**, 2026-08-19. **Complete**: Celery and Redis removed. | See `KAFKA.md`. Replaced Celery *and* Redis-as-broker: every Celery task here was an event consumer, so nothing was left for a job queue to do. The outbox is unaffected — Kafka does not solve dual-write. Bought for replay and multi-consumer-per-topic, which the old central registry structurally could not express; **not** because durability was lacking, since the outbox already covered that. |
 | RPC transport | gRPC vs HTTP+JSON | gRPC for typed contracts and speed; HTTP is simpler and debuggable |
 | Feed store | Redis sorted sets vs DynamoDB | Redis is faster and simpler; DynamoDB is durable and cheaper at very large inbox volume |
 | Vector store | keep pgvector vs dedicated (Pinecone/Qdrant/OpenSearch) | pgvector + HNSW scales further than people assume — measure before moving |
@@ -470,8 +475,8 @@ three. Every RPC seam needs, explicitly:
 
 ## Related docs
 
-- **`KAFKA.md`** — the Kafka migration (infrastructure stages 0-2 done; the
-  switchover, consumers, and Celery removal deferred).
+- **`KAFKA.md`** — the Kafka migration, complete (stages 0-5). Kafka is the only
+  event transport; Celery and Redis are gone.
 
 - `CLAUDE.md` — the four scale rules this design assumes, plus all conventions and gotchas
 - `CODEBASE.md` — current app layout and the endpoint surface

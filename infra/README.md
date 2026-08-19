@@ -6,7 +6,8 @@ Two Terraform stacks and one Helm chart. Terraform owns AWS; Helm owns the app.
 infra/
 ├── dns/        PERSISTENT — Route 53 zone + ACM cert. Never destroy.
 ├── eks/        DISPOSABLE — VPC, EKS, RDS, ECR, load balancer controller.
-├── helm/       The application chart (web, workers, redis, migrations, ingress).
+├── helm/       Two charts: the app (web, relay, consumer groups, migrations,
+│            ingress) and the Kafka cluster (Strimzi CRs, topics, KafkaUser).
 └── scripts/    eks-up.sh · app-deploy.sh · eks-down.sh
 ```
 
@@ -108,4 +109,4 @@ These are summarised here and explained in [`eks/README.md`](eks/README.md):
   reports success. Use `--reset-then-reuse-values`.
 - **A ConfigMap change restarts nothing on its own.** `envFrom` values are
   injected at container start; the chart stamps `checksum/config` on the web,
-  worker and consumer pod templates so a config change actually rolls them.
+  web, relay and consumer pod templates so a config change actually rolls them.
