@@ -299,8 +299,39 @@ class TestKafkaSecurity:
         )
 
     def test_the_listener_requires_authentication(self) -> None:
-        body = KAFKA_TEMPLATE.read_text()
-        assert "type: scram-sha-512" in body, "The listener must authenticate clients."
+        assert _values()["security"]["authType"] in {"tls", "scram-sha-512"}
+        assert "authentication:" in KAFKA_TEMPLATE.read_text()
+
+    def test_the_listener_and_the_user_agree_on_the_auth_type(self) -> None:
+        """
+        A KafkaUser authenticating a way the listener does not accept is created
+        happily, reports Ready, and simply never connects. Both templates read
+        the same value so they cannot drift.
+        """
+        user = (KAFKA_CHART / "templates" / "user.yaml").read_text()
+        assert ".Values.security.authType" in KAFKA_TEMPLATE.read_text()
+        assert ".Values.security.authType" in user
+
+    def test_mtls_keeps_the_private_key_out_of_the_environment(self) -> None:
+        """
+        Under mTLS the credential must be a mounted file. An env var is visible
+        in `kubectl describe pod`, is inherited by every subprocess, and lands in
+        logs that dump the environment.
+        """
+        if _values()["security"]["authType"] != "tls":
+            return
+        app_values = yaml.safe_load(
+            (REPO_ROOT / "infra" / "helm" / "frikkinwave" / "values.yaml").read_text()
+        )
+        config = app_values["config"]
+        assert config["KAFKA_SECURITY_PROTOCOL"] == "SSL", (
+            "mTLS uses SSL, not SASL_SSL — there is no SASL mechanism involved."
+        )
+        for leaked in ("KAFKA_SASL_PASSWORD", "KAFKA_SASL_USERNAME", "KAFKA_SASL_MECHANISM"):
+            assert leaked not in config, f"{leaked} is meaningless under mTLS; remove it."
+        assert config["KAFKA_SSL_KEY_LOCATION"].startswith("/"), (
+            "The private key must be a mounted path."
+        )
 
     def test_authorization_is_enabled(self) -> None:
         """

@@ -32,6 +32,10 @@ spec:
         {{- include "frikkinwave.labels" $ | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}
     spec:
+      {{- if and $cfg.runsOutboxRelay $.Values.kafka.enabled }}
+      securityContext:
+        {{- include "frikkinwave.kafkaPodSecurityContext" $ | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ include "frikkinwave.image" $ }}

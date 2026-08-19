@@ -80,6 +80,18 @@ jvm:
 security:
   listenerName: tls
   listenerPort: 9093
+  # mTLS, not SCRAM.
+  #
+  # SCRAM shipped first and worked, but it is a shared secret: it sits in a
+  # Secret, gets mirrored across namespaces, and rotating it means coordinating
+  # every client. With mTLS the client proves possession of a private key that
+  # never leaves its pod, Strimzi issues and renews the certificate, and the
+  # principal (CN=<user>) is the certificate itself rather than a string anyone
+  # holding the Secret can replay.
+  #
+  # `authType` drives BOTH the listener and the KafkaUser — they must agree, and
+  # a test asserts they do. Valid: tls | scram-sha-512.
+  authType: tls
   # Namespaces allowed to reach the listener at all. Defence in depth beneath
   # SCRAM — not a substitute for it.
   #   kafka       — brokers reach each other, and kubectl-exec CLI runs here.

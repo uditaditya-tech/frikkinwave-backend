@@ -348,8 +348,8 @@ row still commits with the state change and the sweep still recovers strays.
 **Default is `celery`, so merging changed nothing.** Flip live, no image rebuild:
 
 ```bash
-helm upgrade frikkinwave infra/helm/frikkinwave -n frikkinwave --reuse-values \
-  --set config.EVENT_TRANSPORT=kafka
+helm upgrade frikkinwave infra/helm/frikkinwave -n frikkinwave \
+  --reset-then-reuse-values --set config.EVENT_TRANSPORT=kafka
 ```
 
 ### Verified on the live cluster
@@ -427,6 +427,66 @@ The app user has `Read, Describe` on the **`frikkinwave` group prefix** only, an
 the console client had invented a random group name. Working as designed —
 consumers must use a group under that prefix, which is also how stage 4 gives
 each extracted service its own group without an ACL change per service.
+
+---
+
+## mTLS ✅ DONE (2026-08-19)
+
+The listener and `KafkaUser` moved from SCRAM-SHA-512 to **mTLS**. SCRAM worked,
+but it is a shared secret: it sits in a Secret, gets mirrored across namespaces,
+and rotating it means coordinating every client. Under mTLS the client proves
+possession of a private key that never leaves its pod, Strimzi issues and renews
+the certificate, and the principal Kafka authorizes is the certificate subject
+(`CN=frikkinwave-app`) rather than a string anyone holding the Secret can replay.
+
+**The application code did not change.** `_producer_config()` was written to emit
+only the keys that are set, so this was `KAFKA_SECURITY_PROTOCOL: SSL` plus two
+file paths in the chart, and the removal of every `KAFKA_SASL_*` value. That was
+the point of making it settings-driven.
+
+Verified live: a real `profile.updated` event through the outbox, produced over
+mTLS, consumed back with a client certificate.
+
+### Trap: a 0400 key is unreadable by a non-root container
+
+The first attempt failed with:
+
+```
+ssl.certificate.location failed: error:0A080002:SSL routines::system lib
+```
+
+which says nothing about permissions. Secret volumes are owned by `root:root`,
+the image runs as `appuser` (uid 10001), and `defaultMode: 0400` therefore made
+the key readable only by a user this container does not have. The fix is
+`defaultMode: 0440` **plus** `fsGroup: 10001` on the pod, which sets the volume's
+group ownership so the container's own user can read it. Do not reach for `0444`
+— that makes a private key world-readable to sidestep a group-ownership problem.
+
+`fsGroup` must track the Dockerfile's uid; a test pins the mTLS shape.
+
+### Trap: `--reuse-values` silently drops NEW chart defaults
+
+The `fsGroup` fix appeared to deploy and did nothing — `helm upgrade` reported
+success and the Deployment's `securityContext` stayed `{}`.
+
+**`--reuse-values` reuses the previous release's coalesced values and does not
+re-read the chart's defaults**, so a key added to `values.yaml` in the same change
+is simply absent. `{{ .Values.kafka.fsGroup }}` rendered empty and Kubernetes
+dropped the field.
+
+Use **`--reset-then-reuse-values`**: reset to the chart's defaults, reapply the
+release's own overrides, then merge `--set`. Every documented flip command in this
+repo has been corrected. `--reuse-values` is only safe when the chart is
+unchanged — which is exactly when you are least likely to be thinking about it.
+
+### The outbox guarantee, proven in production
+
+Both traps above caused real produce failures against the live cluster. **No event
+was lost.** The relay left each one unpublished with `attempts` incrementing and
+`last_error` recorded, and once the permissions were fixed it delivered them on
+the next sweep — one row shows `attempts=3, published=True` with the old error
+text still attached. A misconfiguration delayed delivery and never cancelled it,
+which is the whole reason the outbox exists.
 
 ---
 

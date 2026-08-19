@@ -65,19 +65,22 @@ The Secrets are mirrored into this namespace by Terraform: Kubernetes Secrets
 are namespaced and Strimzi creates these in the `kafka` namespace.
 */}}
 {{- define "frikkinwave.kafkaEnv" -}}
-{{- if .Values.kafka.enabled }}
-- name: KAFKA_SASL_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: {{ .Values.kafka.userSecret }}
-      key: password
-{{- end }}
+{{- /*
+  Nothing. Under mTLS the credential is a file, not a value — the private key is
+  mounted from a Secret and never passes through an environment variable, where
+  it would be visible in `kubectl describe pod` output and inherited by any
+  subprocess. Kept as a defined block so the call sites do not churn if a future
+  auth mode needs one.
+*/ -}}
 {{- end -}}
 
 {{- define "frikkinwave.kafkaVolumeMounts" -}}
 {{- if .Values.kafka.enabled }}
 - name: kafka-ca
   mountPath: {{ .Values.kafka.caMountPath }}
+  readOnly: true
+- name: kafka-user
+  mountPath: {{ .Values.kafka.userMountPath }}
   readOnly: true
 {{- end }}
 {{- end -}}
@@ -87,6 +90,22 @@ are namespaced and Strimzi creates these in the `kafka` namespace.
 - name: kafka-ca
   secret:
     secretName: {{ .Values.kafka.caSecret }}
+- name: kafka-user
+  secret:
+    secretName: {{ .Values.kafka.userSecret }}
+    # 0440 (owner+GROUP read), NOT 0400.
+    #
+    # Secret volumes are owned by root:root. The image runs as appuser (uid
+    # 10001, see Dockerfile), so 0400 makes the key readable only by root —
+    # which is nobody in this container. librdkafka then fails with
+    #     ssl.certificate.location failed: error:0A080002:SSL routines::system lib
+    # an OpenSSL errno passthrough that says nothing about permissions.
+    #
+    # 0440 plus the pod's fsGroup (which sets the volume's group ownership to
+    # the same uid) lets appuser read it and nobody else. Do not "fix" this by
+    # going to 0444 — that makes a private key world-readable to sidestep a
+    # group-ownership problem.
+    defaultMode: 0440
 {{- end }}
 {{- end -}}
 
@@ -104,4 +123,18 @@ ConfigMap.
 */}}
 {{- define "frikkinwave.configChecksum" -}}
 {{- include (print $.Template.BasePath "/configmap.yaml") . | sha256sum -}}
+{{- end -}}
+
+{{/*
+Pod security context for anything mounting the Kafka client certificate.
+
+fsGroup makes the mounted Secret group-owned by the container's own gid, which
+is what lets a non-root process read a 0440 private key. Without it the file is
+root:root and unreadable, and the failure surfaces as an opaque OpenSSL error.
+Must track the Dockerfile's uid.
+*/}}
+{{- define "frikkinwave.kafkaPodSecurityContext" -}}
+{{- if .Values.kafka.enabled }}
+fsGroup: {{ .Values.kafka.fsGroup }}
+{{- end }}
 {{- end -}}

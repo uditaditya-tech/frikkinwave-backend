@@ -228,7 +228,7 @@ CELERY_TASK_EAGER_PROPAGATES = True
 #
 # Defaults to celery so this setting changing nothing is the safe state. Flip it
 # in production without an image rebuild:
-#     helm upgrade ... --set config.EVENT_TRANSPORT=kafka
+#     helm upgrade ... --reset-then-reuse-values --set config.EVENT_TRANSPORT=kafka
 # and flip it straight back if anything looks wrong. The event backbone works
 # today; it is not worth betting on one deploy.
 # ---------------------------------------------------------------------------

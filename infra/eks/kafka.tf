@@ -118,16 +118,22 @@ data "kubernetes_secret_v1" "kafka_cluster_ca" {
   depends_on = [terraform_data.wait_for_kafka_credentials]
 }
 
-# The SCRAM password. Mounted as env by the worker and the relay CronJob; the
+# The mTLS client certificate and its private key, issued by Strimzi and signed
+# by the cluster CA. Mounted as FILES by the worker and the relay CronJob; the
 # web pods deliberately get nothing, because they only write the outbox row and
 # nudge Celery. Smaller blast radius for the same functionality.
+#
+# Under mTLS the principal Kafka authorizes is the certificate subject
+# (CN=frikkinwave-app), so possession of this key is the identity — which is why
+# it goes to as few pods as possible.
 resource "kubernetes_secret_v1" "kafka_app_user_mirror" {
   metadata {
     name      = "kafka-app-user"
     namespace = var.app_namespace
   }
   data = {
-    password = data.kubernetes_secret_v1.kafka_app_user.data["password"]
+    "user.crt" = data.kubernetes_secret_v1.kafka_app_user.data["user.crt"]
+    "user.key" = data.kubernetes_secret_v1.kafka_app_user.data["user.key"]
   }
 }
 

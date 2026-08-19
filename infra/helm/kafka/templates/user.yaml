@@ -1,12 +1,15 @@
 {{- /*
   The application's Kafka identity.
 
-  Strimzi generates a Secret named after this user holding the SCRAM password;
-  stage 3 mounts it. The password is never in git, never in helm values, and
-  never in Terraform state — the operator creates it in the cluster. That matters
-  here specifically: this repository is PUBLIC.
+  Strimzi generates a Secret named after this user. Under mTLS it holds
+  user.crt/user.key — a client certificate signed by the cluster CA, issued and
+  renewed by the operator. The private key never leaves the cluster, is never in
+  git, never in helm values, and never in Terraform state. That matters here
+  specifically: this repository is PUBLIC.
 
-  Nothing uses these credentials yet.
+  The principal Kafka authorizes is the certificate's subject, CN=<user>, so the
+  ACLs below attach to something unforgeable rather than to a string anyone
+  holding a Secret could replay.
 */}}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
@@ -17,7 +20,9 @@ metadata:
     strimzi.io/cluster: {{ .Values.clusterName }}
 spec:
   authentication:
-    type: scram-sha-512
+    # Must match the listener's authType — a KafkaUser authenticating a way the
+    # listener does not accept is created happily and simply never connects.
+    type: {{ .Values.security.authType }}
   authorization:
     type: simple
     acls:

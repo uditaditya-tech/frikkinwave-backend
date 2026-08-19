@@ -31,14 +31,17 @@ config:
   SEARCH_SIMILARITY_THRESHOLD: "0.4"
   # How the outbox relay hands events off: celery | kafka. Defaults to celery so
   # deploying stage 3 changes nothing. Flip live, no image rebuild:
-  #   helm upgrade ... --set config.EVENT_TRANSPORT=kafka
+  #   helm upgrade ... --reset-then-reuse-values --set config.EVENT_TRANSPORT=kafka
   # and flip straight back if anything looks wrong.
   EVENT_TRANSPORT: celery
   KAFKA_BOOTSTRAP_SERVERS: frikkinwave-kafka-bootstrap.kafka.svc.cluster.local:9093
-  KAFKA_SECURITY_PROTOCOL: SASL_SSL
-  KAFKA_SASL_MECHANISM: SCRAM-SHA-512
-  KAFKA_SASL_USERNAME: frikkinwave-app
+  # mTLS: SSL, not SASL_SSL. There is no SASL mechanism, no username and no
+  # password — the client certificate below IS the identity, and Kafka authorizes
+  # its subject (CN=frikkinwave-app).
+  KAFKA_SECURITY_PROTOCOL: SSL
   KAFKA_SSL_CA_LOCATION: /etc/kafka-ca/ca.crt
+  KAFKA_SSL_CERTIFICATE_LOCATION: /etc/kafka-user/user.crt
+  KAFKA_SSL_KEY_LOCATION: /etc/kafka-user/user.key
   # gunicorn workers per pod. Each forks a full Django process (~150 MB), so
   # this is bounded by the memory limit below, not by CPU.
   WEB_CONCURRENCY: "2"
@@ -133,6 +136,10 @@ kafka:
   userSecret: kafka-app-user
   caSecret: kafka-cluster-ca
   caMountPath: /etc/kafka-ca
+  userMountPath: /etc/kafka-user
+  # Must match the image's uid (Dockerfile: `useradd --uid 10001 appuser`).
+  # This is what makes the 0440 client key readable by a non-root container.
+  fsGroup: 10001
 
 redis:
   enabled: true

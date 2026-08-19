@@ -71,8 +71,8 @@ spec:
   kafka:
     version: {{ .Values.kafkaVersion | quote }}
     listeners:
-      # TLS + SCRAM-SHA-512. This replaced a plaintext listener with no
-      # authentication, on which any pod in the cluster could read every topic.
+      # TLS + mTLS client certificates. This replaced a plaintext listener with
+      # no authentication, on which any pod in the cluster could read every topic.
       #
       # networkPolicyPeers is the SECOND layer. Strimzi's generated policy leaves
       # a listener unrestricted (`from: null`) unless this is set — which is
@@ -83,7 +83,7 @@ spec:
         type: internal
         tls: true
         authentication:
-          type: scram-sha-512
+          type: {{ .Values.security.authType }}
         networkPolicyPeers:
 {{- range .Values.security.allowedNamespaces }}
           - namespaceSelector:
