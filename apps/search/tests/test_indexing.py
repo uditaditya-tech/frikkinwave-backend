@@ -1,5 +1,10 @@
 """
-Embedding pipeline tests (Phase 2.4).
+Embedding pipeline tests — the musicians -> search seam.
+
+A fake OpenAI client is injected via monkeypatch, so no network and no API key.
+The pipeline runs profile save -> outbox publish -> relay -> search task ->
+index, which is the whole point of these: the two apps are only connected by an
+event, and this is what proves the connection still works.
 
 A fake OpenAI client is injected via monkeypatch — no network, no API key. The
 pipeline runs profile save → on_commit → eager Celery task → service → store, so
@@ -13,8 +18,9 @@ import pytest
 from pytest_django.fixtures import SettingsWrapper
 from rest_framework.test import APIClient
 
-from apps.musicians import services
-from apps.musicians.models import EMBEDDING_DIMENSIONS, Genre, Instrument, MusicianProfile
+from apps.musicians.models import MusicianProfile
+from apps.search import services
+from apps.search.models import EMBEDDING_DIMENSIONS, ProfileEmbedding
 from apps.users.models import User
 
 PASSWORD = "StrongPass123!"
@@ -48,27 +54,6 @@ def _auth(api_client: APIClient, user: User) -> APIClient:
 
 
 # ---------------------------------------------------------------------------
-# build_embedding_text (pure-ish, reads relations)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-class TestBuildEmbeddingText:
-    def test_includes_bio_location_instruments_genres(
-        self, profile: MusicianProfile, instrument: Instrument, genre: Genre
-    ) -> None:
-        profile.musician_instruments.create(instrument=instrument, proficiency="advanced")
-        profile.genres.add(genre)
-
-        text = services.build_embedding_text(profile)
-
-        assert "I play lead guitar." in text
-        assert "Mumbai" in text
-        assert "Electric Guitar (advanced)" in text
-        assert "Jazz" in text
-
-
-# ---------------------------------------------------------------------------
 # Pipeline via the API (on_commit → task → service)
 # ---------------------------------------------------------------------------
 
@@ -89,9 +74,11 @@ class TestEmbeddingPipeline:
         assert response.status_code == 201
         assert len(fake_openai.calls) == 1
         profile = MusicianProfile.objects.get(user=user)
-        assert hasattr(profile, "embedding")
-        assert profile.embedding.embedding_text == fake_openai.calls[0]
-        assert len(profile.embedding.embedding.tolist()) == EMBEDDING_DIMENSIONS
+        # No reverse accessor any more — there is no ForeignKey. Look it up by
+        # id, which is exactly what a separate service would have to do.
+        row = ProfileEmbedding.objects.get(profile_id=profile.id)
+        assert row.embedding_text == fake_openai.calls[0]
+        assert len(row.embedding.tolist()) == EMBEDDING_DIMENSIONS
 
     def test_updating_bio_reembeds(
         self,
@@ -133,32 +120,41 @@ class TestEmbeddingPipeline:
 
 @pytest.mark.django_db
 class TestEmbeddingGuards:
-    def test_missing_profile_is_noop(self, fake_openai: FakeOpenAIClient) -> None:
-        services.generate_profile_embedding(profile_id="00000000-0000-0000-0000-000000000000")
+    def test_empty_text_is_skipped(self, fake_openai: FakeOpenAIClient) -> None:
+        """
+        Replaces the old "missing profile is a no-op" guard. That case is gone:
+        the service never looks a profile up, so it cannot find it missing. What
+        can still arrive is an empty payload, and embedding "" is worthless.
+        """
+        services.index_profile(
+            profile_id="00000000-0000-0000-0000-000000000000",
+            embedding_text="",
+            is_available=True,
+        )
         assert fake_openai.calls == []
 
     def test_no_api_key_skips(
         self, profile: MusicianProfile, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
     ) -> None:
-        from apps.musicians.models import ProfileEmbedding
-
         settings.OPENAI_API_KEY = ""
         client = FakeOpenAIClient()
         monkeypatch.setattr(services, "get_openai_client", lambda: client)
 
-        services.generate_profile_embedding(profile_id=str(profile.id))
+        services.index_profile(
+            profile_id=str(profile.id), embedding_text="some text", is_available=True
+        )
         assert client.calls == []
-        assert not ProfileEmbedding.objects.filter(profile=profile).exists()
+        assert not ProfileEmbedding.objects.filter(profile_id=profile.id).exists()
 
     def test_reembed_keeps_single_row(
         self, profile: MusicianProfile, fake_openai: FakeOpenAIClient
     ) -> None:
-        from apps.musicians.models import ProfileEmbedding
+        services.index_profile(
+            profile_id=str(profile.id), embedding_text="first text", is_available=True
+        )
+        services.index_profile(
+            profile_id=str(profile.id), embedding_text="second text", is_available=True
+        )
 
-        services.generate_profile_embedding(profile_id=str(profile.id))
-        profile.bio = "changed bio"
-        profile.save()
-        services.generate_profile_embedding(profile_id=str(profile.id))
-
-        assert ProfileEmbedding.objects.filter(profile=profile).count() == 1
+        assert ProfileEmbedding.objects.filter(profile_id=profile.id).count() == 1
         assert len(fake_openai.calls) == 2

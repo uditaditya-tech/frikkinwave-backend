@@ -129,7 +129,7 @@ class TestCompatibility:
     def test_openai_error_returns_503(
         self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
     ) -> None:
-        from apps.musicians.openai_client import OpenAIUnavailableError
+        from apps.ai.client import OpenAIUnavailableError
 
         settings.OPENAI_API_KEY = "test-key"
 

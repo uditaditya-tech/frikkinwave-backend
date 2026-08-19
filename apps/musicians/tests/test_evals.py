@@ -79,13 +79,30 @@ class DeterministicClient:
         return "You both bring jazz, rock, mumbai, and delhi energy — you'll click."
 
 
+def _patch_all_ai(monkeypatch: pytest.MonkeyPatch, client: object) -> None:
+    """
+    Patch EVERY module that resolves an OpenAI client.
+
+    There is more than one since search was extracted: embedding and retrieval
+    go through apps.search.services, while compatibility blurbs still go through
+    apps.musicians.services. Patching only one lets the other make a REAL API
+    call from the test suite — which is exactly what happened during the
+    extraction, and only surfaced because the fake key produced a 401. With a
+    real key in the environment it would have silently spent money in CI.
+    """
+    from apps.search import services as search_services
+
+    for module in (services, search_services):
+        monkeypatch.setattr(module, "get_openai_client", lambda: client)
+
+
 @pytest.mark.django_db
 class TestEvalHarness:
     def test_runner_reports_sensible_metrics(
         self, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
     ) -> None:
         settings.OPENAI_API_KEY = "test-key"
-        monkeypatch.setattr(services, "get_openai_client", lambda: DeterministicClient())
+        _patch_all_ai(monkeypatch, DeterministicClient())
 
         report = runner.run_matching_eval()
 
@@ -107,7 +124,7 @@ class TestEvalHarness:
         from apps.musicians.models import MusicianProfile
 
         settings.OPENAI_API_KEY = "test-key"
-        monkeypatch.setattr(services, "get_openai_client", lambda: DeterministicClient())
+        _patch_all_ai(monkeypatch, DeterministicClient())
 
         runner.run_matching_eval()
 

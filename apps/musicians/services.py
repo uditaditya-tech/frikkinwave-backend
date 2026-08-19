@@ -11,22 +11,20 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
-from pgvector.django import CosineDistance
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
     from apps.users.models import User
 
+from apps.ai.client import OpenAIUnavailableError, get_openai_client
 from apps.musicians.models import (
     CompatibilityBlurb,
     Genre,
     Instrument,
     MusicianInstrument,
     MusicianProfile,
-    ProfileEmbedding,
 )
-from apps.musicians.openai_client import OpenAIUnavailableError, get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -185,54 +183,46 @@ def search_profiles(
     similarity_threshold: float | None = None,
 ) -> list[MusicianProfile]:
     """
-    Semantic search: embed `query` and return the nearest profiles by cosine
-    distance over the HNSW index, most similar first.
+    Semantic search, most similar first.
 
-    Only profiles that already have an embedding are searchable. Each returned
-    profile carries a `distance` attribute (from the annotation) the serializer
-    turns into a similarity score. Returns [] (logged) when no OpenAI key is
-    configured, so search degrades gracefully rather than erroring.
+    The vector work belongs to the search service now: it returns ids and
+    scores, and this hydrates them from the profile tables it owns. That split
+    is the whole point — an ORM instance cannot cross a service boundary, so the
+    contract had to become ids before the deploy can.
 
-    `similarity_threshold` is a cosine-similarity floor (0..1): profiles scoring
-    below it are dropped. Defaults to settings.SEARCH_SIMILARITY_THRESHOLD; pass
-    0.0 to disable the floor (e.g. the eval harness, which measures ranking).
+    Each returned profile carries a `similarity` attribute (0..1). Returns []
+    when AI is unavailable, so search degrades rather than erroring.
     """
-    if not settings.OPENAI_API_KEY:
-        logger.warning("search_skipped_no_api_key")
+    from apps.search import services as search_services
+
+    hits = search_services.search(
+        query=query,
+        limit=limit,
+        available_only=available_only,
+        similarity_threshold=similarity_threshold,
+    )
+    if not hits:
         return []
 
-    try:
-        query_vector = get_openai_client().embed(query)
-    except OpenAIUnavailableError:
-        # Upstream down/quota-exhausted: degrade to no results rather than 500.
-        logger.warning("search_skipped_openai_unavailable")
-        return []
-
-    queryset = (
-        MusicianProfile.objects.filter(embedding__isnull=False)
+    scores = dict(hits)
+    profiles = (
+        MusicianProfile.objects.filter(id__in=list(scores))
         .select_related("user")
         .prefetch_related("musician_instruments__instrument", "genres")
-        .annotate(distance=CosineDistance("embedding__embedding", query_vector))
-        .order_by("distance")
     )
-    if available_only:
-        queryset = queryset.filter(is_available=True)
+    by_id = {profile.id: profile for profile in profiles}
 
-    # Drop weak matches: similarity = 1 - distance, so a similarity floor of T
-    # means keeping only distance <= 1 - T. A threshold of 0 keeps everything.
-    threshold = (
-        settings.SEARCH_SIMILARITY_THRESHOLD
-        if similarity_threshold is None
-        else similarity_threshold
-    )
-    if threshold > 0:
-        queryset = queryset.filter(distance__lte=1.0 - threshold)
-
-    results: list[MusicianProfile] = list(queryset[:limit])
-    logger.info(
-        "profiles_searched",
-        extra={"result_count": len(results), "limit": limit, "threshold": threshold},
-    )
+    results: list[MusicianProfile] = []
+    for profile_id, similarity in hits:
+        profile = by_id.get(profile_id)
+        if profile is None:
+            # The index outlived the profile. Without a FK there is no cascade
+            # delete, so this is a real state rather than an impossible one —
+            # skip it and let the pruning path catch up.
+            logger.warning("search_hit_missing_profile", extra={"profile_id": str(profile_id)})
+            continue
+        profile.similarity = similarity  # type: ignore[attr-defined]
+        results.append(profile)
     return results
 
 
@@ -417,19 +407,31 @@ def _set_genres(profile: MusicianProfile, genres: list[Genre]) -> None:
 
 def _enqueue_embedding(profile: MusicianProfile) -> None:
     """
-    Emit the "profile changed, re-embed it" event.
+    Tell the search service this profile changed, and hand it everything needed
+    to re-index — the composed text and the availability flag, never an id to
+    read back. The consumer is a separate service; it must not touch these
+    tables.
 
     Written to the transactional outbox inside the caller's transaction, so the
-    event and the profile row commit together — a rollback discards both, and a
-    crash after COMMIT still leaves the event durably recorded for the relay.
+    event and the profile row commit together.
     """
     from apps.events.services import publish
 
-    publish(topic="profile.updated", payload={"profile_id": str(profile.id)})
+    publish(
+        topic="profile.updated",
+        payload={
+            "profile_id": str(profile.id),
+            "embedding_text": build_embedding_text(profile),
+            "is_available": profile.is_available,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
-# Embedding pipeline (invoked by the Celery task in apps/musicians/tasks.py)
+# Embedding text
+#
+# Stays here, with the data it describes: composing it needs the profile's
+# instruments and genres. Only its OUTPUT crosses to the search service.
 # ---------------------------------------------------------------------------
 
 
@@ -452,39 +454,3 @@ def build_embedding_text(profile: MusicianProfile) -> str:
         f"Genres: {genres}" if genres else "",
     ]
     return "\n".join(line for line in lines if line)
-
-
-def generate_profile_embedding(*, profile_id: str) -> None:
-    """
-    Compute and store the embedding for a profile.
-
-    No-ops (logged) when: the profile is gone, no OpenAI key is configured, or
-    the profile's embedding text is unchanged since the last run (so re-saving a
-    profile without touching embeddable fields costs nothing).
-    """
-    profile = (
-        MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
-        .filter(id=profile_id)
-        .first()
-    )
-    if profile is None:
-        logger.warning("embedding_skipped_missing_profile", extra={"profile_id": profile_id})
-        return
-
-    if not settings.OPENAI_API_KEY:
-        logger.warning("embedding_skipped_no_api_key", extra={"profile_id": profile_id})
-        return
-
-    text = build_embedding_text(profile)
-
-    existing = ProfileEmbedding.objects.filter(profile=profile).first()
-    if existing is not None and existing.embedding_text == text:
-        logger.info("embedding_unchanged", extra={"profile_id": profile_id})
-        return
-
-    vector = get_openai_client().embed(text)
-    ProfileEmbedding.objects.update_or_create(
-        profile=profile,
-        defaults={"embedding": vector, "embedding_text": text},
-    )
-    logger.info("embedding_generated", extra={"profile_id": profile_id})

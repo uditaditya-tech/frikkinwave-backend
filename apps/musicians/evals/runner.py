@@ -32,10 +32,11 @@ from apps.musicians.evals.metrics import (
 )
 from apps.musicians.models import Genre, Instrument, MusicianInstrument, MusicianProfile
 from apps.musicians.services import (
-    generate_profile_embedding,
+    build_embedding_text,
     get_compatibility_blurb,
     search_profiles,
 )
+from apps.search.services import index_profile
 from apps.users.models import User
 
 
@@ -46,7 +47,13 @@ def run_matching_eval() -> dict[str, Any]:
     with transaction.atomic():
         profiles = _seed_profiles()
         for profile in profiles.values():
-            generate_profile_embedding(profile_id=str(profile.id))
+            # Indexing now goes through the search service with a composed
+            # payload, exactly as the event delivers it in production.
+            index_profile(
+                profile_id=str(profile.id),
+                embedding_text=build_embedding_text(profile),
+                is_available=profile.is_available,
+            )
 
         recall1: list[float] = []
         recall3: list[float] = []

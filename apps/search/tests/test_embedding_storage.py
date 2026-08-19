@@ -1,5 +1,9 @@
 """
-ProfileEmbedding storage tests (Phase 2.3).
+ProfileEmbedding storage tests.
+
+Moved here with the model when search was extracted. These exercise the pgvector
+layer directly — round-trip, one-embedding-per-profile, cosine ordering (which
+also proves the `vector` extension is enabled), and dimension enforcement.
 
 These exercise the pgvector layer directly — round-trip, the one-embedding-per-
 profile constraint, cosine nearest-neighbour ordering (which also proves the
@@ -11,7 +15,8 @@ import pytest
 from django.db import DataError, IntegrityError
 from pgvector.django import CosineDistance
 
-from apps.musicians.models import EMBEDDING_DIMENSIONS, MusicianProfile, ProfileEmbedding
+from apps.musicians.models import MusicianProfile
+from apps.search.models import EMBEDDING_DIMENSIONS, ProfileEmbedding
 from apps.users.models import User
 
 
@@ -31,31 +36,37 @@ def _make_profile(suffix: str) -> MusicianProfile:
     return MusicianProfile.objects.create(user=user, bio=f"bio {suffix}")
 
 
+@pytest.fixture
+def profile() -> MusicianProfile:
+    """Was provided by the musicians conftest before this module moved here."""
+    return _make_profile("owner")
+
+
 @pytest.mark.django_db
 class TestProfileEmbeddingStorage:
     def test_vector_round_trips(self, profile: MusicianProfile) -> None:
         vec = _unit_vector(0)
         vec[5] = 0.25
-        ProfileEmbedding.objects.create(profile=profile, embedding=vec, embedding_text="hi")
+        ProfileEmbedding.objects.create(profile_id=profile.id, embedding=vec, embedding_text="hi")
 
-        stored = ProfileEmbedding.objects.get(profile=profile)
+        stored = ProfileEmbedding.objects.get(profile_id=profile.id)
         assert stored.embedding.tolist() == pytest.approx(vec)
         assert stored.embedding_text == "hi"
         assert stored.generated_at is not None
 
     def test_one_embedding_per_profile(self, profile: MusicianProfile) -> None:
         ProfileEmbedding.objects.create(
-            profile=profile, embedding=_unit_vector(0), embedding_text="first"
+            profile_id=profile.id, embedding=_unit_vector(0), embedding_text="first"
         )
         with pytest.raises(IntegrityError):
             ProfileEmbedding.objects.create(
-                profile=profile, embedding=_unit_vector(1), embedding_text="second"
+                profile_id=profile.id, embedding=_unit_vector(1), embedding_text="second"
             )
 
     def test_wrong_dimension_is_rejected(self, profile: MusicianProfile) -> None:
         with pytest.raises(DataError):
             ProfileEmbedding.objects.create(
-                profile=profile, embedding=[1.0, 2.0, 3.0], embedding_text="too short"
+                profile_id=profile.id, embedding=[1.0, 2.0, 3.0], embedding_text="too short"
             )
 
 
@@ -66,9 +77,15 @@ class TestCosineNearestNeighbour:
         a = _make_profile("a")
         b = _make_profile("b")
         c = _make_profile("c")
-        ProfileEmbedding.objects.create(profile=a, embedding=_unit_vector(0), embedding_text="a")
-        ProfileEmbedding.objects.create(profile=b, embedding=_unit_vector(1), embedding_text="b")
-        ProfileEmbedding.objects.create(profile=c, embedding=_unit_vector(2), embedding_text="c")
+        ProfileEmbedding.objects.create(
+            profile_id=a.id, embedding=_unit_vector(0), embedding_text="a"
+        )
+        ProfileEmbedding.objects.create(
+            profile_id=b.id, embedding=_unit_vector(1), embedding_text="b"
+        )
+        ProfileEmbedding.objects.create(
+            profile_id=c.id, embedding=_unit_vector(2), embedding_text="c"
+        )
 
         # Query closest to A's direction (mostly index 0, a touch of index 1).
         query = _unit_vector(0)

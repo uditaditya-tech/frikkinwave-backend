@@ -361,7 +361,35 @@ event.
 no longer uses the latter. Giving notifications its own image is packaging work,
 not design work, which is the point: the design boundary is already cut.
 
-| **4. Search / Matching** | Genuinely different scaling profile (vector search, external API latency, spiky). Already isolated behind `openai_client.py` **with graceful degradation** — the resilience contract exists. |
+| **4. Search / Matching** — ✅ **EXTRACTED (stage A)** | See the note below. |
+
+### Step 4 note — what "extracted" means here
+
+Harder than Notifications on every axis: synchronous in the request path, joined
+to the profile table by a `OneToOneField`, and holding 42 vectors that cost real
+money to produce.
+
+The seam is the contract change. `search()` returns **ids and scores**, never
+`MusicianProfile` instances — an ORM object cannot cross a network, and
+producing one would require search to own the profile tables. The caller
+hydrates from its own store in the order given.
+
+Shipped: `apps/search` owning the embedding table with a bare-UUID `profile_id`
+(no FK), `is_available` replicated so the filter runs inside the kNN query, its
+own queue and Deployment, and a migration that copies the existing vectors
+before the old table is dropped. `apps/ai/client.py` moved out of musicians,
+since two domains now need it.
+
+**Still shared, and the honest limit of stage A:** one database and one image.
+The FK is gone and the query boundary is real, so moving to a separate store is
+now a migration rather than a redesign — but it has not happened.
+
+**Stage B is a genuine decision, not a follow-up chore.** For search to serve
+HTTP itself it must return payloads, which means replicating the profile display
+fields (bio, city, instruments, genres) and keeping that copy fresh by event.
+That is how everyone runs Elasticsearch, and it is a second copy of the profile
+data with all that implies. Worth deciding deliberately.
+
 | **5. Social / Feed** | The hot path and the one with write amplification. Already event-driven, so the seam is real. |
 | **6. Messaging** | Stateful WebSockets — build it standalone rather than retrofit it out later. |
 | **7. The core** | Identity / Profiles / Marketplace / Reviews stay together until a measured bottleneck or a second team forces the split. |

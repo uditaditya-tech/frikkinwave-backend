@@ -44,42 +44,65 @@ web:
       cpu: 500m
       memory: 640Mi
 
-# The general worker: embeddings, feed fan-out, rating rollups, the outbox relay.
-# Pinned to the default queue — it must NOT drain `notifications`, or the
-# isolation below is decorative.
-worker:
-  replicaCount: 1
-  # Concurrency 2 on a shared t4g.small; the work is IO-bound (OpenAI calls, DB).
-  concurrency: 2
-  queues: celery
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
-
-# The extracted notifications service. Same image, different entrypoint and
-# queue — the seam that matters is that its consumers touch no models, so it
-# could move to its own image tomorrow without changing a line of its code.
+# ---------------------------------------------------------------------------
+# Celery workers — one Deployment per queue.
 #
-# Separate from `worker` so a wedged mail provider cannot starve embedding
-# generation or feed fan-out, and so it scales on its own.
-notifications:
-  enabled: true
-  replicaCount: 1
-  # Email delivery is almost entirely waiting on SMTP, so concurrency buys a lot
-  # per unit of memory.
-  concurrency: 4
-  queues: notifications
-  resources:
-    requests:
-      cpu: 50m
-      memory: 224Mi
-    limits:
-      cpu: 300m
-      memory: 384Mi
+# A map rather than three near-identical blocks: adding a service is a queue and
+# a few limits, not another template. Each key becomes a Deployment named
+# <release>-<key>.
+#
+# The split is the point. Everything shared one queue and one worker until the
+# notifications and search extractions; a slow mail provider or a stalled OpenAI
+# call could stall feed fan-out behind it.
+#
+# NOTE: a task routed to a queue that appears in no entry here is enqueued and
+# never executed, with no error anywhere. tests/test_architecture.py reads this
+# map and fails the build on that drift.
+# ---------------------------------------------------------------------------
+workers:
+  # General: feed fan-out, rating rollups, the outbox relay.
+  worker:
+    enabled: true
+    replicaCount: 1
+    concurrency: 2
+    queues: celery
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  # Extracted service — email delivery. Almost entirely waiting on SMTP, so
+  # concurrency buys a lot per unit of memory.
+  notifications:
+    enabled: true
+    replicaCount: 1
+    concurrency: 4
+    queues: notifications
+    resources:
+      requests:
+        cpu: 50m
+        memory: 224Mi
+      limits:
+        cpu: 300m
+        memory: 384Mi
+
+  # Extracted service — profile embedding. Spiky and bound by OpenAI latency,
+  # which is precisely why it must not share a queue with anything user-facing.
+  search:
+    enabled: true
+    replicaCount: 1
+    concurrency: 2
+    queues: search
+    resources:
+      requests:
+        cpu: 50m
+        memory: 224Mi
+      limits:
+        cpu: 300m
+        memory: 448Mi
 
 redis:
   enabled: true

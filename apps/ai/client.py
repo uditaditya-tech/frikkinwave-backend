@@ -1,13 +1,17 @@
 """
-OpenAI client wrapper for the musicians app.
+OpenAI client wrapper.
 
 A thin, swappable seam over the OpenAI SDK so the rest of the code never imports
-`openai` directly — services depend on this interface, and tests patch
+`openai` directly — callers depend on this interface, and tests patch
 `get_openai_client` to inject a fake (no network, no API key needed in CI).
 
-All Phase 2 AI features (embeddings now; compatibility blurbs and the profile
-coach later) live in the musicians app, so the client lives here for now. If AI
-is extracted into its own service, this module moves with it.
+Lives in `apps/ai` rather than inside a domain app because two now depend on it:
+`apps/search` embeds profiles and queries, while `apps/musicians` still owns the
+compatibility blurbs and the profile coach. Whichever one had held it would have
+made the other import across a boundary that is meant to become a network.
+
+This package has no models and is not in INSTALLED_APPS — it is infrastructure,
+the same category as `apps/events`.
 """
 
 from __future__ import annotations

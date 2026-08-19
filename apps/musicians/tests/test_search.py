@@ -9,12 +9,9 @@ import pytest
 from pytest_django.fixtures import SettingsWrapper
 from rest_framework.test import APIClient
 
-from apps.musicians import services
-from apps.musicians.models import (
-    EMBEDDING_DIMENSIONS,
-    MusicianProfile,
-    ProfileEmbedding,
-)
+from apps.musicians.models import MusicianProfile
+from apps.search import services
+from apps.search.models import EMBEDDING_DIMENSIONS, ProfileEmbedding
 from apps.users.models import User
 
 SEARCH_URL = "/api/musicians/search/"
@@ -35,8 +32,14 @@ def _profile_with_embedding(
         email=f"{suffix}@example.com", username=f"user-{suffix}", password="StrongPass123!"
     )
     profile = MusicianProfile.objects.create(user=user, bio=f"bio {suffix}", is_available=available)
+    # is_available is set on BOTH: the profile owns it for display, and the
+    # search row carries a replica because the filter has to run inside the
+    # vector query. Keeping them in sync here mirrors what the event does.
     ProfileEmbedding.objects.create(
-        profile=profile, embedding=_unit_vector(hot_index), embedding_text=f"text {suffix}"
+        profile_id=profile.id,
+        embedding=_unit_vector(hot_index),
+        embedding_text=f"text {suffix}",
+        is_available=available,
     )
     return profile
 
@@ -154,7 +157,7 @@ class TestSearch:
     def test_openai_error_returns_empty(
         self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
     ) -> None:
-        from apps.musicians.openai_client import OpenAIUnavailableError
+        from apps.ai.client import OpenAIUnavailableError
 
         settings.OPENAI_API_KEY = "test-key"
 

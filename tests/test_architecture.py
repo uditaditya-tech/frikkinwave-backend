@@ -145,8 +145,8 @@ def _queues_consumed_by_the_cluster() -> set[str]:
 
     values = yaml.safe_load(CHART_VALUES.read_text())
     consumed: set[str] = set()
-    for section in ("worker", "notifications"):
-        block = values.get(section) or {}
+    # Every entry under `workers` becomes a Deployment started with --queues.
+    for block in (values.get("workers") or {}).values():
         if block.get("enabled", True) and block.get("queues"):
             consumed.update(q.strip() for q in str(block["queues"]).split(","))
     return consumed

@@ -33,8 +33,10 @@ EVENT_HANDLERS: dict[str, str] = {
     "follow.created": "social.backfill_feed",
     "follow.removed": "social.prune_feed",
     "activity.recorded": "social.fan_out_activity",
-    # musicians
-    "profile.updated": "musicians.generate_profile_embedding",
+    # search — extracted service (own queue, own Deployment).
+    # The payload carries the composed embedding text and the availability flag,
+    # so the consumer never reads a musicians table.
+    "profile.updated": "search.index_profile",
     # reviews
     "review.created": "reviews.propagate_profile_rating",
 }

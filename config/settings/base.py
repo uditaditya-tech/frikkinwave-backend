@@ -49,6 +49,7 @@ LOCAL_APPS = [
     # Platform apps (no domain concepts) come first.
     "apps.events",
     "apps.notifications",
+    "apps.search",
     "apps.users",
     "apps.musicians",
     "apps.connections",
@@ -209,6 +210,9 @@ CELERY_TIMEZONE = "UTC"
 CELERY_TASK_DEFAULT_QUEUE = "celery"
 CELERY_TASK_ROUTES = {
     "notifications.*": {"queue": "notifications"},
+    # Embedding work is spiky and bound by OpenAI latency, so it gets its own
+    # worker rather than competing with feed fan-out for the general queue.
+    "search.*": {"queue": "search"},
 }
 
 CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)

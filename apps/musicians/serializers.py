@@ -101,11 +101,9 @@ class ProfileSearchResultSerializer(MusicianProfileReadSerializer):
         fields = [*MusicianProfileReadSerializer.Meta.fields, "similarity"]
 
     def get_similarity(self, obj: MusicianProfile) -> float | None:
-        # `distance` is the cosine distance annotated by search_profiles.
-        distance = getattr(obj, "distance", None)
-        if distance is None:
-            return None
-        return round(1.0 - float(distance), 4)
+        # Set by search_profiles from the search service's score (0..1). The
+        # cosine-distance arithmetic now lives in the search app, not here.
+        return getattr(obj, "similarity", None)
 
 
 # ---------------------------------------------------------------------------

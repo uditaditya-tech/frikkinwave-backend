@@ -1,0 +1,67 @@
+{{- /*
+One Deployment per entry in .Values.workers, each consuming its own queue.
+
+Replaces three near-identical templates. The extracted services (notifications,
+search) differ from the general worker only in which queue they drain and how
+much they are given — the isolation comes from the queue split, not from the
+container.
+*/ -}}
+{{- range $name, $cfg := .Values.workers }}
+{{- if $cfg.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frikkinwave.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "frikkinwave.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $cfg.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "frikkinwave.name" $ }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        {{- include "frikkinwave.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: {{ include "frikkinwave.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - config
+            - worker
+            - --loglevel=info
+            - --concurrency={{ $cfg.concurrency }}
+            # Explicit queue list. Without -Q a worker drains the default queue,
+            # which would quietly undo the isolation for any service whose queue
+            # is not the default.
+            - --queues={{ $cfg.queues }}
+          envFrom:
+            {{- include "frikkinwave.envFrom" $ | nindent 12 }}
+          env:
+            {{- include "frikkinwave.podIpEnv" $ | nindent 12 }}
+          # No readiness probe: workers serve no traffic, so nothing gates on
+          # them. Liveness asks the worker to answer its own control ping, which
+          # catches a process that is up but has lost the broker.
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - celery -A config inspect ping -d celery@$HOSTNAME
+            initialDelaySeconds: 45
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 3
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+{{- end }}
+{{- end }}
