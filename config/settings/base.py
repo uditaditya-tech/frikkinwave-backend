@@ -200,6 +200,11 @@ SEARCH_SIMILARITY_THRESHOLD = env.float("SEARCH_SIMILARITY_THRESHOLD", default=0
 #: reason it was: settings load before any conftest body runs.
 EVENT_RELAY_INLINE = env.bool("EVENT_RELAY_INLINE", default=False)
 
+#: Where the relay records that its poll loop is still turning, for the
+#: liveness probe. The one deliberate exception to "never write to local disk"
+#: (CLAUDE.md): it is liveness evidence that must die with the pod, not state.
+EVENT_RELAY_HEARTBEAT_FILE = env("EVENT_RELAY_HEARTBEAT_FILE", default="/tmp/relay-heartbeat")
+
 #: Seconds the relay loop sleeps when it finds nothing. The upper bound on event
 #: latency, so keep it short — this is what replaced the Celery post-commit
 #: nudge. A full batch skips the sleep entirely so a backlog drains at speed.

@@ -16,6 +16,7 @@ The single-pass mode remains for a CronJob backstop and for running it by hand.
 from __future__ import annotations
 
 import logging
+import pathlib
 import signal
 import time
 from types import FrameType
@@ -27,6 +28,30 @@ from django.core.management.base import BaseCommand
 from apps.events.services import DEFAULT_BATCH, relay_pending
 
 logger = logging.getLogger(__name__)
+
+
+def _touch_heartbeat() -> None:
+    """
+    Record that the poll loop is still turning.
+
+    This is the ONLY thing in the codebase that writes to local disk, and it is
+    a deliberate exception to the stateless rule in CLAUDE.md rather than a
+    breach of it. That rule exists so no *state* lives on a pod that can be
+    killed at any moment. This file is the opposite: it is liveness evidence
+    that MUST die with the pod, is never read by anything but this pod's own
+    kubelet probe, and carries no data.
+
+    The alternative — an HTTP health server inside the relay — means running a
+    web server in a process whose entire job is a database poll.
+
+    Failures are swallowed. A relay that cannot write to /tmp should keep
+    relaying events; the probe failing and restarting it is the correct outcome,
+    not an exception thrown out of the loop.
+    """
+    try:
+        pathlib.Path(settings.EVENT_RELAY_HEARTBEAT_FILE).touch()
+    except OSError:  # pragma: no cover - defensive
+        logger.warning("relay_heartbeat_write_failed")
 
 
 class Command(BaseCommand):
@@ -68,6 +93,11 @@ class Command(BaseCommand):
 
         logger.info("relay_started", extra={"interval": interval})
         while not stopping["now"]:
+            # Touch the heartbeat BEFORE the work, so the file tracks "the loop
+            # is turning" rather than "the last pass succeeded" — a relay that
+            # is up but failing every produce is a different problem, and the
+            # outbox-lag check is what catches that one.
+            _touch_heartbeat()
             try:
                 relayed = relay_pending(limit=opts["limit"])
             except Exception:

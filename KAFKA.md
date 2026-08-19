@@ -760,6 +760,63 @@ after `publish()` — proof that nothing dispatches from the request path.
 
 ---
 
+## Health signals, and a failure drill ✅ (2026-08-19)
+
+The migration left one real gap: **the outbox means a broken relay loses nothing
+— events just queue — but nothing reported that they had stopped moving.**
+`publish()` kept succeeding, rows kept committing, and every surface a human
+checks looked healthy. At 11 events lifetime, that could have gone unnoticed for
+weeks.
+
+### Two signals
+
+**A liveness probe on loop progress, not process existence.** Kubernetes' default
+notion of "alive" is "the PID is there", which a wedged poll loop satisfies
+perfectly while delivering nothing. The relay touches a heartbeat file each pass
+and the probe checks its age.
+
+This is the only place in the codebase that writes to local disk, and it is a
+deliberate exception to the stateless rule rather than a breach of it: the file
+is liveness evidence that **must** die with the pod, is read only by that pod's
+own kubelet, and holds no data. A test ties the path in the chart to the setting,
+because a mismatch would restart a perfectly healthy relay forever.
+
+**`manage.py check_outbox_lag`**, on a 5-minute CronJob. One number — the age of
+the oldest unpublished event — covering every failure between `publish()` and the
+broker: relay down, relay wedged, Kafka unreachable, certificate expired, ACL
+missing, topic never created. It does not care which, and that is the point.
+
+It also fails on events that exhausted their attempts, which otherwise go quiet
+*precisely* when they need a human: they stop being retried, so they stop aging
+the lag number once everything else drains.
+
+**A stopgap, not a pager.** A failed Job is visible in `kubectl get jobs`; it
+wakes nobody. And it says nothing about the consumer side — a message that
+reached Kafka and was never consumed leaves this check perfectly clean. Consumer
+lag needs Prometheus (Phase 3).
+
+### The drill
+
+Run against the live cluster rather than reasoned about, because that is how
+every other surprise this session arrived.
+
+| # | what was done | result |
+|---|---|---|
+| 1 | Force-killed the relay, then published 3 events with **no relay running** | Kubernetes restarted it; all 3 drained. No intervention. |
+| 2 | Killed **one** broker, published 3 | Published and drained transparently — RF 3 / ISR 2 tolerates one loss, as designed. |
+| 3 | Killed **two of three** brokers (ISR below `min.insync.replicas`, KRaft quorum lost), published 3 | Produces failed. Events stayed safely pending. The relay logged `event_dispatch_failed` and **kept running**. `check_outbox_lag` failed with `oldest unpublished event is 15s old`. Brokers returned; all 3 drained with no intervention. |
+
+Drill 3 is the one worth remembering: a **total** broker outage degraded to
+delayed delivery, never lost delivery, and the new alert reported it accurately.
+That is the outbox earning its place — and the first time the durability claim
+has been demonstrated rather than asserted.
+
+One observation: the `social` consumer restarted once during drill 3 and rejoined
+its group without intervention. Rebalancing under failure is therefore no longer
+completely untested, though it remains unexercised under load.
+
+---
+
 ## Cost
 
 Prices from the AWS Pricing API, ap-south-1, 2026-08-19.

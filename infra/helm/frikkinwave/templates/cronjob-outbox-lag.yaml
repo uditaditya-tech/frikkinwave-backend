@@ -1,0 +1,64 @@
+{{- /*
+Is the event system actually working?
+
+The gap the Kafka migration left. The outbox means a broken relay loses nothing —
+events simply queue — but NOTHING reports that they stopped moving. publish()
+keeps succeeding, rows keep committing, and every surface a human checks looks
+healthy.
+
+Outbox lag is one number covering every failure between publish() and the
+broker: relay down, relay wedged, Kafka unreachable, certificate expired, ACL
+missing, topic never created.
+
+This is a STOPGAP, not a pager. A failed Job is visible in `kubectl get jobs` and
+in the console; it does not wake anyone. Real alerting arrives with Prometheus in
+Phase 3, which is also where consumer-group lag has to live — a message that
+reached Kafka and was never consumed leaves this check perfectly clean.
+*/ -}}
+{{- if .Values.outboxLagCheck.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-outbox-lag
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/component: outbox-lag
+spec:
+  schedule: {{ .Values.outboxLagCheck.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  # Keep failures around: a failed Job IS the signal here, so pruning them to one
+  # would hide a repeated failure behind a single most-recent example.
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "frikkinwave.labels" . | nindent 12 }}
+            app.kubernetes.io/component: outbox-lag
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: outbox-lag
+              image: {{ include "frikkinwave.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - python
+                - manage.py
+                - check_outbox_lag
+                - --max-seconds
+                - "{{ .Values.outboxLagCheck.maxSeconds }}"
+              envFrom:
+                {{- include "frikkinwave.envFrom" . | nindent 16 }}
+              env:
+                {{- include "frikkinwave.podIpEnv" . | nindent 16 }}
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 192Mi
+                limits:
+                  cpu: 200m
+                  memory: 320Mi
+{{- end }}

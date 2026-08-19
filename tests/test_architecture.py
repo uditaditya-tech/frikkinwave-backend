@@ -365,3 +365,36 @@ def test_the_consumer_group_prefix_matches_the_acl() -> None:
         (APPS_DIR.parent / "infra" / "helm" / "kafka" / "values.yaml").read_text()
     )
     assert kafka_values["consumerGroupPrefix"] == settings.KAFKA_CONSUMER_GROUP_PREFIX
+
+
+def test_the_relay_heartbeat_path_matches_the_probe() -> None:
+    """
+    The loop writes this file; the liveness probe reads it. A mismatch means the
+    probe never sees a fresh heartbeat and restarts a perfectly healthy relay
+    every failureThreshold — an outage manufactured by the thing meant to
+    prevent one, and one that looks like a crash-looping app.
+    """
+    import yaml
+    from django.conf import settings
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    assert values["relay"]["heartbeatFile"] == settings.EVENT_RELAY_HEARTBEAT_FILE
+
+    template = (
+        APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "templates" / "deployment-relay.yaml"
+    ).read_text()
+    assert ".Values.relay.heartbeatFile" in template, (
+        "The probe must read the path from values, not hardcode it."
+    )
+
+
+def test_the_heartbeat_tolerance_exceeds_the_poll_interval() -> None:
+    """
+    If the probe's tolerance were tighter than the loop's idle sleep, a relay
+    with nothing to do would look wedged and be restarted continuously.
+    """
+    import yaml
+    from django.conf import settings
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    assert values["relay"]["heartbeatMaxAgeSeconds"] > settings.EVENT_RELAY_INTERVAL * 5

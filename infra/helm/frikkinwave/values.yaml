@@ -59,6 +59,13 @@ web:
 # delivered.
 # ---------------------------------------------------------------------------
 relay:
+  # Must match EVENT_RELAY_HEARTBEAT_FILE in settings — the loop writes it, the
+  # liveness probe reads it, and a mismatch means the probe restarts a perfectly
+  # healthy relay forever. A test ties the two together.
+  heartbeatFile: /tmp/relay-heartbeat
+  # Comfortably above EVENT_RELAY_INTERVAL (1s) so a slow batch is not mistaken
+  # for a wedged loop.
+  heartbeatMaxAgeSeconds: 60
   resources:
     requests:
       cpu: 50m
@@ -129,6 +136,13 @@ migrations:
   activeDeadlineSeconds: 600
   # Keep finished Jobs for a day, then let the TTL controller remove them.
   ttlSecondsAfterFinished: 86400
+
+# Outbox lag — the one signal that says the event system stopped working.
+# A stopgap until Prometheus (Phase 3): a failed Job is visible, not paging.
+outboxLagCheck:
+  enabled: true
+  schedule: "*/5 * * * *"
+  maxSeconds: 300
 
 ingress:
   enabled: true

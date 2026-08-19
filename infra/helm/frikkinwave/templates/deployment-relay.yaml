@@ -56,6 +56,26 @@ spec:
             {{- include "frikkinwave.podIpEnv" . | nindent 12 }}
           volumeMounts:
             {{- include "frikkinwave.kafkaVolumeMounts" . | nindent 12 }}
+          # Liveness on LOOP PROGRESS, not process existence.
+          #
+          # Kubernetes' default notion of "alive" is "the PID is there", which a
+          # wedged poll loop satisfies perfectly while delivering nothing. The
+          # loop touches a heartbeat file each pass; this checks its age. Python
+          # rather than `stat`, whose flags differ between GNU and BSD.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import os, sys, time
+                  age = time.time() - os.path.getmtime("{{ .Values.relay.heartbeatFile }}")
+                  sys.exit(0 if age < {{ .Values.relay.heartbeatMaxAgeSeconds }} else 1)
+            # Generous start: the first pass waits on Django setup and a DB
+            # connection, and a restart loop here stops event delivery entirely.
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.relay.resources | nindent 12 }}
       volumes:
