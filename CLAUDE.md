@@ -46,7 +46,7 @@ This project is built for eventual 100M users / 1M concurrent. The monolith ship
 
 2. **Structured JSON logging always.** All log output is JSON. Unstructured text logs are useless on EKS + CloudWatch/Datadog at scale. Never use `print()` for debugging — use `logger = logging.getLogger(__name__)`.
 
-3. **Stateless Django always.** Never write to local disk. All file storage goes to S3. ECS/EKS tasks are ephemeral — any task can be killed and replaced at any moment.
+3. **Stateless Django always.** Never write to local disk. All file storage goes to S3. Pods are ephemeral — any pod can be killed and replaced at any moment.
 
 4. **Events for async work, not direct calls.** Profile saved → emit an internal event → Celery task handles it. The event shape today becomes the Kafka message schema when we extract services. Wire Celery tasks as event handlers, not as inline function calls from views.
 
@@ -217,7 +217,7 @@ Manual run: `pre-commit run --all-files`
 - **WhiteNoise + collectstatic:** Must run `collectstatic` at Dockerfile build time with placeholder env vars.
 - **JWT refresh rotation:** Requires `rest_framework_simplejwt.token_blacklist` in `INSTALLED_APPS` AND its migrations applied. Both are already wired.
 - **Custom User model migrations:** Never add a FK to `AUTH_USER_MODEL` before the users migration exists. Always `makemigrations users` first.
-- **AWS ECS health check:** `SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]` is in production.py — keeps the ALB health check from being 301'd. Also: the ALB health check hits the container with the **task's private IP** as the Host header, so production.py appends that IP (from the ECS metadata endpoint) to `ALLOWED_HOSTS`, and sets `SECURE_PROXY_SSL_HEADER` so HTTPS-behind-ALB doesn't redirect-loop. Don't remove either.
+- **Health-check settings are load-bearing.** `SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]` in production.py keeps probes from being 301'd, and `SECURE_PROXY_SSL_HEADER` stops HTTPS-behind-ALB redirect-looping. Don't remove either. The Host-header half is `POD_IP` — see the infrastructure section.
 - **Celery (Phase 2):** The app lives in `config/celery.py` and is imported in `config/__init__.py`; tasks go in each app's `tasks.py` (auto-discovered). Two gotchas:
   - **Eager mode in tests:** Celery reads `CELERY_TASK_ALWAYS_EAGER` from Django settings *once at finalize*, and Django settings load before any conftest body runs — so setting `app.conf.task_always_eager` from a fixture (or `os.environ` in conftest) is too late, and `.delay().get()` blocks on the live broker with no worker (hangs the suite). Instead `config/settings/local.py` flips eager on when `PYTEST_VERSION` is set (pytest exports it at startup). Plain `runserver` keeps eager off and uses the real Redis broker. Don't try to toggle eager from conftest/fixtures.
   - **mypy:** `@app.task` / `@shared_task` are untyped in the stubs, tripping `untyped-decorator` under strict mode. Suppressed via a `disable_error_code = ["untyped-decorator", "misc"]` override scoped to `config.celery` + `apps.*.tasks` in pyproject.toml. Task bodies stay typed.
@@ -246,14 +246,13 @@ Manual run: `pre-commit run --all-files`
 
 ## Infrastructure (AWS) — see `infra/README.md`
 
-- **Two Terraform stacks.** `infra/dns/` is PERSISTENT (Route 53 zone + ACM cert) — **never `terraform destroy` it** or the GoDaddy NS delegation breaks. `infra/terraform/` is the disposable app stack (VPC, ALB, ECS/Fargate, RDS, SSM secrets); destroy/apply freely. The app stack discovers the zone + cert via `data` sources.
+- **Two Terraform stacks.** `infra/dns/` is PERSISTENT (Route 53 zone + ACM cert) — **never `terraform destroy` it** or the GoDaddy NS delegation breaks. `infra/eks/` is the disposable app stack (VPC, EKS, RDS, ECR, load balancer controller); destroy/apply freely. It discovers the zone + cert via `data` sources.
 - **DEPLOYMENT STATE: EKS Phase 2 is applied and live as of 2026-08-19.** `https://api.frikkinwave.com/api/health/` returns 200 served from Kubernetes — 2 web pods + Celery worker + in-cluster Redis behind an ALB, on a 2-node ARM64 EKS cluster, with RDS restored from snapshot `frikkinwave-prod-final-528299d1` (the full demo dataset). **This stack bills ~$0.19/hr and is meant to be torn down between sessions** with `./infra/scripts/eks-down.sh`. If you are reading this at the start of a session, verify before assuming: `aws eks list-clusters --region ap-south-1`. *(Update this bullet when the deployment state changes.)*
   - **Bring it up:** `./infra/scripts/eks-up.sh` (~15 min, Terraform: cluster/RDS/ECR/LB controller) then `./infra/scripts/app-deploy.sh` (~5 min, build + push + `helm upgrade` + Route 53 + verify). Terraform owns AWS; Helm owns the app.
-  - **The ECS stack (`infra/terraform/`) is LEGACY** — unapplied ($0), kept in git as a fallback/reference. Replaced by `infra/eks/`.
   - **Read `infra/eks/README.md` before touching this.** It records four traps already paid for: the EKS-version 6x extended-support billing trap, the access-entry 409, that a **restored snapshot predating a denormalization needs `backfill_profile_ratings` run by hand** (migrate gives you the schema, never the derived data), and negative DNS caching making a healthy deploy look broken.
-  - **`POD_IP` is load-bearing on Kubernetes.** `production.py` appends the pod IP (downward API) to `ALLOWED_HOSTS`. Both kubelet probes and ip-mode ALB health checks send the pod IP as the `Host` header; without it every readiness probe 400s and no pod reaches Ready. The ECS metadata branch beside it only works on the legacy stack.
+  - **`POD_IP` is load-bearing on Kubernetes.** `production.py` appends the pod IP (downward API) to `ALLOWED_HOSTS`. Both kubelet probes and ip-mode ALB health checks send the pod IP as the `Host` header; without it every readiness probe 400s and no pod reaches Ready.
   - **Helm templates are excluded from pre-commit's `check-yaml`** — they are Go templates, not YAML, until rendered. `helm lint` + `helm template` cover them.
-- **Region** `ap-south-1` (Mumbai). **Migrations never run on container start** — concurrent replicas would race the same migration. On EKS they are a Helm `pre-upgrade` hook Job that must succeed before the Deployments roll; on the legacy ECS stack, a one-off task (`infra/scripts/run-migrations.sh`). **Images** are `linux/arm64` (Graviton on both). **Secrets:** on EKS, Terraform writes a Kubernetes Secret the pods read via `envFrom`, and mirrors the values to SSM for Phase 3's External Secrets; on ECS, SSM only, via the task def `secrets` block.
+- **Region** `ap-south-1` (Mumbai). **Migrations never run on container start** — concurrent replicas would race the same migration; they are a Helm `pre-upgrade` hook Job that must succeed before the Deployments roll. **Images** are `linux/arm64` (Graviton). **Secrets:** Terraform writes a Kubernetes Secret the pods read via `envFrom`, and mirrors the values to SSM for Phase 3's External Secrets.
 
 ---
 
@@ -265,4 +264,4 @@ Critical ones:
 - `DJANGO_SECRET_KEY` — required in all environments
 - `DATABASE_URL` — postgres connection string
 - `DJANGO_SETTINGS_MODULE` — set to `config.settings.local` for dev, `config.settings.production` for prod
-- `SEARCH_SIMILARITY_THRESHOLD` — semantic-search relevance floor (default `0.4`, `0` disables). Live-tunable in prod via the ECS task-def env (`terraform apply -var search_similarity_threshold=N`), no image rebuild.
+- `SEARCH_SIMILARITY_THRESHOLD` — semantic-search relevance floor (default `0.4`, `0` disables). Live-tunable in prod via the chart's `config` map (`helm upgrade --set config.SEARCH_SIMILARITY_THRESHOLD=N`), no image rebuild.

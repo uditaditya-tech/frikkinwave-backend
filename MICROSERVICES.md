@@ -36,10 +36,10 @@ distributed-systems cost and none of the benefit.
 ```mermaid
 flowchart LR
     C[Clients] --> ALB[ALB + ACM/HTTPS]
-    ALB --> WEB["ECS Fargate — web<br/>gunicorn / Django"]
+    ALB --> WEB["EKS — web pods<br/>gunicorn / Django"]
     WEB --> PG[("RDS Postgres 16<br/>+ pgvector")]
     WEB -- enqueue --> R[(ElastiCache Redis<br/>Celery broker)]
-    R --> WKR["ECS Fargate — worker<br/>Celery"]
+    R --> WKR["EKS — worker pods<br/>Celery"]
     WKR --> PG
     WKR --> OAI[OpenAI API]
     WEB --> OAI
@@ -50,7 +50,7 @@ flowchart LR
     end
 ```
 
-One Django image runs as two ECS services (web + Celery worker), against **one** Postgres.
+One Django image runs as several Kubernetes Deployments (web, worker, notifications, search), against **one** Postgres.
 All eight `apps/` share that database, and every cross-app call is an in-process Python
 function call inside a single ACID transaction.
 
@@ -164,7 +164,7 @@ Highest value per hour of work, and none of it is wasted if you later split.
 
 | Move | Why it matters | Effort |
 |---|---|---|
-| **Horizontal web replicas + autoscaling** | App is already stateless; raise ECS desired count, scale on CPU + p95 latency | config |
+| **Horizontal web replicas + autoscaling** | App is already stateless; raise `web.replicaCount` and add an HPA on CPU + p95 latency | config |
 | **RDS Proxy / PgBouncer** | Django opens a connection per worker; Postgres dies on connection count long before CPU. **Non-negotiable past a few replicas.** | infra |
 | **RDS read replica + read routing** | Public profiles, browse, search, feed reads are read-heavy | infra + DB router |
 | **CloudFront in front of public GETs** | Public profiles / follower lists / reviews are cacheable and currently hit Django every time | infra |
@@ -400,8 +400,8 @@ data with all that implies. Worth deciding deliberately.
 
 | Dimension | Today | High-traffic target |
 |---|---|---|
-| **Deploy unit** | 1 image, 2 ECS services | ~6–8 services, each its own image + pipeline |
-| **Orchestration** | ECS Fargate, manual `terraform apply` | **EKS + HPA** (CPU, p95 latency, **Kafka consumer lag**), GitOps, canary/blue-green |
+| **Deploy unit** | 1 image, 5 Deployments | ~6–8 services, each its own image + pipeline |
+| **Orchestration** | EKS, `helm upgrade` by hand | **EKS + HPA** (CPU, p95 latency, **Kafka consumer lag**), GitOps, canary/blue-green |
 | **Data** | 1 RDS Postgres (pgvector) | **DB per service**; Aurora + read replicas; dedicated vector store; Redis clusters; DynamoDB/Cassandra feed inbox |
 | **Async** | Celery + single Redis broker | **Kafka/MSK backbone**; Celery/Kafka consumers per service |
 | **Inter-module comms** | in-process calls, one ACID txn | RPC for queries, events for propagation, **eventual consistency** |
@@ -454,7 +454,7 @@ three. Every RPC seam needs, explicitly:
 | Question | Options | Notes |
 |---|---|---|
 | Event backbone | MSK (Kafka) vs Kinesis vs SNS/SQS | Kafka matches the "event shape today = Kafka schema tomorrow" rule already in `CLAUDE.md`; SNS/SQS is cheaper and simpler to start |
-| Orchestration | Stay on ECS vs move to EKS | ECS is fine for ~5 services; EKS earns its complexity at higher service count / richer autoscaling |
+| Orchestration | ~~ECS vs EKS~~ — **decided: EKS**, applied 2026-08-19 | The ECS stack is deleted; git history has it if the decision ever needs revisiting |
 | RPC transport | gRPC vs HTTP+JSON | gRPC for typed contracts and speed; HTTP is simpler and debuggable |
 | Feed store | Redis sorted sets vs DynamoDB | Redis is faster and simpler; DynamoDB is durable and cheaper at very large inbox volume |
 | Vector store | keep pgvector vs dedicated (Pinecone/Qdrant/OpenSearch) | pgvector + HNSW scales further than people assume — measure before moving |

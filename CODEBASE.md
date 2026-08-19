@@ -217,7 +217,7 @@ frikkinwave-backend/
 │   └── settings/
 │       ├── base.py                # Shared — all envs inherit from here
 │       ├── local.py               # Dev: DEBUG=True, CORS open, human logs
-│       └── production.py          # Prod: HTTPS, ALLOWED_HOSTS from env + ECS task IP (ALB health), SSM secrets
+│       └── production.py          # Prod: HTTPS, ALLOWED_HOSTS from env + POD_IP (probes/ALB health)
 │
 ├── .github/
 │   └── workflows/
@@ -228,7 +228,8 @@ frikkinwave-backend/
 │
 ├── infra/                         # AWS infrastructure (Terraform) — see infra/README.md
 │   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
-│   ├── terraform/                 # APP stack: VPC, ECR, RDS, ALB, ECS/Fargate, IAM, SSM secrets, logs
+│   ├── eks/                       # APP stack: VPC, EKS, RDS, ECR, IAM/IRSA, LB controller, secrets
+│   ├── helm/                      # Application chart: web, workers, redis, migrate Job, ingress
 │   └── scripts/
 │       ├── push-image.sh          # build linux/arm64 → push to ECR
 │       └── run-migrations.sh      # one-off Fargate task: migrate + seed
@@ -259,7 +260,7 @@ frikkinwave-backend/
 
 ## Current API endpoints
 
-Production base URL: **https://api.frikkinwave.com** (ECS Fargate + ALB + RDS, `ap-south-1`).
+Production base URL: **https://api.frikkinwave.com** (EKS + ALB + RDS, `ap-south-1`).
 
 | Method | URL | Auth | Description |
 |---|---|---|---|
@@ -428,7 +429,7 @@ curl http://localhost:8000/api/health/   # → {"status": "ok"}
 
 ## Production container
 
-`Dockerfile` builds the image deployed to ECS/Fargate (Phase 1, sub-steps 1.9+).
+`Dockerfile` builds the `linux/arm64` image deployed to EKS.
 
 ```bash
 docker build -t frikkinwave-backend .
@@ -449,7 +450,7 @@ Design notes:
 - **`DJANGO_SETTINGS_MODULE=config.settings.production`** is baked in; served by **gunicorn** (sync workers, count via `WEB_CONCURRENCY`, default 3).
 - **collectstatic runs at build time** with placeholder env vars (WhiteNoise manifest storage needs the files present in the image). Placeholders are never used at runtime.
 - **Non-root** (`appuser`, uid 10001). Filesystem treated as ephemeral — all real storage is S3/RDS.
-- **Migrations are NOT run on container start** — they run as a separate one-off ECS task (avoids races across concurrent Fargate tasks). Wired in 1.9/1.10.
+- **Migrations are NOT run on container start** — they run as a Helm `pre-upgrade` hook Job (avoids races across concurrent replicas, and blocks the rollout if they fail).
 
 ---
 

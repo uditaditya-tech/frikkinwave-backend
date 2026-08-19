@@ -22,7 +22,7 @@ A global, profile-centric social network for musicians and live-shows industry p
 | Background jobs | Celery + Redis | Async embedding generation on profile save |
 | AI | OpenAI text-embedding-3-small + gpt-4o-mini | Cheapest capable models; swap-able behind a service interface |
 | API contract | drf-spectacular → OpenAPI schema | Contract-first; schema exposed at /api/schema/ |
-| Deployment | AWS ECS + Fargate (EKS migration path later) | Container-based; same Docker image retargets to EKS |
+| Deployment | AWS EKS (Kubernetes) + Helm | Same Docker image; per-service Deployments as apps are extracted |
 | CI | GitHub Actions | Lint + type-check + migrate + pytest on every push |
 
 ---
@@ -49,7 +49,7 @@ Time-ordered, index-friendly, safe to expose in URLs. Uses `uuid6` backport (std
 ```
 GitHub → CI (Actions) → ECR (Docker image)
                               ↓
-                        ECS Fargate task
+                    EKS: web · worker · notifications · search
                               ↓
                     ALB → api.frikkinwave.com
 ```

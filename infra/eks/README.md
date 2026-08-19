@@ -1,15 +1,16 @@
 # EKS stack
 
-The Kubernetes replacement for the ECS app stack. **Phase 1 (cluster foundation)
-is built and verified.** Everything here is disposable — the cluster is created
+The application stack. **Phase 1 (cluster foundation) is built and verified.** Everything here is disposable — the cluster is created
 and destroyed around each working session.
 
-> **Stack layout.** Three independent Terraform stacks:
+> **Stack layout.** Two independent Terraform stacks:
 > | Stack | Lifecycle |
 > |---|---|
 > | `infra/dns/` | **PERSISTENT** — Route 53 zone + ACM cert. Never destroy: it breaks the registrar's NS delegation. |
 > | `infra/eks/` | **DISPOSABLE** — this stack. Destroy whenever idle. |
-> | `infra/terraform/` | **LEGACY** — the ECS stack. Not applied ($0). Kept in git as a fallback and as a reference; being replaced by this one. |
+>
+> The ECS stack that preceded this one was deleted once EKS was verified; it is
+> in git history if it is ever needed.
 
 ---
 

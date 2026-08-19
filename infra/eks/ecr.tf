@@ -29,7 +29,10 @@ resource "aws_ecr_lifecycle_policy" "app" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep only the last 10 images"
+        # Counts ENTRIES, not builds. Kept honest by the --provenance=false
+        # flag in app-deploy.sh: with attestations on, one build is three
+        # entries and this quietly becomes a 3-deploy rollback window.
+        description = "Keep only the last 10 images"
         selection = {
           tagStatus   = "any"
           countType   = "imageCountMoreThan"

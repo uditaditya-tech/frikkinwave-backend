@@ -24,7 +24,7 @@ CI green, dev stack running, zero feature code. Frontend deferred until backend 
 
 ## Phase 1 — Musician profiles + jam partner discovery
 **Status: ✅ Complete**
-Shipped: live at https://api.frikkinwave.com (ECS Fargate + ALB + RDS, ap-south-1)
+Shipped: live at https://api.frikkinwave.com (EKS + ALB + RDS, ap-south-1)
 
 | Sub-step | Status |
 |---|---|
@@ -160,10 +160,11 @@ when we pick it up:
   daphne). Either swap the server or run a **separate ASGI service** alongside the WSGI web
   service (likely cleaner — keep REST on WSGI, WebSockets on their own task/target group).
 - **ALB / infra.** WebSocket upgrade support + sticky sessions (or a stateless channel
-  layer), a new ECS service + target group, and health checks for the WS path. Terraform
-  app-stack changes — see infra/README.
-- **Channel layer.** Reuse the existing ElastiCache Redis (`channels_redis`) vs a dedicated
-  instance.
+  layer), a separate Deployment + Service with its own Ingress path, and health checks for
+  the WS path. Helm chart changes — see infra/README.
+- **Channel layer.** Reuse the in-cluster Redis (`channels_redis`) vs a dedicated instance.
+  Note the current broker has no persistence — fine for Celery because the outbox makes
+  delivery recoverable, but a channel layer losing state is directly user-visible.
 - **Data model.** `Conversation` + `Message` (gating: who may DM whom — any user, or only
   connected/followed/engaged users?). Persistence + read receipts are scope decisions.
 - **Auth over WS.** JWT in the connect handshake (query param / subprotocol), since headers
@@ -177,9 +178,9 @@ No models, endpoints, or infra for this exist yet.
 
 | Service | Platform | Status |
 |---|---|---|
-| Backend API | AWS ECS + Fargate | ✅ Live (ap-south-1, HTTPS) — web + Celery worker |
-| Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, private subnets) |
-| Cache / broker | AWS ElastiCache (Redis) | ✅ Live (ap-south-1, Celery broker) |
+| Backend API | AWS EKS (Kubernetes) | ✅ Live (ap-south-1, HTTPS) — web ×2, worker, notifications, search |
+| Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, reachable only from the cluster SG) |
+| Cache / broker | In-cluster Redis | ✅ Live (Celery broker; no persistence by design — see the outbox) |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |
 | Future | AWS EKS | Phase 4+ |

@@ -60,8 +60,17 @@ echo "==> Logging in to ECR ${REGISTRY}"
 aws ecr get-login-password --region "${REGION}" \
   | docker login --username AWS --password-stdin "${REGISTRY}"
 
+# --platform linux/arm64 is not optional (see above).
+#
+# --provenance/--sbom=false: BuildKit otherwise attaches a provenance
+# attestation, which makes each push THREE ECR entries — an image index, the
+# real image, and the attestation. The lifecycle policy counts entries, so
+# "keep the last 10 images" silently became "keep the last 3 deploys", and
+# expiry could drop an untagged child manifest that a current index still
+# points at. Nothing here consumes attestations.
 echo "==> Building ${REPO_URL}:${TAG} (linux/arm64)"
-docker build --platform linux/arm64 -t "${REPO_URL}:${TAG}" "${REPO_ROOT}"
+docker build --platform linux/arm64 --provenance=false --sbom=false \
+  -t "${REPO_URL}:${TAG}" "${REPO_ROOT}"
 
 echo "==> Pushing"
 docker push "${REPO_URL}:${TAG}"
