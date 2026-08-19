@@ -22,7 +22,28 @@ RELEASE="frikkinwave"
 
 # Default the tag to the git sha: an immutable tag is what makes a rollback
 # expressible ("go back to 4f2a1c9") instead of a guess.
-TAG="${1:-$(git -C "${REPO_ROOT}" rev-parse --short HEAD)}"
+#
+# But a sha only means something if the tree is CLEAN. Deploying uncommitted
+# work under a commit's sha produces an image that tag lies about — and it
+# happened here: the search extraction shipped tagged with the previous
+# commit's sha, so that tag names an image containing code the commit does not
+# have, and re-pushing it silently replaced the image the tag used to mean.
+#
+# A dirty tree therefore gets a tag that is obviously not a commit, and unique
+# so two dirty deploys cannot collide.
+if [ -n "${1:-}" ]; then
+  TAG="$1"
+else
+  SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+  if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
+    TAG="${SHA}-dirty.$(date +%s)"
+    echo "!! Working tree is dirty. Tagging ${TAG} rather than ${SHA}," >&2
+    echo "   because this image does not correspond to any commit." >&2
+    echo "   Commit first if you want a rollback target you can name." >&2
+  else
+    TAG="${SHA}"
+  fi
+fi
 
 tf() { terraform -chdir="${TF_DIR}" output -raw "$1"; }
 

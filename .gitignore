@@ -64,8 +64,10 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
-# EKS stack local state (same policy as the other Terraform stacks)
+# EKS stack local state (same policy as the other Terraform stacks).
+# The lock file is deliberately NOT here — see the note above: it is committed
+# so provider versions are reproducible. This stack pins five providers, so it
+# is the one that needs it most.
 infra/eks/.terraform/
-infra/eks/.terraform.lock.hcl
 infra/eks/terraform.tfstate
 infra/eks/terraform.tfstate.backup

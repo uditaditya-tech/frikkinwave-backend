@@ -129,15 +129,6 @@ def get_user_or_raise(*, username: str) -> UserRef:
     return target
 
 
-def follow_counts(*, user_id: str) -> dict[str, int]:
-    """Return {'followers': N, 'following': M} for a user."""
-    uid = uuid.UUID(user_id)
-    return {
-        "followers": Follow.objects.filter(followed_id=uid).count(),
-        "following": Follow.objects.filter(follower_id=uid).count(),
-    }
-
-
 # ---------------------------------------------------------------------------
 # Activity feed (fan-out-on-write)
 # ---------------------------------------------------------------------------

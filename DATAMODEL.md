@@ -135,7 +135,8 @@ normalised.
   rows live in the same database, which is exactly the coupling that makes an
   extraction impossible to finish. The cost is no cascade delete: a stale row can
   outlive its profile, so `search_profiles` skips unmatched hits and removal is
-  an explicit call to `search.services.remove_profile`.
+  an explicit call to `search.services.remove_profile` (no profile-deletion
+  endpoint exists yet — the function is tested and waiting for one).
 - **`is_available` is a REPLICA** of the field on `MusicianProfile`, and is
   eventually consistent. It lives here because the availability filter has to run
   inside the same query as the nearest-neighbour scan — filter afterwards and a
