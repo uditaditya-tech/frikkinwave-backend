@@ -1,0 +1,29 @@
+{{- /*
+  The event topics, one KafkaTopic each, reconciled by the Topic Operator.
+
+  Declared here rather than created ad hoc because `authorization: simple`
+  denies by default: an ACL has to name a topic, so the authorization surface
+  and the topic list are the same list. tests/test_infrastructure.py compares
+  it against apps/events/registry.py and fails the build if they drift.
+
+  Nothing produces to these yet — the app is still on Celery. They exist so
+  stage 3 inherits a broker that is already authorized correctly.
+*/}}
+{{- range .Values.topics }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  # A Kubernetes object name cannot contain "." or "_", but a Kafka topic name
+  # can and does. spec.topicName carries the real one; this is only the CR name.
+  name: {{ . | replace "." "-" | replace "_" "-" }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.Values.clusterName }}
+spec:
+  topicName: {{ . | quote }}
+  partitions: 3
+  replicas: {{ $.Values.durability.replicationFactor }}
+  config:
+    min.insync.replicas: {{ $.Values.durability.minInsyncReplicas | quote }}
+{{- end }}

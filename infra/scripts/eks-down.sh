@@ -47,10 +47,40 @@ if aws eks update-kubeconfig --name "${CLUSTER}" --region "${REGION}" >/dev/null
   # destroy, and keep billing — exactly the orphan class this script exists to
   # prevent. Remove the thing that owns them first.
   if kubectl get crd kafkas.kafka.strimzi.io >/dev/null 2>&1; then
+    echo "==> Removing Kafka topics and users (finalizers need their operators ALIVE)"
+    # ORDER IS LOAD-BEARING, and this half was learned the hard way.
+    #
+    # KafkaTopic and KafkaUser carry the finalizers strimzi.io/topic-operator and
+    # strimzi.io/user-operator. Only the Entity Operator removes them — and it
+    # dies with the Kafka resource. Delete Kafka first and every topic is stranded
+    # in Terminating FOREVER, which then blocks `helm uninstall` and, after it,
+    # `terraform destroy`:
+    #
+    #   resource KafkaTopic/kafka/follow-created still exists.
+    #   status: Terminating, message: Resource scheduled for deletion
+    #   context deadline exceeded
+    #
+    # Recovering from that means patching finalizers off by hand:
+    #   kubectl patch kafkatopic <name> -n kafka --type=merge \
+    #     -p '{"metadata":{"finalizers":[]}}'
+    kubectl delete kafkatopic --all -n kafka --ignore-not-found --timeout=120s || true
+    kubectl delete kafkauser --all -n kafka --ignore-not-found --timeout=120s || true
+
     echo "==> Removing the Kafka cluster and the Strimzi operator (they recreate PVCs)"
     kubectl delete kafka --all -n kafka --ignore-not-found --timeout=180s || true
     kubectl delete kafkanodepool --all -n kafka --ignore-not-found --timeout=120s || true
     helm uninstall strimzi -n kafka --wait --timeout 5m 2>/dev/null || true
+
+    # Belt and braces: if anything above timed out, the operators are gone and
+    # nothing will ever clear these. Strip the finalizers so the destroy proceeds
+    # rather than hanging for five minutes and then failing.
+    for kind in kafkatopic kafkauser; do
+      for obj in $(kubectl get "${kind}" -n kafka -o name 2>/dev/null); do
+        echo "    !! ${obj} outlived its operator — clearing its finalizer"
+        kubectl patch "${obj}" -n kafka --type=merge \
+          -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true
+      done
+    done
   fi
 
   echo "==> Removing PersistentVolumeClaims (they own EBS volumes)"

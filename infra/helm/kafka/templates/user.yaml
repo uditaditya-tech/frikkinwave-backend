@@ -1,0 +1,41 @@
+{{- /*
+  The application's Kafka identity.
+
+  Strimzi generates a Secret named after this user holding the SCRAM password;
+  stage 3 mounts it. The password is never in git, never in helm values, and
+  never in Terraform state — the operator creates it in the cluster. That matters
+  here specifically: this repository is PUBLIC.
+
+  Nothing uses these credentials yet.
+*/}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ .Values.appUser }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ .Values.clusterName }}
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+{{- range .Values.topics }}
+      # Produce and consume this topic, and read its metadata. Deliberately no
+      # Delete and no Alter: topics are KafkaTopic manifests reconciled by the
+      # Topic Operator, so an application that could change them would be able
+      # to drift the cluster away from what is in git.
+      - resource:
+          type: topic
+          name: {{ . | quote }}
+          patternType: literal
+        operations: [Read, Write, Describe]
+{{- end }}
+      # Consumer groups. A prefix so stage 4 can give each extracted service its
+      # own group without an ACL change per service.
+      - resource:
+          type: group
+          name: {{ .Values.consumerGroupPrefix | quote }}
+          patternType: prefix
+        operations: [Read, Describe]

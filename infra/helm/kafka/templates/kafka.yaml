@@ -71,14 +71,30 @@ spec:
   kafka:
     version: {{ .Values.kafkaVersion | quote }}
     listeners:
-      # Plaintext, internal only. There is no route into this from outside the
-      # cluster and no client outside it — adding TLS and auth before there is
-      # a consumer would be securing a door in a field. Stage 3/4 revisit this
-      # when producers and consumers actually exist.
-      - name: plain
-        port: 9092
+      # TLS + SCRAM-SHA-512. This replaced a plaintext listener with no
+      # authentication, on which any pod in the cluster could read every topic.
+      #
+      # networkPolicyPeers is the SECOND layer. Strimzi's generated policy leaves
+      # a listener unrestricted (`from: null`) unless this is set — which is
+      # exactly why enabling NetworkPolicy enforcement alone would not have
+      # closed the hole.
+      - name: {{ .Values.security.listenerName }}
+        port: {{ .Values.security.listenerPort }}
         type: internal
-        tls: false
+        tls: true
+        authentication:
+          type: scram-sha-512
+        networkPolicyPeers:
+{{- range .Values.security.allowedNamespaces }}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: {{ . }}
+{{- end }}
+    # DENY BY DEFAULT. An authenticated client with no ACLs can do nothing.
+    # Strimzi adds its own operators to super.users, so the Topic Operator keeps
+    # working — it talks over the internal 9091 listener regardless.
+    authorization:
+      type: simple
     config:
       # Topics created without an explicit replication factor.
       default.replication.factor: {{ .Values.durability.replicationFactor }}
@@ -94,5 +110,9 @@ spec:
   entityOperator:
     topicOperator:
       resources:
-{{ toYaml .Values.entityOperator.resources | indent 8 }}
+{{ toYaml .Values.entityOperator.topicOperator.resources | indent 8 }}
+    # Required for the KafkaUser above to exist in Kafka at all — see values.yaml.
+    userOperator:
+      resources:
+{{ toYaml .Values.entityOperator.userOperator.resources | indent 8 }}
 {{- end }}

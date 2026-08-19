@@ -61,6 +61,67 @@ jvm:
   xmx: 1g
 
 # ---------------------------------------------------------------------------
+# Security.
+#
+# The listener is TLS + SCRAM-SHA-512 + ACLs, not plaintext. It was plaintext
+# with no authentication until 2026-08-19, which meant any pod in the cluster
+# could read every topic simply by being a Kafka client — and Strimzi's own
+# NetworkPolicy left port 9092 unrestricted (`from: null`), so network isolation
+# would not have closed it either.
+#
+# The order here follows Kafka's own security model and NIST SP 800-207: encrypt
+# in transit, authenticate the client, then authorize it. Network isolation is a
+# second layer under it, never the control itself — "inside the cluster" is not
+# an authorization signal.
+#
+# `authorization.type: simple` DENIES BY DEFAULT. An authenticated client with no
+# ACLs can do nothing, which is what makes the KafkaUser below meaningful.
+# ---------------------------------------------------------------------------
+security:
+  listenerName: tls
+  listenerPort: 9093
+  # Namespaces allowed to reach the listener at all. Defence in depth beneath
+  # SCRAM — not a substitute for it.
+  #   kafka       — brokers reach each other, and kubectl-exec CLI runs here.
+  #   frikkinwave — nothing there talks to Kafka yet; stage 3 producers will,
+  #                 and a silently blocked producer later is a worse failure
+  #                 than an anticipatory rule documented now.
+  allowedNamespaces:
+    - kafka
+    - frikkinwave
+
+# The application's Kafka identity. Stage 3 mounts the generated Secret
+# (`frikkinwave-app`) and connects with it; nothing uses it yet.
+appUser: frikkinwave-app
+
+# Consumer groups the app user may join. Stage 4 gives each extracted service
+# its own group; the prefix keeps that from needing an ACL change per service.
+consumerGroupPrefix: frikkinwave
+
+# ---------------------------------------------------------------------------
+# Event topics.
+#
+# MUST match apps/events/registry.py exactly — tests/test_infrastructure.py
+# compares the two and fails the build on drift. They are declared here because
+# ACLs need names: an authorization rule over a topic the chart does not know
+# about cannot be written, and `simple` authorization denies anything ungranted.
+# ---------------------------------------------------------------------------
+topics:
+  - activity.recorded
+  - band.invite_accepted
+  - band.invite_created
+  - contact_request.accepted
+  - contact_request.created
+  - engagement.accepted
+  - engagement.requested
+  - follow.created
+  - follow.removed
+  - listing.application_accepted
+  - listing.application_created
+  - profile.updated
+  - review.created
+
+# ---------------------------------------------------------------------------
 # Durability. From KAFKA.md: "anything less and the durability story is theatre."
 #
 # replicationFactor 3 + minInsyncReplicas 2 is the pairing that matters: three
@@ -92,10 +153,26 @@ topology:
 # Stage 4 declares its topics this way.
 entityOperator:
   enabled: true
-  resources:
-    requests:
-      cpu: 50m
-      memory: 256Mi
-    limits:
-      cpu: 200m
-      memory: 384Mi
+
+  # BOTH operators. The Topic Operator reconciles KafkaTopic; the User Operator
+  # reconciles KafkaUser — and without the latter a KafkaUser is inert in the
+  # most misleading way available: `kubectl get kafkauser` shows the object with
+  # its auth type and ACLs, nothing errors, and no SCRAM credential is ever
+  # created in Kafka and no Secret generated. A client would then authenticate
+  # as a principal the broker has never heard of. Asserted by a test.
+  topicOperator:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 384Mi
+  userOperator:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 384Mi

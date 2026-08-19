@@ -398,33 +398,36 @@ EBS volumes then outlive the destroy and keep billing, which is the exact orphan
 class the script exists to prevent. It now removes the `Kafka` and
 `KafkaNodePool` resources and uninstalls Strimzi *before* the PVC sweep.
 
-### ⚠ NetworkPolicy is not enforced, and Kafka has no auth
+### Kafka security, and two silent failures worth knowing
 
-`aws-eks-nodeagent` runs with `--enable-network-policy=false`, so **every
-NetworkPolicy on this cluster is decorative** — including the two Strimzi creates
-to protect the Kafka broker ports. They appear in `kubectl get networkpolicy` and
-enforce nothing.
+Kafka is TLS + SCRAM-SHA-512 + ACLs (`authorization: simple`, which denies by
+default), with NetworkPolicy as a second layer. It ran plaintext and
+unauthenticated for part of 2026-08-19; full detail in `KAFKA.md`. Two cluster-level
+lessons generalise beyond Kafka:
 
-Verified from a throwaway pod in the `default` namespace: broker port 9091 was
-reachable despite Strimzi's policy naming only its own components, and event
-payloads (recipient emails, message bodies) were readable in full. Kafka's
-listener is plaintext with no authentication, so any pod can be a client.
+- **NetworkPolicy enforcement is OFF by default in the VPC CNI.** The agent ships
+  and runs, with `--enable-network-policy=false`, so every NetworkPolicy on the
+  cluster is inert — they appear in `kubectl get networkpolicy` and read as
+  protection in review. Now enabled via `configuration_values` on the `vpc-cni`
+  addon in `eks.tf`. Verify empirically after any CNI change:
 
-Nothing here is reachable from the internet — no Ingress, no LoadBalancer, and a
-test in `tests/test_infrastructure.py` keeps it that way. This is lateral,
-in-cluster exposure on a single-tenant cluster torn down between sessions.
+  ```bash
+  kubectl get ds aws-node -n kube-system -o json | grep enable-network-policy
+  ```
 
-Two fixes, neither done (see `KAFKA.md` for detail):
+- **Enforcement alone would not have closed the hole.** Strimzi's generated policy
+  left the client listener unrestricted (`from: null`) because the Kafka CR did
+  not set `networkPolicyPeers`. Turning enforcement on would have secured the
+  replication port and left the data port open to the whole cluster — a
+  confident, verifiable, useless fix. Network isolation is defence in depth, not
+  the access control (NIST SP 800-207).
 
-1. Set `enableNetworkPolicy` on the `vpc-cni` addon — one `configuration_values`
-   change that activates Strimzi's dormant policies. Apply deliberately: they
-   have never been in effect, so it is a real behaviour change.
-2. A SCRAM-SHA-512 listener with `KafkaUser` ACLs. **Do this with stage 3**, when
-   the app becomes a producer and needs credentials anyway.
-
-A Kafka console (AKHQ) was deployed and removed the same day — it had no auth,
-and removing it did not close any of the above. Use `kafka-console-consumer.sh`
-via `kubectl exec` instead.
+**Teardown order is load-bearing.** `eks-down.sh` must delete `kafkatopic` and
+`kafkauser` *before* the Kafka resource: their finalizers are removed only by the
+Entity Operator, which dies with it. Get it wrong and topics strand in
+`Terminating` forever, blocking `helm uninstall` and `terraform destroy`. Both
+that and the PVC-recreation bug are now verified by having actually run the path,
+not by reasoning about it — all three broker EBS volumes released, no orphans.
 
 ---
 

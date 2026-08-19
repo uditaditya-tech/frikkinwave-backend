@@ -240,89 +240,102 @@ the orphan class that script exists to catch. It now deletes the `Kafka` and
 
 ---
 
-## No Kafka console — and the exposure that made removing one beside the point
+## Security baseline ✅ DONE
 
-AKHQ was deployed on 2026-08-19 and **removed the same day**. It worked (13
-topics, browsable messages, consumer groups) but it had no authentication, and
-investigating that turned up something considerably worse than the console.
+Kafka ran for part of 2026-08-19 with a **plaintext listener and no
+authentication**, on which any pod in the cluster could read every topic. That is
+now closed, in the order Kafka's own security model and NIST SP 800-207 put it:
+**encrypt in transit → authenticate → authorize**, with network isolation as a
+second layer underneath rather than the control itself.
 
-### ⚠ NetworkPolicy is NOT enforced on this cluster
-
-```
-aws-eks-nodeagent  --enable-network-policy=false
-```
-
-The VPC CNI ships the policy agent and enforcement is **off**. The consequence
-is not theoretical: **Strimzi creates two NetworkPolicies protecting the broker
-ports, and they do nothing.** They are present in `kubectl get networkpolicy`,
-they look like protection in review, and nothing enforces them.
-
-Verified empirically from a throwaway pod in the **`default`** namespace —
-unrelated to the app and to Kafka:
-
-| target | policy says | actual |
+| layer | what | verified |
 |---|---|---|
-| AKHQ UI, `kafka` ns | (no policy) | reachable |
-| broker port 9091 | Strimzi components only | **reachable** |
-| `contact_request.created` payloads | — | **read in full** |
+| encryption | `tls` listener on 9093; the plaintext 9092 listener is **gone** | bootstrap Service exposes only 9091 + 9093 |
+| authentication | SCRAM-SHA-512 | anonymous client hangs and is killed, never served |
+| authorization | `authorization.type: simple` — **denies by default** | `TopicAuthorizationException` on an ungranted op |
+| network | `networkPolicyPeers` + enforcement enabled on the CNI | cross-namespace probe went **reachable → BLOCKED** |
 
-The last row returned real message bodies and recipient email addresses.
+`KafkaUser/frikkinwave-app` holds the app's identity, with Read/Write/Describe on
+the 13 registry topics and Read/Describe on the `frikkinwave` group prefix.
+Strimzi generates its SCRAM password into a Secret in the cluster — **never in
+git, helm values, or Terraform state**, which matters because this repo is public.
+Nothing uses the credential yet; stage 3 mounts it.
 
-Reproduce it any time with:
+Proven end to end with a client pod: produce ✅, consume ✅, delete ❌ (denied).
 
-```bash
-kubectl run netpol-probe -n default --image=public.ecr.aws/docker/library/busybox:1.36 \
-  --restart=Never --command -- sh -c "sleep 300"
-kubectl exec -n default netpol-probe -- \
-  nc -z -w 5 frikkinwave-dual-role-0.frikkinwave-kafka-brokers.kafka.svc.cluster.local 9091
-kubectl delete pod netpol-probe -n default
+### Why NetworkPolicy alone would NOT have worked
+
+The intuitive fix was to enable NetworkPolicy enforcement. It would have closed
+port 9091 and **left the data exposure completely open**, because Strimzi's
+generated policy had four rules and the fourth was:
+
+```
+rule 3: ports=[9092] from=ALL (unrestricted)
 ```
 
-### Removing the console did not fix this
+Strimzi leaves a listener's rule unrestricted unless the Kafka CR sets
+`networkPolicyPeers` — it has no idea who your clients are. 9092 was the port
+that mattered. Enforcement without the listener work would have produced a
+confident, verifiable, useless fix.
 
-Worth being explicit, because the opposite is the intuitive read. **The Kafka
-listener is plaintext with no authentication.** Any pod in the cluster can be a
-Kafka client directly — `kafka-console-consumer` against
-`frikkinwave-kafka-bootstrap:9092` reads every topic. The console was a
-convenience on top of an already-open door, not the door.
+### Two silent failures found doing this
 
-Nor would a different console have helped: Redpanda Console's community edition
-has no auth (SSO is enterprise), Kafdrop has none, and provectus Kafka UI is
-unmaintained. AKHQ was the only one of the four with built-in auth in the free
-version — it simply was not turned on.
+- **NetworkPolicy was not enforced at all.** `aws-eks-nodeagent` ran with
+  `--enable-network-policy=false`, so every policy on the cluster was inert —
+  including the two Strimzi creates for the brokers. They listed in
+  `kubectl get networkpolicy` and read as protection in review. Now enabled via
+  `configuration_values` on the `vpc-cni` addon in `eks.tf`.
 
-**Mitigating context:** the UI was ClusterIP with no Ingress, so none of this was
-ever reachable from the internet. This is lateral, in-cluster exposure on a
-single-tenant cluster that is torn down between sessions.
+- **A `KafkaUser` without the User Operator is inert.** Only `topicOperator` was
+  enabled, so `KafkaUser` was never reconciled: the object existed,
+  `kubectl get kafkauser` printed its auth type and ACLs, nothing errored, and
+  **no SCRAM credential was created in Kafka and no Secret generated.** A client
+  would have authenticated as a principal the broker had never heard of. Both
+  operators are enabled now, and a test asserts that declaring a KafkaUser
+  requires the User Operator.
 
-### Open security items (NOT done — decided against this session)
+### Still open
 
-1. **Enable `enableNetworkPolicy` on the vpc-cni addon.** One addon
-   `configuration_values` change, and it activates Strimzi's dormant broker
-   policies immediately. Apply deliberately: those policies have never actually
-   been in effect, so this is a real behaviour change.
-2. **Authenticate Kafka itself** — a SCRAM-SHA-512 listener with `KafkaUser`
-   ACLs. This is the actual fix for "any pod can read every topic", and **stage 3
-   needs it anyway** the moment the app becomes a producer. Doing it as part of
-   stage 3 is cheaper than retrofitting.
-3. **If a console is ever reinstated, enable auth on day one**, with the password
-   in the Terraform-managed Secret — never in git or helm values. The repo is
-   public.
+**mTLS instead of SCRAM** would be stronger (no shared secret to rotate), and the
+listener already supports `authentication.type: tls`. SCRAM was chosen because
+stage 3's Python client wires it with two settings rather than a certificate
+lifecycle. Revisit if the app ever handles payment or identity data.
 
-`tests/test_infrastructure.py` keeps a guardrail from the removal: no template in
-the Kafka chart may declare an `Ingress` or a `LoadBalancer` Service. The console
-is gone; the reason it had to stay internal is not.
+---
 
-### Seeing topic data without a console
+## Teardown: verified, and it was broken in a second way
+
+`eks-down.sh`'s Kafka path had never actually executed — it was fixed by reasoning
+about how Strimzi reconciles, not by running it. Running it found a second bug the
+reasoning had missed.
+
+**Bug 1 (already fixed, now confirmed):** deleting PVCs while the operator lives
+lets it recreate them, orphaning EBS volumes past the destroy. Verified fixed —
+all three broker volumes released, `describe-volumes` returned empty.
+
+**Bug 2 (found by running it):** `KafkaTopic` and `KafkaUser` carry the
+finalizers `strimzi.io/topic-operator` and `strimzi.io/user-operator`, and **only
+the Entity Operator removes them — it dies with the Kafka resource.** The script
+deleted `kafka` and `kafkanodepool` but never the topics, so every topic stranded
+in `Terminating` forever, which blocked `helm uninstall` and would have blocked
+`terraform destroy`:
+
+```
+resource KafkaTopic/kafka/follow-created still exists.
+status: Terminating, message: Resource scheduled for deletion
+context deadline exceeded
+```
+
+Recovery is manual finalizer surgery:
 
 ```bash
-kubectl exec -n kafka frikkinwave-dual-role-0 -- /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server frikkinwave-kafka-bootstrap:9092 --list
-
-kubectl exec -n kafka frikkinwave-dual-role-0 -- /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server frikkinwave-kafka-bootstrap:9092 \
-  --topic profile.updated --from-beginning --max-messages 5 --timeout-ms 10000
+kubectl patch kafkatopic <name> -n kafka --type=merge -p '{"metadata":{"finalizers":[]}}'
 ```
+
+The script now deletes `kafkatopic` and `kafkauser` **first**, while their
+operators are alive, and sweeps any survivors' finalizers as a fallback. Re-tested
+end to end afterwards: topics and users deleted cleanly, `helm uninstall kafka`
+succeeded where it had timed out, and every EBS volume released.
 
 ---
 

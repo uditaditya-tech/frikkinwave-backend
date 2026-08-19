@@ -115,6 +115,25 @@ locals {
   # because the node group always runs >= 2 nodes; with a single node the second
   # replica would sit Pending by design.
   addon_config = {
+    # NetworkPolicy enforcement is OFF by default in the VPC CNI. The agent ships
+    # and runs (`aws-eks-nodeagent`), but with `--enable-network-policy=false` —
+    # so every NetworkPolicy on the cluster is inert. Verified on 2026-08-19: a
+    # pod in the `default` namespace reached Kafka broker port 9091 despite
+    # Strimzi's policy naming only its own components as peers.
+    #
+    # That failure mode is the dangerous kind. `kubectl get networkpolicy` lists
+    # the policies, they read as protection in review, and nothing enforces them.
+    #
+    # Note this is DEFENCE IN DEPTH, not the access control. The Kafka listener
+    # authenticates with SCRAM-SHA-512 and authorizes with ACLs; network location
+    # is not an authorization signal (NIST SP 800-207). Turning this on without
+    # the listener work would have closed port 9091 and left 9092 wide open,
+    # because Strimzi leaves a listener's rule unrestricted unless the Kafka CR
+    # sets networkPolicyPeers.
+    vpc-cni = jsonencode({
+      enableNetworkPolicy = "true"
+    })
+
     coredns = jsonencode({
       replicaCount = 2
       affinity = {

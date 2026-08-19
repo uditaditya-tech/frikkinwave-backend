@@ -278,3 +278,100 @@ class TestNothingInTheKafkaChartIsPubliclyExposed:
                 f"{template.name} requests a LoadBalancer Service, which would "
                 "publish it to the internet."
             )
+
+
+class TestKafkaSecurity:
+    """
+    The security baseline, in the order Kafka's own model and NIST SP 800-207
+    put it: encrypt in transit, authenticate, then authorize. Network isolation
+    sits underneath as a second layer and is never the control itself.
+
+    This exists because the cluster ran for a day with a plaintext, unauthenticated
+    listener on which any pod could read every topic — and because the intuitive
+    fix (a NetworkPolicy) would not have closed it: Strimzi leaves a listener's
+    policy rule unrestricted unless networkPolicyPeers is set.
+    """
+
+    def test_no_listener_is_plaintext(self) -> None:
+        assert "tls: false" not in KAFKA_TEMPLATE.read_text(), (
+            "A plaintext listener sends event payloads — emails, names, message "
+            "bodies — in clear over the network."
+        )
+
+    def test_the_listener_requires_authentication(self) -> None:
+        body = KAFKA_TEMPLATE.read_text()
+        assert "type: scram-sha-512" in body, "The listener must authenticate clients."
+
+    def test_authorization_is_enabled(self) -> None:
+        """
+        `simple` denies by default, so an authenticated client with no ACLs can
+        do nothing. Without it, authentication only proves who a client is and
+        then lets it do anything.
+        """
+        assert "authorization:\n      type: simple" in KAFKA_TEMPLATE.read_text()
+
+    def test_the_listener_restricts_network_peers(self) -> None:
+        """
+        Strimzi's generated NetworkPolicy leaves a listener unrestricted
+        (`from: null`) unless this is set — the reason enabling policy
+        enforcement alone left port 9092 open to the whole cluster.
+        """
+        assert "networkPolicyPeers:" in KAFKA_TEMPLATE.read_text()
+
+    def test_no_credential_is_committed(self) -> None:
+        """
+        This repository is PUBLIC. Strimzi generates the SCRAM password into a
+        Secret in the cluster; it must never reach the chart.
+        """
+        for f in list(KAFKA_CHART.glob("**/*.yaml")):
+            body = f.read_text().lower()
+            for marker in ("password:", "sasl.jaas.config", "scram_password"):
+                assert marker not in body, f"{f.name} looks like it carries a credential."
+
+
+class TestTopicsMatchTheEventRegistry:
+    """
+    The chart's topic list IS the authorization surface: `simple` authorization
+    denies anything ungranted, and an ACL has to name a topic. A topic in the
+    registry but not here means stage 3 publishes into a denial; one here but not
+    in the registry means an ACL granting access to something nothing produces.
+    """
+
+    def test_chart_topics_match_registry_exactly(self) -> None:
+        from apps.events.registry import EVENT_HANDLERS
+
+        chart = set(_values()["topics"])
+        registry = set(EVENT_HANDLERS)
+        assert chart == registry, (
+            f"Chart topics and apps/events/registry.py disagree. "
+            f"Only in chart: {sorted(chart - registry)}. "
+            f"Only in registry: {sorted(registry - chart)}."
+        )
+
+    def test_declaring_a_kafkauser_requires_the_user_operator(self) -> None:
+        """
+        Without the User Operator a KafkaUser is inert in the most misleading way
+        available: the object exists, `kubectl get kafkauser` prints its auth type
+        and ACLs, nothing errors — and no SCRAM credential is created in Kafka and
+        no Secret generated. A client would authenticate as a principal the broker
+        has never heard of. This happened here on 2026-08-19.
+        """
+        chart_declares_a_user = (KAFKA_CHART / "templates" / "user.yaml").exists()
+        if not chart_declares_a_user:
+            return
+        assert "userOperator:" in KAFKA_TEMPLATE.read_text(), (
+            "The chart declares a KafkaUser but the Kafka CR does not enable the "
+            "User Operator, so that user will never exist in Kafka."
+        )
+
+    def test_the_app_user_is_granted_no_destructive_operations(self) -> None:
+        """
+        Topics are KafkaTopic manifests reconciled by the Topic Operator. An
+        application able to Delete or Alter them could drift the cluster away
+        from what is in git, with nothing in a diff to show it.
+        """
+        body = (KAFKA_CHART / "templates" / "user.yaml").read_text()
+        for op in ("Delete", "Alter", "All"):
+            assert f"{op}]" not in body and f"{op}," not in body, (
+                f"The app user is granted {op}, which it must not have."
+            )
