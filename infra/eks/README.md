@@ -398,35 +398,33 @@ EBS volumes then outlive the destroy and keep billing, which is the exact orphan
 class the script exists to prevent. It now removes the `Kafka` and
 `KafkaNodePool` resources and uninstalls Strimzi *before* the PVC sweep.
 
-### The Kafka console, and why not MSK
+### ⚠ NetworkPolicy is not enforced, and Kafka has no auth
 
-AKHQ runs in the `kafka` namespace. It is the only way to see topics, messages,
-consumer groups and lag — the AWS console shows none of that, and neither would
-MSK's (it has no topic browser or message inspection at all). MSK was priced
-rather than assumed: **+29%/hr**, and it would bill through every session gap
-instead of dying with the cluster.
+`aws-eks-nodeagent` runs with `--enable-network-policy=false`, so **every
+NetworkPolicy on this cluster is decorative** — including the two Strimzi creates
+to protect the Kafka broker ports. They appear in `kubectl get networkpolicy` and
+enforce nothing.
 
-```bash
-kubectl port-forward -n kafka svc/kafka-kafka-ui 8080:8080
-# http://localhost:8080/ui
-```
+Verified from a throwaway pod in the `default` namespace: broker port 9091 was
+reachable despite Strimzi's policy naming only its own components, and event
+payloads (recipient emails, message bodies) were readable in full. Kafka's
+listener is plaintext with no authentication, so any pod can be a client.
 
-**ClusterIP with no Ingress, and read-only, both asserted by tests.** It has no
-authentication, so the only thing making that acceptable is that it cannot be
-reached from outside the cluster.
+Nothing here is reachable from the internet — no Ingress, no LoadBalancer, and a
+test in `tests/test_infrastructure.py` keeps it that way. This is lateral,
+in-cluster exposure on a single-tenant cluster torn down between sessions.
 
-Traps recorded in full in `KAFKA.md`, but the two that generalise beyond AKHQ:
+Two fixes, neither done (see `KAFKA.md` for detail):
 
-- **`terraform apply` on a local chart is a silent no-op unless the chart
-  version is bumped** — `helm_release` diffs a local chart on `version`, not
-  contents, and reports "0 changed" while deploying nothing.
-- **Helm's three-way merge goes additive after a failed release** — the next
-  upgrade diffs against the last *successful* manifest, so if the object was not
-  in it, deletions cannot be computed and old fields survive on the live object.
-  Delete the object and let the next apply recreate it. Suspect this whenever a
-  live object disagrees with `helm get manifest`.
+1. Set `enableNetworkPolicy` on the `vpc-cni` addon — one `configuration_values`
+   change that activates Strimzi's dormant policies. Apply deliberately: they
+   have never been in effect, so it is a real behaviour change.
+2. A SCRAM-SHA-512 listener with `KafkaUser` ACLs. **Do this with stage 3**, when
+   the app becomes a producer and needs credentials anyway.
 
----
+A Kafka console (AKHQ) was deployed and removed the same day — it had no auth,
+and removing it did not close any of the above. Use `kafka-console-consumer.sh`
+via `kubectl exec` instead.
 
 ---
 

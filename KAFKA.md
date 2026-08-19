@@ -240,80 +240,89 @@ the orphan class that script exists to catch. It now deletes the `Kafka` and
 
 ---
 
-## The Kafka console (AKHQ)
+## No Kafka console — and the exposure that made removing one beside the point
 
-There is no AWS-side view of any of this, and MSK was priced before accepting
-that: **+29%/hr**, and its console shows broker health and CloudWatch metrics
-but has **no topic browser, no message inspection and no consumer-lag view** —
-none of the questions actually worth asking. MSK would also either be torn down
-with the cluster (losing the managed benefit) or bill ~$110/month through every
-session gap, which breaks the economics the whole up/down pattern depends on.
+AKHQ was deployed on 2026-08-19 and **removed the same day**. It worked (13
+topics, browsable messages, consumer groups) but it had no authentication, and
+investigating that turned up something considerably worse than the console.
 
-So: **AKHQ 0.28.0**, in the `kafka` namespace, on nodes already paid for.
+### ⚠ NetworkPolicy is NOT enforced on this cluster
 
-```bash
-kubectl port-forward -n kafka svc/kafka-kafka-ui 8080:8080
-# http://localhost:8080/ui
+```
+aws-eks-nodeagent  --enable-network-policy=false
 ```
 
-- **ClusterIP only, and no Ingress template exists.** This is an
-  unauthenticated Kafka admin console; behind the ALB it would publish read
-  access to every event payload under a guessable hostname. A test asserts both.
-- **Read-only** (`reader` group). Not just caution: topics are `KafkaTopic`
-  manifests reconciled by the Topic Operator, and one created through the UI
-  exists in Kafka with no CR behind it — invisible to git, unmanaged, and gone
-  the next time the cluster is rebuilt from source.
+The VPC CNI ships the policy agent and enforcement is **off**. The consequence
+is not theoretical: **Strimzi creates two NetworkPolicies protecting the broker
+ports, and they do nothing.** They are present in `kubectl get networkpolicy`,
+they look like protection in review, and nothing enforces them.
 
-### Four traps, all of which cost real time
+Verified empirically from a throwaway pod in the **`default`** namespace —
+unrelated to the app and to Kafka:
 
-- **`terraform apply` on a LOCAL chart is a silent no-op unless you bump the
-  chart version.** `helm_release` diffs a local chart on its `version`, not its
-  contents. Editing a template and applying reports **"0 changed"** and deploys
-  nothing, which reads exactly like success. `infra/helm/kafka/Chart.yaml`
-  carries a comment saying so; bump it on every template or values change.
+| target | policy says | actual |
+|---|---|---|
+| AKHQ UI, `kafka` ns | (no policy) | reachable |
+| broker port 9091 | Strimzi components only | **reachable** |
+| `contact_request.created` payloads | — | **read in full** |
 
-- **AKHQ serves no `/health`.** It 404s, and setting Micronaut's
-  `endpoints.health.enabled` does not change that. This is the nastiest failure
-  of the four because it looks like everything works: the container logs
-  `Startup completed in 10497ms. Server Running`, serves the UI correctly, and
-  the kubelet kills it at exactly `failureThreshold x periodSeconds` — a clean
-  boot log sitting next to a `CrashLoopBackOff`, with `exitCode 143`. Verified
-  paths on the running pod: **`/ui` and `/api` are 200, `/` is 307, everything
-  else 404s.** Probes use `/ui`, and a test pins that.
+The last row returned real message bodies and recipient email addresses.
 
-- **`AKHQ_CONFIGURATION` holds config *contents*, not a path.** The image's
-  entrypoint writes them to `/app/application.yml`, so pointing that variable at
-  a path and mounting the ConfigMap there makes the entrypoint try to overwrite
-  a read-only volume: `cannot create /app/application.yml: Read-only file
-  system`, before AKHQ starts at all. Use `MICRONAUT_CONFIG_FILES` and mount the
-  ConfigMap as a directory instead.
+Reproduce it any time with:
 
-- **Helm's three-way merge is ADDITIVE after a failed release.** When an upgrade
-  fails, the next upgrade diffs against the last *successful* manifest. If the
-  object did not exist there, helm cannot compute deletions and simply merges
-  the new spec onto the live object — so the pod ended up with **both** the old
-  and new env vars and **both** volume mounts, and kept failing for the original
-  reason while the stored manifest looked correct. The fix is to delete the
-  polluted object (`kubectl delete deployment kafka-kafka-ui -n kafka`) and let
-  the next apply create it fresh. Suspect this whenever a live object disagrees
-  with `helm get manifest`.
+```bash
+kubectl run netpol-probe -n default --image=public.ecr.aws/docker/library/busybox:1.36 \
+  --restart=Never --command -- sh -c "sleep 300"
+kubectl exec -n default netpol-probe -- \
+  nc -z -w 5 frikkinwave-dual-role-0.frikkinwave-kafka-brokers.kafka.svc.cluster.local 9091
+kubectl delete pod netpol-probe -n default
+```
 
-One more, self-inflicted but worth knowing: **overlapping `terraform apply` runs
-fail on the state lock**, and if the output is being filtered through `grep` the
-only symptom is that nothing happened. Let one apply finish before starting the
-next.
+### Removing the console did not fix this
 
-### The ConfigMap checksum has to hash the config
+Worth being explicit, because the opposite is the intuitive read. **The Kafka
+listener is plaintext with no authentication.** Any pod in the cluster can be a
+Kafka client directly — `kafka-console-consumer` against
+`frikkinwave-kafka-bootstrap:9092` reads every topic. The console was a
+convenience on top of an already-open door, not the door.
 
-The Deployment carries
-`checksum/config: {{ include (print $.Template.BasePath "/kafka-ui-config.yaml") . | sha256sum }}`,
-and the ConfigMap lives in **its own template file** so that reference works.
+Nor would a different console have helped: Redpanda Console's community edition
+has no auth (SSO is enterprise), Kafdrop has none, and provectus Kafka UI is
+unmaintained. AKHQ was the only one of the four with built-in auth in the free
+version — it simply was not turned on.
 
-An earlier version hashed a few values (image, readOnly) instead. That is worse
-than no checksum at all: a config-only change leaves the pod template identical,
-so no new ReplicaSet rolls, the release reports success, and the running pod
-keeps the old configuration. Kubernetes does not restart pods on a ConfigMap
-change and AKHQ reads its config only at startup.
+**Mitigating context:** the UI was ClusterIP with no Ingress, so none of this was
+ever reachable from the internet. This is lateral, in-cluster exposure on a
+single-tenant cluster that is torn down between sessions.
+
+### Open security items (NOT done — decided against this session)
+
+1. **Enable `enableNetworkPolicy` on the vpc-cni addon.** One addon
+   `configuration_values` change, and it activates Strimzi's dormant broker
+   policies immediately. Apply deliberately: those policies have never actually
+   been in effect, so this is a real behaviour change.
+2. **Authenticate Kafka itself** — a SCRAM-SHA-512 listener with `KafkaUser`
+   ACLs. This is the actual fix for "any pod can read every topic", and **stage 3
+   needs it anyway** the moment the app becomes a producer. Doing it as part of
+   stage 3 is cheaper than retrofitting.
+3. **If a console is ever reinstated, enable auth on day one**, with the password
+   in the Terraform-managed Secret — never in git or helm values. The repo is
+   public.
+
+`tests/test_infrastructure.py` keeps a guardrail from the removal: no template in
+the Kafka chart may declare an `Ingress` or a `LoadBalancer` Service. The console
+is gone; the reason it had to stay internal is not.
+
+### Seeing topic data without a console
+
+```bash
+kubectl exec -n kafka frikkinwave-dual-role-0 -- /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server frikkinwave-kafka-bootstrap:9092 --list
+
+kubectl exec -n kafka frikkinwave-dual-role-0 -- /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server frikkinwave-kafka-bootstrap:9092 \
+  --topic profile.updated --from-beginning --max-messages 5 --timeout-ms 10000
+```
 
 ---
 

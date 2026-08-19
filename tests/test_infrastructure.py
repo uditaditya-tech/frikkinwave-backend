@@ -25,8 +25,6 @@ EKS_DIR = REPO_ROOT / "infra" / "eks"
 KAFKA_CHART = REPO_ROOT / "infra" / "helm" / "kafka"
 KAFKA_VALUES = KAFKA_CHART / "values.yaml"
 KAFKA_TEMPLATE = KAFKA_CHART / "templates" / "kafka.yaml"
-UI_TEMPLATE = KAFKA_CHART / "templates" / "kafka-ui.yaml"
-UI_CONFIG_TEMPLATE = KAFKA_CHART / "templates" / "kafka-ui-config.yaml"
 
 # Provisioners removed from Kubernetes. A StorageClass naming one of these looks
 # perfectly healthy in `kubectl get sc` and provisions nothing, which is exactly
@@ -252,83 +250,31 @@ class TestManifestShape:
         )
 
 
-class TestKafkaUI:
+class TestNothingInTheKafkaChartIsPubliclyExposed:
     """
-    AKHQ, the Kafka console. It is an UNAUTHENTICATED admin interface, and the
-    only thing keeping that acceptable is that it is unreachable from outside
-    the cluster. Every assertion here defends that assumption, because breaking
-    it produces no error — just a working, public console.
+    Retained after the AKHQ console was removed.
+
+    The console is gone, but the rule it existed under is the durable part: the
+    Kafka listener is plaintext with no authentication, so ANY component in this
+    chart that grew an Ingress would put unauthenticated access to every event
+    payload on the public internet. Whatever gets added here next — a console, an
+    exporter, a REST proxy — must not be the thing that does it.
     """
 
-    def test_the_service_is_cluster_ip(self) -> None:
-        """
-        LoadBalancer or NodePort would hand it a public address. Nothing warns
-        about this; it simply starts working from the internet.
-        """
-        assert _values()["ui"]["service"]["type"] == "ClusterIP"
-
-    def test_there_is_no_ingress_for_the_ui(self) -> None:
-        """
-        The chart must not grow an Ingress template. Behind the ALB this would
-        publish read access to every event payload under a guessable hostname —
-        and it would look like a convenience feature in review.
-        """
+    def test_no_template_declares_an_ingress(self) -> None:
         for template in KAFKA_CHART.glob("templates/*.yaml"):
             body = template.read_text()
             assert "kind: Ingress" not in body, (
-                f"{template.name} declares an Ingress. The Kafka UI has no "
-                "authentication; reach it with kubectl port-forward instead."
+                f"{template.name} declares an Ingress. Kafka has no auth on this "
+                "cluster; nothing here may be reachable from outside it."
             )
 
-    def test_the_ui_is_read_only(self) -> None:
-        """
-        Consistency, not just caution. Topics are KafkaTopic manifests
-        reconciled by the Topic Operator. One created through the UI exists in
-        Kafka with no KafkaTopic behind it — invisible to git, unmanaged, and
-        gone the next time the cluster is rebuilt from source.
-        """
-        assert _values()["ui"]["readOnly"] is True
-        assert "reader" in UI_CONFIG_TEMPLATE.read_text(), (
-            "The config template must map readOnly onto AKHQ's `reader` group."
-        )
-
-    def test_the_image_is_pinned_to_a_version(self) -> None:
-        """
-        A mutable tag makes "roll back to the one that worked" inexpressible.
-        The same rule app-deploy.sh enforces by refusing to tag a dirty tree
-        with a commit sha.
-        """
-        image = _values()["ui"]["image"]
-        assert ":" in image, f"{image!r} has no tag at all."
-        tag = image.rsplit(":", 1)[1]
-        assert tag not in {"latest", "main", "master", "edge", "stable"}, (
-            f"Image tag {tag!r} is mutable — pin an explicit version."
-        )
-
-    def test_ui_heap_stays_below_the_memory_limit(self) -> None:
-        """Same OOMKill trap as the brokers: the JVM must not be able to grow
-        into the container limit."""
-        ui = _values()["ui"]
-        heap_mib = int(ui["jvm"]["xmx"].removesuffix("m"))
-        limit_mib = int(ui["resources"]["limits"]["memory"].removesuffix("Mi"))
-        assert limit_mib - heap_mib >= 128, (
-            f"Only {limit_mib - heap_mib} MiB between heap and limit — the JVM "
-            "needs non-heap headroom or the kernel kills the pod."
-        )
-
-    def test_probes_target_a_path_akhq_actually_serves(self) -> None:
-        """
-        AKHQ serves no /health — it 404s, and enabling Micronaut's
-        endpoints.health does not change that. The failure mode is genuinely
-        misleading: the container logs "Startup completed", serves the UI, and
-        the kubelet kills it at failureThreshold anyway, so the logs show a
-        clean boot next to a CrashLoopBackOff. Verified against the running
-        pod: /ui and /api return 200, / returns 307, everything else 404s.
-        """
-        body = UI_TEMPLATE.read_text()
-        assert "path: /health" not in body, (
-            "AKHQ does not serve /health; the probe would kill a healthy pod."
-        )
-        assert body.count("path: /ui") == 3, (
-            "Expected startup, readiness and liveness probes all on /ui."
-        )
+    def test_no_template_requests_a_load_balancer_service(self) -> None:
+        """A LoadBalancer Service is an Ingress by another name — it provisions a
+        public NLB and never passes through the ALB or any auth."""
+        for template in KAFKA_CHART.glob("templates/*.yaml"):
+            body = template.read_text()
+            assert "type: LoadBalancer" not in body, (
+                f"{template.name} requests a LoadBalancer Service, which would "
+                "publish it to the internet."
+            )
