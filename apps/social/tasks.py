@@ -1,13 +1,17 @@
 """
 Celery tasks for the social app — activity-feed fan-out (Phase 5, Block B).
 
-Event handlers, not inline calls: producing apps' services emit `fan_out_activity`
-via ``transaction.on_commit(... .delay())`` after their row commits (scale rule #4
-in CLAUDE.md); follow/unfollow emit `backfill_feed` / `prune_feed` the same way.
-The task name + kwargs payload is the message contract that becomes a Kafka
-schema when social is extracted.
+Event handlers, not inline calls. Producing apps publish `activity.recorded` to
+the transactional outbox — ``publish()`` inside the caller's transaction, so the
+event and the row it describes commit together (scale rule #4 in CLAUDE.md).
+Follow/unfollow publish `follow.created` / `follow.removed` the same way.
 
-Tasks stay thin: they delegate to the service layer, which owns the fan-out logic.
+The topic + payload is the message contract that becomes a Kafka schema when
+social is extracted.
+
+Tasks stay thin: they delegate to the service layer, which owns the fan-out
+logic. Delivery is at-least-once, so consumers must be idempotent —
+`fan_out_activity` keys the Activity on the event id for exactly that reason.
 """
 
 from __future__ import annotations

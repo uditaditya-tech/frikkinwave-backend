@@ -27,6 +27,26 @@ frikkinwave-backend/
 │   │   └── tests/
 │   │       └── test_outbox.py     # 10 tests: atomicity, rollback, relay, parking, registry, idempotency
 │   │
+│   ├── ai/                        # PLATFORM package — not a Django app, no models
+│   │   └── client.py              # OpenAIClient (embed + complete) + get_openai_client()
+│   │                              #   Neutral home: musicians (blurbs/coach) and search (embeddings)
+│   │                              #   both need it, so neither can own it.
+│
+│   ├── notifications/             # EXTRACTED SERVICE — own queue, own Deployment
+│   │   ├── renderers.py           # topic -> (subject, body) from primitives only
+│   │   ├── services.py            # deliver(); the only service layer touching no model
+│   │   ├── tasks.py               # 8 consumers, named notifications.* (routed to the notifications queue)
+│   │   └── tests/                 # incl. a test asserting it imports no other app
+│
+│   ├── search/                    # EXTRACTED SERVICE — semantic search + embedding index
+│   │   ├── models.py              # ProfileEmbedding: profile_id is a bare UUID (NO FK), is_available replica
+│   │   ├── services.py            # search() -> [(profile_id, similarity)] — ids, never ORM objects
+│   │   ├── tasks.py               # search.index_profile (routed to the search queue)
+│   │   ├── migrations/
+│   │   │   ├── 0001_initial.py    # VectorExtension (owned here) + ProfileEmbedding + HNSW
+│   │   │   └── 0002_*.py          # copies the existing vectors out of musicians before that table is dropped
+│   │   └── tests/
+│
 │   ├── users/                     # Auth — custom User model + JWT auth endpoints
 │   │   ├── admin.py
 │   │   ├── apps.py                # name="apps.users", label="users"
@@ -34,7 +54,8 @@ frikkinwave-backend/
 │   │   │   └── 0001_initial.py
 │   │   ├── models.py              # User (UUIDv7 PK, email login, username slug)
 │   │   ├── serializers.py         # RegisterSerializer
-│   │   ├── services.py            # register_user(), get_user_by_username()
+│   │   ├── services.py            # register_user(), get_user_ref() -> UserRef DTO
+│   │   │                          #   get_user_by_username() is INTERNAL — other apps must use get_user_ref
 │   │   ├── urls.py                # /register/, /logout/
 │   │   ├── views.py               # RegisterView, LogoutView
 │   │   └── tests/
@@ -49,13 +70,13 @@ frikkinwave-backend/
 │   │   │   ├── 0001_initial.py    # MusicianProfile
 │   │   │   ├── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
 │   │   │   ├── 0003_*.py          # MusicianProfile.sound_url
-│   │   │   ├── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding + HNSW index
-│   │   │   └── 0005_compatibilityblurb.py # CompatibilityBlurb (cached per profile pair)
-│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, ProfileEmbedding, CompatibilityBlurb
+│   │   │   ├── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding (moved to search in 0008)
+│   │   │   ├── 0005_compatibilityblurb.py # CompatibilityBlurb (cached per profile pair)
+│   │   │   └── 0008_*.py          # drops ProfileEmbedding — depends on search/0002 so the copy runs first
+│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, CompatibilityBlurb
 │   │   ├── serializers.py         # Read + Write + Detail (adds review rating) + ProfileSearchResultSerializer (adds similarity)
-│   │   ├── services.py            # profiles + embeddings/search/compatibility blurb/coach_profile
-│   │   ├── openai_client.py       # OpenAIClient (embed + complete) + get_openai_client() (swappable seam; mocked in tests)
-│   │   ├── tasks.py               # Celery task: generate_profile_embedding (emitted on profile save via on_commit)
+│   │   ├── services.py            # profiles, compatibility blurb, coach_profile, build_embedding_text;
+│   │   │                          #   search_profiles() delegates to apps.search and hydrates the ids it returns
 │   │   ├── urls.py                # /search/, /compatibility/<username>/, /profiles/, /profile/, /profile/coach/, /profile/me/
 │   │   ├── views.py               # ProfileList/Public/Create/Me/Search/Compatibility/Coach views (+ ProfileCursorPagination)
 │   │   ├── evals/                 # Phase 2.8 matching evals
@@ -226,13 +247,16 @@ frikkinwave-backend/
 ├── requirements/
 │   └── base.txt                   # All dependencies pinned (uv pip freeze)
 │
-├── infra/                         # AWS infrastructure (Terraform) — see infra/README.md
+├── infra/                         # Terraform owns AWS, Helm owns the app — see infra/README.md
 │   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
 │   ├── eks/                       # APP stack: VPC, EKS, RDS, ECR, IAM/IRSA, LB controller, secrets
-│   ├── helm/                      # Application chart: web, workers, redis, migrate Job, ingress
+│   ├── helm/frikkinwave/          # Application chart
+│   │   └── templates/             # web Deployment+Service, workers (map-driven), redis,
+│   │                              #   migrate Job (pre-upgrade hook), relay CronJob, Ingress, PDB
 │   └── scripts/
-│       ├── push-image.sh          # build linux/arm64 → push to ECR
-│       └── run-migrations.sh      # one-off Fargate task: migrate + seed
+│       ├── eks-up.sh              # terraform apply: cluster, RDS, ECR, LB controller (~15 min)
+│       ├── app-deploy.sh          # build+push image → helm upgrade → Route 53 → verify 200
+│       └── eks-down.sh            # deletes K8s objects that own AWS resources, THEN destroys
 │
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── tests/                         # Project-level tests not tied to one app
@@ -406,7 +430,7 @@ No cross-app model imports — use `TYPE_CHECKING` guard for type hints only.
 
 ### Tests
 - Root `conftest.py` has `api_client` and `user` fixtures (available to all apps)
-- App-level `tests/conftest.py` has app-specific fixtures
+- App-level `apps/<app>/tests/conftest.py` has app-specific fixtures
 - All test classes decorated with `@pytest.mark.django_db`
 
 ---

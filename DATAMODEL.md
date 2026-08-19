@@ -105,13 +105,13 @@ A one-directional request from one user to connect with another.
 
 Unique constraint on `(sender, recipient)`.
 Self-requests rejected in the service layer.
-Username → user resolution goes through `apps.users.services.get_user_by_username` (no model import).
+Username → user resolution goes through `apps.users.services.get_user_ref`, which returns a frozen `UserRef` DTO (no model import — an ORM instance cannot cross a service boundary).
 Flow: send → accept/decline → contact email revealed to both parties once accepted.
-**Email notifications wired in Phase 2.2:** `send` emits `connections.notify_new_contact_request` (emails the recipient); `accept` emits `connections.notify_contact_request_accepted` (emails the sender, revealing the recipient's contact email). Both are emitted via `transaction.on_commit(... .delay())` from the service layer — see `apps/connections/tasks.py`.
+**Email notifications:** `send` publishes `contact_request.created`; `accept` publishes `contact_request.accepted` (revealing the recipient's contact email). Both go to the transactional outbox inside the service's transaction and are consumed by the **notifications service** — the payload carries the addresses and names, never an id, so the consumer touches no table here.
 
 ---
 
-### `musicians.ProfileEmbedding` (Phase 2 — 2.3 ✅)
+### `search.ProfileEmbedding` (Phase 2 — 2.3 ✅, moved to `search` on extraction)
 
 One-to-one with `MusicianProfile`. Stores the pgvector embedding.
 **App:** `apps/musicians` | **Migration:** `0004_profileembedding`
@@ -125,12 +125,26 @@ One-to-one with `MusicianProfile`. Stores the pgvector embedding.
 | `embedding_text` | TextField | The raw text that was embedded (for debugging / re-embedding) |
 | `generated_at` | DateTimeField | `auto_now` — when the embedding was last computed |
 
-HNSW index `profile_embedding_hnsw` on `embedding` with `vector_cosine_ops`
+HNSW index `search_embedding_hnsw` on `embedding` with `vector_cosine_ops`
 (m=16, ef_construction=64) — cosine because text-embedding-3-small vectors are
-normalised. **Populated by the 2.4 pipeline:** `create_profile` / `update_profile`
-emit `musicians.generate_profile_embedding` via `on_commit`; the task builds the
-profile text, embeds it through the OpenAI wrapper, and upserts this row. Skips
-the OpenAI call when the embedding text is unchanged or no API key is set.
+normalised.
+
+**Two things about this table are deliberate and easy to "fix" wrongly:**
+
+- **`profile_id` is a bare UUID, not a ForeignKey.** A FK is a promise that both
+  rows live in the same database, which is exactly the coupling that makes an
+  extraction impossible to finish. The cost is no cascade delete: a stale row can
+  outlive its profile, so `search_profiles` skips unmatched hits and removal is
+  an explicit call to `search.services.remove_profile`.
+- **`is_available` is a REPLICA** of the field on `MusicianProfile`, and is
+  eventually consistent. It lives here because the availability filter has to run
+  inside the same query as the nearest-neighbour scan — filter afterwards and a
+  caller asking for 20 results silently gets 9.
+
+**Populated by:** `create_profile` / `update_profile` publish `profile.updated`
+to the outbox with the *composed text* and availability flag; the search service
+consumes it and upserts this row. Skips the OpenAI call when `embedding_text` is
+unchanged or no API key is set, so toggling availability costs nothing.
 
 ---
 
@@ -197,7 +211,7 @@ A musician's application to a listing — the contact-request variant for the bo
 Unique constraint on `(listing, applicant)`.
 Self-applications (author applying to own listing) rejected in the service layer.
 Flow: apply → accept/decline (listing author only) → contact email revealed to both parties once accepted.
-**Email notifications:** `apply` emits `listings.notify_new_application` (emails the listing author); `accept` emits `listings.notify_application_accepted` (emails the applicant, revealing the author's contact email). Both via `transaction.on_commit(... .delay())` — see `apps/listings/tasks.py`.
+**Email notifications:** `apply` publishes `listing.application_created`; `accept` publishes `listing.application_accepted` (revealing the author's contact email). Both via the outbox, consumed by the notifications service with self-contained payloads.
 
 ---
 
@@ -238,7 +252,7 @@ An invitation / membership tying a user to a band — the contact-request varian
 
 Unique constraint on `(band, member)`. The owner is the `Band.owner` field, **not** a membership row — the roster (accepted memberships) lists invited members only.
 Flow: owner invites by username → invitee accepts/declines → contact email revealed to both parties once accepted.
-**Email notifications:** `invite` emits `bands.notify_band_invite` (emails the invitee); `accept` emits `bands.notify_band_invite_accepted` (emails the owner). Both via `transaction.on_commit(... .delay())` — see `apps/bands/tasks.py`.
+**Email notifications:** `invite` publishes `band.invite_created`; `accept` publishes `band.invite_accepted`. Both via the outbox, consumed by the notifications service with self-contained payloads.
 
 ---
 
@@ -262,7 +276,7 @@ for the marketplace. Hire-intent only (no real payments).
 **No** unique constraint — a requester may hire the same musician repeatedly (different dates).
 Self-hire rejected in the service layer.
 Flow: send → accept/decline (musician only) → either party marks `completed` (only from `accepted`). Contact email revealed to both parties once accepted (and stays revealed when completed).
-**Email notifications:** `send` emits `engagements.notify_new_engagement_request` (emails the musician); `accept` emits `engagements.notify_engagement_request_accepted` (emails the requester, revealing the musician's contact email). Both via `transaction.on_commit(... .delay())` — see `apps/engagements/tasks.py`.
+**Email notifications:** `send` publishes `engagement.requested`; `accept` publishes `engagement.accepted` (revealing the musician's contact email). Both via the outbox, consumed by the notifications service. Note `proposed_date` is nullable and is serialised as `""` when absent — building the payload happens in the request path, so an unguarded `.isoformat()` here is a 500, not a background retry.
 
 ---
 

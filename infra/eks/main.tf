@@ -1,10 +1,9 @@
 # ---------------------------------------------------------------------------
 # frikkinwave — EKS app stack (Phase 1: cluster foundation)
 #
-# A THIRD Terraform stack, independent of:
-#   infra/dns/       PERSISTENT  — Route 53 zone + ACM cert. Never destroyed.
-#   infra/terraform/ LEGACY      — the ECS stack. Currently NOT applied ($0).
-#                                  Kept in git as a fallback; being replaced by this.
+# The disposable half of a two-stack layout:
+#   infra/dns/  PERSISTENT — Route 53 zone + ACM cert. Never destroyed.
+#   infra/eks/  this stack — everything else.
 #
 # Everything here is disposable: `terraform destroy` (or ./infra/scripts/eks-down.sh)
 # returns the whole stack to $0. That matters — EKS bills a $0.10/hr control plane,

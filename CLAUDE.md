@@ -164,7 +164,7 @@ OPENAI_API_KEY=sk-... python manage.py eval_matching
 ```
 
 Golden dataset + metrics live in `apps/musicians/evals/`. The CI test in
-`tests/test_evals.py` runs the same `run_matching_eval()` with a deterministic
+`apps/musicians/tests/test_evals.py` runs the same `run_matching_eval()` with a deterministic
 fake embedder (token-overlap vectors) so retrieval ranking is meaningful without
 a key.
 
