@@ -520,34 +520,92 @@ which is the whole reason the outbox exists.
 
 ---
 
-## Stage 4 — consumers (DEFERRED, the bulk of the work)
+## Stage 4a — consumers ✅ DONE (application layer)
 
-The real change, and the reason this is worth doing at all:
+The inversion this whole migration is for:
 
 ```python
-# today — a CENTRAL dispatch table, one consumer per topic
+# before — a CENTRAL table the producer's relay reads
 EVENT_HANDLERS = {"profile.updated": "search.index_profile"}
 
-# after — each service declares its OWN subscription
-consumer.subscribe(["profile.updated"], group_id="search")
+# after — apps/search/consumers.py, which no producer ever sees
+SUBSCRIPTIONS = {"profile.updated": index_profile}
 ```
 
-The producer stops knowing who listens. Adding a second consumer to a topic
-becomes deploying a service with a new `group_id`, with no change to the
-producer and no shared file. That removes both the one-consumer-per-topic
-ceiling and the last shared-code coupling.
+**The producer no longer knows who listens.** Adding a second consumer of a topic
+is now a service declaring its own subscription under its own group id — no
+change to the producer, no shared file, nothing to coordinate. A test asserts
+the producer side never imports a `consumers` module, checked against the import
+graph rather than the file text.
 
-**Budget for what Celery gave free:**
+Four groups, one per app, matching the queue split they replace:
+`notifications`, `search`, `social`, `reviews`. Group ids are
+`frikkinwave.<app>`, inside the prefix the ACLs already grant — **no ACL change**.
 
-- `autoretry_for` / `retry_backoff` disappear. The Kafka idiom is retry topics
-  (`<topic>.retry.5s`, `.30s`) plus a **dead-letter topic**. This matters more
-  than it sounds: a poison message blocks its *partition*, whereas a stuck
-  Celery task only blocked itself.
-- A consumer runtime — process management, concurrency, graceful shutdown.
-- `tests/test_architecture.py` asserts every registered handler lands on a queue
-  some Deployment consumes. That test must be rewritten against consumer groups,
-  not deleted; the failure it prevents (a topic nobody consumes, silently) is
-  identical under Kafka.
+**The runtime** is `apps/events/consumer.py`, run as
+`python manage.py consume_events --group <app>`. The group name *is* the app
+label, so there is no lookup table between them and therefore nothing to drift.
+A misspelled group raises instead of starting, subscribing to nothing, and
+looking healthy forever.
+
+### What Celery gave free, and what replaces it
+
+| Celery | here |
+|---|---|
+| `autoretry_for` / `retry_backoff` | bounded in-process retry, then a **dead-letter topic** |
+| a worker runtime | `consume_events`, with SIGTERM handling and a clean `close()` |
+| a stuck task blocked only itself | **a poison message blocks its whole partition** |
+
+That last row is the one that changes the design. Under Celery a permanently
+failing task was an isolated nuisance. Here, refusing to advance past a bad
+message halts *everything behind it on that partition* — one malformed payload
+taking out a service. So **every failure path ends in a committed offset**:
+
+- handler raises → retry `KAFKA_CONSUMER_MAX_ATTEMPTS` times → dead-letter → commit
+- malformed JSON → dead-letter immediately, **no retry** (unparseable now is
+  unparseable forever; retrying only stalls the partition for nothing)
+- no handler for the topic → dead-letter (a wiring mistake, not a data problem)
+
+Dead-lettering is deliberately not a silent drop: `<topic>.dlt` carries the
+original topic, the consumer group, the error and the raw payload — decoded
+leniently, because the reason it is there may be that it would not decode.
+
+The in-process retry is **bounded and small on purpose**. The partition is
+stalled for its whole duration, so it covers a transient blip and nothing more.
+Tiered retry topics (`.retry.5s`, `.retry.30s`) are the fuller answer and are not
+built.
+
+**Offsets are committed manually, after the handler returns.** `enable.auto.commit`
+is off — auto-commit acknowledges messages the handler may never have processed,
+turning at-least-once into at-most-once with nothing to show for it.
+
+**`auto.offset.reset: earliest`**, so a new group reads history rather than
+skipping everything published before it existed. Consumers are idempotent, so
+replay is safe and losing history is not.
+
+### The guardrail that matters most
+
+`tests/test_architecture.py` now asserts **every topic with a Celery consumer also
+has a Kafka subscription**. While both transports exist, a topic handled today
+that nobody declares would silently stop being processed the moment
+`EVENT_TRANSPORT` flips: the producer publishes happily, the message lands in its
+topic, and no group ever reads it. Nothing errors.
+
+The Celery queue tests stay until stage 5 removes Celery. What *changes* under
+Kafka is the direction: a topic with **no** subscriber is no longer a bug — that
+decoupling is the point — while a declared subscription nobody runs still is.
+
+### Stage 4b — NOT DONE
+
+Still outstanding, and it needs a live cluster:
+
+- a Deployment per consumer group in the Helm chart, replacing the Celery workers
+- a test tying declared groups to Deployments that actually run them — the exact
+  Kafka analogue of the queue test, and the same silent failure
+- `KafkaTopic` manifests for the `.dlt` topics
+- live verification: real events through real consumer groups over mTLS
+
+Until then the consumers exist and are tested, and nothing runs them.
 
 ---
 

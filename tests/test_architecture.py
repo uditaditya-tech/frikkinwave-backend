@@ -257,3 +257,100 @@ def test_the_default_event_transport_is_celery() -> None:
 
     values = yaml.safe_load(CHART_VALUES.read_text())
     assert values["config"]["EVENT_TRANSPORT"] == "celery"
+
+
+# ---------------------------------------------------------------------------
+# Kafka consumer groups (KAFKA.md stage 4).
+#
+# The Celery tests above stay while EVENT_TRANSPORT defaults to celery; stage 5
+# deletes them. These are their Kafka equivalents, guarding the same class of
+# failure: work that is never done, with nothing anywhere reporting an error.
+#
+# What CHANGES under Kafka is the direction. A topic with no subscriber is no
+# longer a bug — that decoupling is the entire point of stage 4. What is still a
+# bug is a declared subscription nobody runs, and a topic that had a consumer
+# under Celery losing it under Kafka.
+# ---------------------------------------------------------------------------
+
+
+def _kafka_subscriptions() -> dict[str, set[str]]:
+    """topic -> the set of app labels subscribing to it."""
+    import importlib
+
+    out: dict[str, set[str]] = {}
+    for path in sorted(APPS_DIR.glob("*/consumers.py")):
+        app = path.parent.name
+        module = importlib.import_module(f"apps.{app}.consumers")
+        for topic in getattr(module, "SUBSCRIPTIONS", {}):
+            out.setdefault(topic, set()).add(app)
+    return out
+
+
+def test_every_celery_consumed_topic_also_has_a_kafka_subscription() -> None:
+    """
+    The flip-safety guardrail, and the reason stage 4 is riskier than it looks.
+
+    While both transports exist, a topic handled under Celery but not declared in
+    any consumers.py is processed today and silently stops being processed the
+    moment EVENT_TRANSPORT is flipped to kafka. Nothing errors: the producer
+    publishes happily, the message sits in a topic, and no consumer group ever
+    reads it.
+    """
+    from apps.events.registry import EVENT_HANDLERS
+
+    subscribed = _kafka_subscriptions()
+    missing = sorted(set(EVENT_HANDLERS) - set(subscribed))
+    assert not missing, (
+        f"These topics have a Celery consumer but no Kafka subscription: {missing}. "
+        "Flipping EVENT_TRANSPORT=kafka would stop processing them, with no error "
+        "anywhere. Declare them in the owning app's consumers.py."
+    )
+
+
+def test_no_subscription_exists_for_a_topic_nothing_publishes() -> None:
+    """
+    The reverse drift: a handler wired to a topic no producer writes to. Harmless
+    at runtime and therefore invisible — it just never runs, and reads in review
+    as working code.
+    """
+    from apps.events.registry import EVENT_HANDLERS
+
+    orphans = {
+        topic: sorted(apps)
+        for topic, apps in _kafka_subscriptions().items()
+        if topic not in EVENT_HANDLERS
+    }
+    assert not orphans, f"These subscriptions listen to topics nothing publishes: {orphans}."
+
+
+def test_a_consumer_group_maps_to_an_app_that_declares_subscriptions() -> None:
+    """
+    The group name IS the app label — `--group search` resolves
+    apps/search/consumers.py. A group naming no such app starts, subscribes to
+    nothing, and looks healthy forever, so the runtime raises instead. This pins
+    that contract.
+    """
+    from apps.events.consumer import SubscriptionsNotFound, load_subscriptions
+
+    for app in {a for apps in _kafka_subscriptions().values() for a in apps}:
+        assert load_subscriptions(app), f"apps/{app}/consumers.py declares nothing"
+
+    import pytest
+
+    with pytest.raises(SubscriptionsNotFound):
+        load_subscriptions("definitely-not-an-app")
+
+
+def test_notifications_consumers_import_no_other_app() -> None:
+    """
+    The extracted-service boundary, restated for the Kafka path. It held for the
+    Celery tasks and erodes silently if it is not asserted for their replacement.
+    """
+    tree = ast.parse((APPS_DIR / "notifications" / "consumers.py").read_text())
+    for node in _runtime_imports(tree):
+        mod = node.module or ""
+        if mod.startswith("apps.") and not mod.startswith("apps.notifications"):
+            raise AssertionError(
+                f"apps/notifications/consumers.py imports {mod}; notifications is an "
+                "extracted service and its payloads must be self-contained."
+            )

@@ -250,6 +250,30 @@ KAFKA_SSL_CA_LOCATION = env("KAFKA_SSL_CA_LOCATION", default="")
 KAFKA_SSL_CERTIFICATE_LOCATION = env("KAFKA_SSL_CERTIFICATE_LOCATION", default="")
 KAFKA_SSL_KEY_LOCATION = env("KAFKA_SSL_KEY_LOCATION", default="")
 
+# ---------------------------------------------------------------------------
+# Kafka consumers (KAFKA.md stage 4)
+# ---------------------------------------------------------------------------
+
+#: Group ids are "<prefix>.<app>". The prefix must stay inside the KafkaUser's
+#: group ACL (`frikkinwave`, patternType prefix) or every consumer fails
+#: authorization — which looks like a consumer that starts and reads nothing.
+KAFKA_CONSUMER_GROUP_PREFIX = env("KAFKA_CONSUMER_GROUP_PREFIX", default="frikkinwave")
+
+#: In-process attempts before a message is dead-lettered. Small on purpose: the
+#: partition is stalled for the whole retry, so this covers a transient blip and
+#: nothing more. Celery's equivalent could afford to be generous because a stuck
+#: task blocked only itself.
+KAFKA_CONSUMER_MAX_ATTEMPTS = env.int("KAFKA_CONSUMER_MAX_ATTEMPTS", default=3)
+
+#: Seconds, multiplied by the attempt number for a linear backoff.
+KAFKA_CONSUMER_RETRY_BACKOFF = env.float("KAFKA_CONSUMER_RETRY_BACKOFF", default=1.0)
+
+#: Suffix for the dead-letter topic of any given topic.
+KAFKA_DLT_SUFFIX = env("KAFKA_DLT_SUFFIX", default=".dlt")
+
+#: Poll timeout. Bounds how long a SIGTERM waits before the loop notices.
+KAFKA_CONSUMER_POLL_TIMEOUT = env.float("KAFKA_CONSUMER_POLL_TIMEOUT", default=1.0)
+
 #: Seconds to wait for the broker to acknowledge. The relay marks an event
 #: published only after this returns, so it must be a real bound, not infinite.
 KAFKA_FLUSH_TIMEOUT = env.float("KAFKA_FLUSH_TIMEOUT", default=10.0)
