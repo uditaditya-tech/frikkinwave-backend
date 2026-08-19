@@ -26,6 +26,39 @@ resource "random_id" "final_snapshot" {
   byte_length = 4
 }
 
+# ---------------------------------------------------------------------------
+# Which snapshot to restore from.
+#
+# Discovered, not hardcoded. `eks-down.sh` takes a final snapshot with a fresh
+# random suffix on every teardown, so a pinned id in variables.tf goes stale the
+# moment you tear down — and the previous design asked you to hand-edit it back,
+# at the exact moment you are finishing up and least attentive. Miss it and the
+# next apply silently restores an older database.
+#
+# `most_recent` against this instance's own snapshots is always the right answer:
+# the newest one is by definition the state the last teardown preserved.
+#
+# Set db_snapshot_identifier to override (restoring a specific older point), or
+# db_restore_from_latest_snapshot=false for a genuinely fresh, empty database —
+# which is also what a brand-new AWS account needs, since the data source errors
+# when no snapshot exists at all.
+# ---------------------------------------------------------------------------
+data "aws_db_snapshot" "latest" {
+  count = var.db_snapshot_identifier == "" && var.db_restore_from_latest_snapshot ? 1 : 0
+
+  db_instance_identifier = "${local.name}-db"
+  snapshot_type          = "manual"
+  most_recent            = true
+}
+
+locals {
+  # Explicit override wins; otherwise the newest snapshot; otherwise empty DB.
+  restore_snapshot_id = (
+    var.db_snapshot_identifier != "" ? var.db_snapshot_identifier :
+    length(data.aws_db_snapshot.latest) > 0 ? data.aws_db_snapshot.latest[0].id : null
+  )
+}
+
 resource "aws_db_subnet_group" "main" {
   name       = "${local.name}-db-subnet"
   subnet_ids = aws_subnet.public[*].id
@@ -76,7 +109,7 @@ resource "aws_db_instance" "main" {
   # On a snapshot restore RDS keeps the database name baked into the snapshot,
   # and passing db_name forces replacement on every plan. Only set it when
   # creating an empty instance.
-  db_name = var.db_snapshot_identifier != "" ? null : var.db_name
+  db_name = local.restore_snapshot_id == null ? var.db_name : null
 
   username = var.db_username
 
@@ -85,8 +118,8 @@ resource "aws_db_instance" "main" {
   # completes, so it matches the DATABASE_URL we hand to the pods.
   password = random_password.db.result
 
-  # Consulted only at create time. Empty => fresh empty DB.
-  snapshot_identifier = var.db_snapshot_identifier != "" ? var.db_snapshot_identifier : null
+  # Consulted only at create time. null => fresh empty DB.
+  snapshot_identifier = local.restore_snapshot_id
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.rds.id]
@@ -104,4 +137,20 @@ resource "aws_db_instance" "main" {
   apply_immediately         = true
 
   tags = merge(local.tags, { Name = "${local.name}-db" })
+
+  lifecycle {
+    # THE IMPORTANT ONE. snapshot_identifier is ForceNew in the provider, so a
+    # changed value does not "re-restore" a running database — it DESTROYS and
+    # recreates it. Since the id now moves on every teardown, that turned an
+    # ordinary apply into a data-loss event.
+    #
+    # Verified before adding this: `terraform plan -var db_snapshot_identifier=<other>`
+    # reported `aws_db_instance.main must be replaced ... forces replacement`
+    # against the live production database.
+    #
+    # Ignoring it is also semantically correct: RDS consults the snapshot only
+    # when creating the instance, so the value has no meaning afterwards. To
+    # deliberately restore a different snapshot, destroy the instance first.
+    ignore_changes = [snapshot_identifier]
+  }
 }

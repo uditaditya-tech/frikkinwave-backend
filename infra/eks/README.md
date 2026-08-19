@@ -292,13 +292,32 @@ Verify the end state:
 kubectl get nodes -o custom-columns='NODE:.metadata.name,AZ:.metadata.labels.topology\.kubernetes\.io/zone'
 ```
 
-### Snapshot rotation trap
+### Snapshots: restore is automatic, and the id must never be hand-edited
 
-`eks-down.sh` takes a **final snapshot with a fresh random suffix**, but
-`db_snapshot_identifier` in `variables.tf` still names the previous one. Apply
-again without updating it and RDS restores the *older* snapshot — the session's
-data is not lost, it just silently is not what comes back. The down script
-prints the new snapshot id at the end; move it into `variables.tf` to keep it.
+Teardown takes a final snapshot with a fresh random suffix; the next `eks-up.sh`
+restores from the **newest snapshot for this instance**, discovered by an
+`aws_db_snapshot` data source. There is nothing to copy across.
+
+The previous design pinned the id in `variables.tf` and asked you to update it
+after each teardown. That was not merely fragile — it was **destructive**.
+`snapshot_identifier` is `ForceNew` in the AWS provider, so editing it while a
+cluster is running does not re-restore anything; it destroys and recreates the
+database. Measured against the live instance:
+
+```
+# aws_db_instance.main must be replaced
+~ snapshot_identifier = "...-528299d1" -> "...-0f41e8b8" # forces replacement
+```
+
+`lifecycle.ignore_changes = [snapshot_identifier]` now blocks that outright —
+the same plan reports *No changes*. This is also semantically right: RDS reads
+the snapshot only when creating the instance, so the value is meaningless
+afterwards. To deliberately restore a different point in time, destroy the
+instance first, then set `db_snapshot_identifier`.
+
+For a genuinely empty database — including the first apply in a fresh AWS
+account, where no snapshot exists and the lookup would fail — set
+`db_restore_from_latest_snapshot = false`.
 
 ## Phase 3 — next
 

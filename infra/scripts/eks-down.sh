@@ -86,21 +86,24 @@ if [ -n "${VPC_ID}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# The database outlived the stack. Say so loudly.
+# The database outlived the stack.
 #
-# Destroy takes a FINAL SNAPSHOT with a fresh random suffix, but the
-# db_snapshot_identifier default in variables.tf still names the previous one.
-# Apply again without updating it and RDS restores the older snapshot — the
-# session's data is not lost, it is just silently not what comes back.
+# Destroy takes a final snapshot, and the next `eks-up.sh` restores from the
+# NEWEST snapshot automatically (see the aws_db_snapshot data source in
+# rds.tf). Nothing to hand-edit — this is informational.
+#
+# It used to say "copy this id into variables.tf". Do not reintroduce that:
+# snapshot_identifier is ForceNew, so editing it while a cluster is up made the
+# next apply destroy and recreate the live database.
 # ---------------------------------------------------------------------------
 LATEST_SNAP="$(aws rds describe-db-snapshots --region "${REGION}" --snapshot-type manual \
+  --db-instance-identifier "${CLUSTER}-db" \
   --query 'sort_by(DBSnapshots,&SnapshotCreateTime)[-1].DBSnapshotIdentifier' \
   --output text 2>/dev/null || echo '')"
 if [ -n "${LATEST_SNAP}" ] && [ "${LATEST_SNAP}" != "None" ]; then
   echo
-  echo "==> Newest RDS snapshot: ${LATEST_SNAP}"
-  echo "    To restore THIS session's data on the next apply, set that as the"
-  echo "    db_snapshot_identifier default in infra/eks/variables.tf."
+  echo "==> Data preserved in snapshot: ${LATEST_SNAP}"
+  echo "    The next eks-up.sh restores from it automatically."
 fi
 
 echo "==> Destroyed. Back to \$0/hr."

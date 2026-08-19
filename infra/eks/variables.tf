@@ -147,19 +147,30 @@ variable "lb_controller_chart_version" {
 
 variable "db_snapshot_identifier" {
   description = <<-EOT
-    Restore RDS from this snapshot when the instance is first created. Empty
-    means a fresh, empty database (which then needs migrate + seed, and re-runs
-    the OpenAI embedding pipeline at real cost).
+    Pin the restore to a SPECIFIC snapshot. Normally leave empty — the newest
+    snapshot for this instance is discovered automatically (see rds.tf), which
+    is what the last teardown preserved.
 
-    Defaults to the final snapshot taken when the ECS stack was torn down on
-    2026-06-10: reference data, the real profiles (jazzcat, udit94), and the
-    full demo-* Phase 5 dataset (30 musicians, 870 follows, 720 reviews).
-
-    Verify it still exists before an apply:
-      aws rds describe-db-snapshots --region ap-south-1 --snapshot-type manual
+    Set this only to restore a deliberately older point in time. Note it is
+    ignored once the instance exists (lifecycle.ignore_changes), because
+    changing it on a live database would destroy and recreate it.
   EOT
   type        = string
-  default     = "frikkinwave-prod-final-528299d1"
+  default     = ""
+}
+
+variable "db_restore_from_latest_snapshot" {
+  description = <<-EOT
+    Restore from the most recent snapshot of this instance. True is almost
+    always right: teardown takes a final snapshot, so this returns the state you
+    left behind.
+
+    Set false for a genuinely empty database — including the first apply in a
+    brand-new AWS account, where no snapshot exists yet and the lookup would
+    otherwise fail.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "db_name" {
