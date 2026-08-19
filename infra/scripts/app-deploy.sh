@@ -177,6 +177,31 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 
+# ---------------------------------------------------------------------------
+# A '000' above means curl never got a response, and by far the most common
+# cause is NOT a broken deploy — it is this machine's DNS.
+#
+# Teardown deletes the Route 53 alias on purpose, so anything that resolved
+# ${API_DOMAIN} while the stack was down cached a NEGATIVE answer. Home routers
+# routinely hold that well past the 600s negative TTL. The site is then
+# unreachable from this one network and perfectly healthy from everywhere else,
+# and the deploy gets blamed for it. That happened twice on 2026-08-19/20.
+#
+# So before reporting failure, ask a resolver that is not ours. If the record is
+# live there and the endpoint serves 200 over TLS, the deploy is fine and the
+# problem is local — say so plainly instead of sending someone into kubectl.
+# ---------------------------------------------------------------------------
+if [ "${CODE:-}" != "200" ]; then
+  PUBLIC_IP="$(dig +short @1.1.1.1 "${API_DOMAIN}" 2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)"
+  if [ -n "${PUBLIC_IP}" ]; then
+    # --resolve pins the address while keeping SNI and certificate validation
+    # intact, so a 200 here is a genuine end-to-end success, not a shortcut.
+    PUBLIC_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+      --resolve "${API_DOMAIN}:443:${PUBLIC_IP}" \
+      "https://${API_DOMAIN}/api/health/" || true)"
+  fi
+fi
+
 echo
 kubectl get pods -n "${NAMESPACE}" -o wide
 echo
@@ -184,8 +209,27 @@ echo
 if [ "${CODE:-}" = "200" ]; then
   echo "==> Live: https://${API_DOMAIN}/api/health/ -> 200"
   echo "    Docs:  https://${API_DOMAIN}/api/docs/"
+elif [ "${PUBLIC_CODE:-}" = "200" ]; then
+  LOCAL_NS="$(scutil --dns 2>/dev/null | awk '/nameserver\[0\]/{print $3; exit}' \
+    || grep -m1 '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}')"
+  echo "==> Live: https://${API_DOMAIN}/api/health/ -> 200 (verified via public DNS ${PUBLIC_IP})"
+  echo "    Docs:  https://${API_DOMAIN}/api/docs/"
+  echo
+  echo "!! Your resolver (${LOCAL_NS:-unknown}) cannot resolve ${API_DOMAIN}." >&2
+  echo "   THE DEPLOY IS FINE — the site is up for everyone else. Your resolver has" >&2
+  echo "   a stale negative answer cached from while the stack was torn down." >&2
+  echo "   Confirm:  dig +short @1.1.1.1 ${API_DOMAIN}   (answers)" >&2
+  echo "             dig +short ${API_DOMAIN}            (empty)" >&2
+  echo "   Fix:      restart the router, or point this machine at 1.1.1.1." >&2
 else
   echo "!! https://${API_DOMAIN}/api/health/ returned '${CODE:-no response}'." >&2
+  if [ -n "${PUBLIC_IP:-}" ]; then
+    echo "   Public DNS resolves it to ${PUBLIC_IP} and that returned" >&2
+    echo "   '${PUBLIC_CODE:-no response}', so this is NOT a local DNS problem." >&2
+  else
+    echo "   Public DNS (1.1.1.1) has no A record for it either — check the" >&2
+    echo "   Route 53 alias, which app-deploy.sh writes just above this step." >&2
+  fi
   echo "   The deploy itself succeeded — this is the edge path. Check in order:" >&2
   echo "     kubectl describe ingress ${RELEASE} -n ${NAMESPACE}" >&2
   echo "     aws elbv2 describe-target-health --region ${REGION} --target-group-arn <arn>" >&2

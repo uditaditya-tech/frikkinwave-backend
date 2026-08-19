@@ -429,6 +429,56 @@ Entity Operator, which dies with it. Get it wrong and topics strand in
 that and the PVC-recreation bug are now verified by having actually run the path,
 not by reasoning about it — all three broker EBS volumes released, no orphans.
 
+### Rebuilding the stack: two traps, in the order you hit them
+
+**1. Your kubeconfig points at the dead cluster.** Every rebuild gets a new API
+endpoint, and the local kubeconfig still names the old one. `eks-up.sh` fails
+partway through with:
+
+```
+Error: ... <OLD-ENDPOINT>.gr7.ap-south-1.eks.amazonaws.com: no such host
+```
+
+Confusing because the *new* endpoint resolves fine — compare them before
+assuming a DNS problem:
+
+```bash
+aws eks describe-cluster --name frikkinwave-prod --region ap-south-1 --query cluster.endpoint
+terraform -chdir=infra/eks output -raw cluster_endpoint
+```
+
+Fix: `aws eks update-kubeconfig --name frikkinwave-prod --region ap-south-1`,
+then plain `terraform apply` to converge. The script is idempotent by design.
+
+**2. `api.frikkinwave.com` looks dead while the app is healthy.** Teardown
+deletes the Route 53 alias deliberately (so `dig` does not lie about the state of
+the world), which means anything that resolved the name while the stack was down
+cached a *negative* answer. Home routers routinely hold that past the 600s
+negative TTL — indefinitely, in the case observed here.
+
+The tell is that the failure is local. Check the chain outward rather than
+inward:
+
+```bash
+dig +short @1.1.1.1 api.frikkinwave.com          # public resolver — should answer
+dig +short @$(scutil --dns | awk '/nameserver\[0\]/{print $3; exit}') api.frikkinwave.com
+curl -o /dev/null -w '%{http_code}\n' --resolve api.frikkinwave.com:443:<IP> \
+     https://api.frikkinwave.com/api/health/
+```
+
+If the public resolver answers and yours does not, nothing is wrong with the
+cluster. `app-deploy.sh` reports `000` in exactly this situation and says so —
+its own message ("the deploy itself succeeded — this is the edge path") is
+correct, and worth believing before spending time in `kubectl`.
+
+Also check the ALB targets, which distinguish a real outage instantly:
+
+```bash
+aws elbv2 describe-target-health --region ap-south-1 --target-group-arn <arn>
+```
+
+---
+
 ---
 
 ## Phase 3 — next

@@ -174,13 +174,36 @@ No models, endpoints, or infra for this exist yet.
 
 ---
 
+## Kafka migration — see `KAFKA.md`
+
+Runs alongside the phase work rather than inside it: it replaces the *transport*
+under the existing event backbone, not any product behaviour.
+
+| Stage | Status |
+|---|---|
+| 0 EBS CSI driver + default gp3 StorageClass (the cluster could not provision storage at all) | ✅ |
+| 1 Node capacity — 3 × t4g.medium/large across three AZs | ✅ |
+| 2 Strimzi 1.1.0 + Kafka 4.2.1, KRaft, 3 brokers, RF 3 / ISR 2 | ✅ |
+| — Security baseline: TLS + mTLS client certs + deny-by-default ACLs + NetworkPolicy enforcement | ✅ |
+| 3 `_dispatch()` produces to Kafka behind `EVENT_TRANSPORT` (default `celery`) | ✅ |
+| 4a Per-app `consumers.py`, consumer runtime, bounded retry + dead-letter topics | ✅ |
+| 4b A Deployment per consumer group, DLT topics + ACLs, live verification | ✅ |
+| 5 Remove Celery — `config/celery.py`, `CELERY_*`, the `--queues` workers, the dependency, and the `EVENT_TRANSPORT` flag itself | ⬜ |
+
+**Stage 5 is the point of no return** — it removes the flag that has already
+allowed two clean rollbacks. Worth doing with the cluster up so the flip can be
+verified before the escape hatch goes.
+
+---
+
 ## Deployment targets (backend only)
 
 | Service | Platform | Status |
 |---|---|---|
-| Backend API | AWS EKS (Kubernetes) | ✅ Live (ap-south-1, HTTPS) — web ×2, worker, notifications, search |
+| Backend API | AWS EKS (Kubernetes) | ✅ Live (ap-south-1, HTTPS) — web ×2, worker, notifications, search, + 4 Kafka consumer groups |
 | Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, reachable only from the cluster SG) |
-| Cache / broker | In-cluster Redis | ✅ Live (Celery broker; no persistence by design — see the outbox) |
+| Cache / broker | In-cluster Redis | ✅ Live (Celery broker; no persistence by design — see the outbox). **Parked** — kept for the read-through cache, not because it is used |
+| Event backbone | Strimzi Kafka on EKS | ✅ Live (3 brokers, KRaft, RF 3 / ISR 2, TLS + mTLS + ACLs) — see `KAFKA.md` |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |
 | Future | AWS EKS | Phase 4+ |

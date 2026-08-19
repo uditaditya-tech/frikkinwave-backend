@@ -92,3 +92,20 @@ These are summarised here and explained in [`eks/README.md`](eks/README.md):
   reaches Ready.
 - **Helm templates are excluded from pre-commit's `check-yaml`** — they are Go
   templates until rendered. `helm lint` and `helm template` cover them.
+- **After a rebuild your kubeconfig points at the DEAD cluster.** The stack gets a
+  new API endpoint every time, so `terraform apply` and `kubectl` fail with
+  `no such host` naming the *previous* one. Run `aws eks update-kubeconfig` first,
+  then re-apply.
+- **A torn-down stack poisons DNS caches for `api.frikkinwave.com`.** Teardown
+  deletes the Route 53 alias by design, so anything resolving the name during the
+  gap caches a negative answer — and home routers routinely hold it past the
+  600s TTL. The site then looks down from that one network while being perfectly
+  healthy everywhere else. Check against a public resolver before debugging the
+  cluster: `dig +short @1.1.1.1 api.frikkinwave.com`.
+- **`helm upgrade --reuse-values` silently drops NEW chart defaults.** It reuses
+  the previous release's coalesced values without re-reading the chart, so a key
+  added in the same change renders empty and the field is dropped — while helm
+  reports success. Use `--reset-then-reuse-values`.
+- **A ConfigMap change restarts nothing on its own.** `envFrom` values are
+  injected at container start; the chart stamps `checksum/config` on the web,
+  worker and consumer pod templates so a config change actually rolls them.

@@ -194,6 +194,11 @@ already an event; it just has not been named one. Convert those to real publishe
 
 ## 5. The transactional outbox (prerequisite) — ✅ IMPLEMENTED
 
+> **Update (2026-08-20):** the outbox is unchanged by the Kafka migration, exactly
+> as predicted here — Kafka does not solve dual-write. What moved is the
+> transport under it, and the *direction of subscription*: consumers now declare
+> what they listen to instead of a producer-side table naming them. See `KAFKA.md`.
+
 Today services do `transaction.on_commit(lambda: task.delay(...))`. That is a good
 lightweight pattern, but it has a real gap: if the process dies **after** the DB commit and
 **before** the broker enqueue, the event is silently lost. On one node that is rare. Across

@@ -18,12 +18,21 @@ frikkinwave-backend/
 │   │   ├── migrations/
 │   │   │   └── 0001_initial.py    # OutboxEvent (+ partial index on pending rows)
 │   │   ├── models.py              # OutboxEvent (topic, payload, published_at, attempts, last_error)
-│   │   ├── registry.py            # EVENT_HANDLERS: topic -> Celery task name (the subscription table)
-│   │   ├── services.py            # publish() (in-transaction) + relay_pending() + _dispatch()
+│   │   ├── registry.py            # EVENT_HANDLERS: topic -> Celery task name. CELERY ONLY —
+│   │   │                          # under Kafka each app declares its own consumers.py (stage 4)
+│   │   ├── services.py            # publish() (in-transaction) + relay_pending() + _dispatch(),
+│   │   │                          # which branches on EVENT_TRANSPORT (celery | kafka)
+│   │   ├── kafka.py               # Kafka PRODUCER. Synchronous produce+flush: the relay marks an
+│   │   │                          # event published only after the broker acknowledges it
+│   │   ├── consumer.py            # Kafka CONSUMER runtime. Manual offset commits, bounded retry,
+│   │   │                          # dead-letter topic. Every failure path commits — a poison
+│   │   │                          # message otherwise blocks its whole partition
 │   │   ├── tasks.py               # events.relay_outbox (the post-commit nudge)
 │   │   ├── management/
 │   │   │   └── commands/
-│   │   │       └── relay_outbox.py  # the sweep — schedule it (K8s CronJob) to guarantee delivery
+│   │   │       ├── relay_outbox.py    # the sweep — schedule it (K8s CronJob) to guarantee delivery
+│   │   │       └── consume_events.py  # `--group <app>` — one process per consumer group,
+│   │   │                              # replaces `celery worker --queues=<queue>`
 │   │   └── tests/
 │   │       └── test_outbox.py     # 10 tests: atomicity, rollback, relay, parking, registry, idempotency
 │   │
@@ -36,12 +45,14 @@ frikkinwave-backend/
 │   │   ├── renderers.py           # topic -> (subject, body) from primitives only
 │   │   ├── services.py            # deliver(); the only service layer touching no model
 │   │   ├── tasks.py               # 8 consumers, named notifications.* (routed to the notifications queue)
+│   │   ├── consumers.py           # KAFKA subscriptions: 8 topics -> services.deliver(); imports no other app
 │   │   └── tests/                 # incl. a test asserting it imports no other app
 │
 │   ├── search/                    # EXTRACTED SERVICE — semantic search + embedding index
 │   │   ├── models.py              # ProfileEmbedding: profile_id is a bare UUID (NO FK), is_available replica
 │   │   ├── services.py            # search() -> [(profile_id, similarity)] — ids, never ORM objects
 │   │   ├── tasks.py               # search.index_profile (routed to the search queue)
+│   │   ├── consumers.py           # KAFKA subscriptions: profile.updated -> index_profile
 │   │   ├── migrations/
 │   │   │   ├── 0001_initial.py    # VectorExtension (owned here) + ProfileEmbedding + HNSW
 │   │   │   └── 0002_*.py          # copies the existing vectors out of musicians before that table is dropped
@@ -190,6 +201,7 @@ frikkinwave-backend/
 │       ├── serializers.py         # Following/Follower Read + FeedEntry Read (flattens joined Activity)
 │       ├── services.py            # follow/unfollow (+ backfill/prune emit) + record_activity/fan_out/backfill/prune/get_feed + Verb alias
 │       ├── tasks.py               # Celery: fan_out_activity, backfill_feed, prune_feed (thin → services)
+│       ├── consumers.py           # KAFKA subscriptions: activity.recorded, follow.created, follow.removed
 │       ├── management/
 │       │   └── commands/
 │       │       └── seed_demo_phase5.py  # Seeds demo-* data across Phase 5 (follows/feed/reviews); eager+dummy-email; --reset
@@ -213,6 +225,7 @@ frikkinwave-backend/
 │   │   ├── serializers.py         # ReviewCreate (write) + ReviewRead (public)
 │   │   ├── services.py            # create_review (engagement-gated) + list_reviews_for + rating_summary + propagate_rating_to_profile
 │   │   ├── tasks.py               # Celery: propagate_profile_rating (pushes the rollup onto the profile, on_commit)
+│   │   ├── consumers.py           # KAFKA subscription: review.created
 │   │   ├── management/
 │   │   │   └── commands/
 │   │   │       └── backfill_profile_ratings.py  # reconciliation: rebuild every profile's rating rollup
@@ -261,8 +274,14 @@ frikkinwave-backend/
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── tests/                         # Project-level tests not tied to one app
 │   ├── test_celery_wiring.py      # Celery app wiring (2.1)
-│   └── test_architecture.py       # 5 guardrails: no cross-app model imports, DTO identity
-│                                  # boundary, outbox-only emitting, topics have consumers
+│   ├── test_architecture.py       # Guardrails on things that fail SILENTLY: no cross-app model
+│   │                              # imports, the DTO identity boundary, outbox-only emitting,
+│   │                              # every Celery handler on a consumed queue, every declared
+│   │                              # consumer group backed by a Deployment, and the Celery/Kafka
+│   │                              # topic coverage that makes flipping EVENT_TRANSPORT safe
+│   └── test_infrastructure.py     # Terraform + Helm guardrails: storage class exists and is not
+│                                  # a dead in-tree provisioner, Kafka durability (RF 3 / ISR 2),
+│                                  # broker/node fit, TLS+auth+ACLs on, nothing exposed publicly
 ├── .env                           # Git-ignored. Copy from .env.example.
 ├── .env.example                   # Committed template for all env vars.
 ├── .gitignore

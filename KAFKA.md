@@ -1,8 +1,11 @@
 # Kafka migration — working plan
 
-**Status: stages 0–2 DONE (2026-08-19). Stages 3–5 deferred.**
-Kafka runs on the cluster; the application is still entirely on Celery, so
-everything so far is reversible by deleting two `helm_release`s.
+**Status: stages 0–4 DONE (2026-08-19/20). Stage 5 deferred.**
+Kafka runs on the cluster with TLS + mTLS + deny-by-default ACLs, four consumer
+groups are deployed, and both transports are verified live. `EVENT_TRANSPORT`
+still defaults to `celery`, so the app dispatches through Celery until the flag
+is flipped — which is the escape hatch stage 5 removes.
+
 Written 2026-08-19 as a handoff. Read this with `MICROSERVICES.md` (why) and
 `infra/eks/README.md` (the cluster it runs on).
 
