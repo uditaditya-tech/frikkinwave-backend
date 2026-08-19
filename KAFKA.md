@@ -240,6 +240,83 @@ the orphan class that script exists to catch. It now deletes the `Kafka` and
 
 ---
 
+## The Kafka console (AKHQ)
+
+There is no AWS-side view of any of this, and MSK was priced before accepting
+that: **+29%/hr**, and its console shows broker health and CloudWatch metrics
+but has **no topic browser, no message inspection and no consumer-lag view** —
+none of the questions actually worth asking. MSK would also either be torn down
+with the cluster (losing the managed benefit) or bill ~$110/month through every
+session gap, which breaks the economics the whole up/down pattern depends on.
+
+So: **AKHQ 0.28.0**, in the `kafka` namespace, on nodes already paid for.
+
+```bash
+kubectl port-forward -n kafka svc/kafka-kafka-ui 8080:8080
+# http://localhost:8080/ui
+```
+
+- **ClusterIP only, and no Ingress template exists.** This is an
+  unauthenticated Kafka admin console; behind the ALB it would publish read
+  access to every event payload under a guessable hostname. A test asserts both.
+- **Read-only** (`reader` group). Not just caution: topics are `KafkaTopic`
+  manifests reconciled by the Topic Operator, and one created through the UI
+  exists in Kafka with no CR behind it — invisible to git, unmanaged, and gone
+  the next time the cluster is rebuilt from source.
+
+### Four traps, all of which cost real time
+
+- **`terraform apply` on a LOCAL chart is a silent no-op unless you bump the
+  chart version.** `helm_release` diffs a local chart on its `version`, not its
+  contents. Editing a template and applying reports **"0 changed"** and deploys
+  nothing, which reads exactly like success. `infra/helm/kafka/Chart.yaml`
+  carries a comment saying so; bump it on every template or values change.
+
+- **AKHQ serves no `/health`.** It 404s, and setting Micronaut's
+  `endpoints.health.enabled` does not change that. This is the nastiest failure
+  of the four because it looks like everything works: the container logs
+  `Startup completed in 10497ms. Server Running`, serves the UI correctly, and
+  the kubelet kills it at exactly `failureThreshold x periodSeconds` — a clean
+  boot log sitting next to a `CrashLoopBackOff`, with `exitCode 143`. Verified
+  paths on the running pod: **`/ui` and `/api` are 200, `/` is 307, everything
+  else 404s.** Probes use `/ui`, and a test pins that.
+
+- **`AKHQ_CONFIGURATION` holds config *contents*, not a path.** The image's
+  entrypoint writes them to `/app/application.yml`, so pointing that variable at
+  a path and mounting the ConfigMap there makes the entrypoint try to overwrite
+  a read-only volume: `cannot create /app/application.yml: Read-only file
+  system`, before AKHQ starts at all. Use `MICRONAUT_CONFIG_FILES` and mount the
+  ConfigMap as a directory instead.
+
+- **Helm's three-way merge is ADDITIVE after a failed release.** When an upgrade
+  fails, the next upgrade diffs against the last *successful* manifest. If the
+  object did not exist there, helm cannot compute deletions and simply merges
+  the new spec onto the live object — so the pod ended up with **both** the old
+  and new env vars and **both** volume mounts, and kept failing for the original
+  reason while the stored manifest looked correct. The fix is to delete the
+  polluted object (`kubectl delete deployment kafka-kafka-ui -n kafka`) and let
+  the next apply create it fresh. Suspect this whenever a live object disagrees
+  with `helm get manifest`.
+
+One more, self-inflicted but worth knowing: **overlapping `terraform apply` runs
+fail on the state lock**, and if the output is being filtered through `grep` the
+only symptom is that nothing happened. Let one apply finish before starting the
+next.
+
+### The ConfigMap checksum has to hash the config
+
+The Deployment carries
+`checksum/config: {{ include (print $.Template.BasePath "/kafka-ui-config.yaml") . | sha256sum }}`,
+and the ConfigMap lives in **its own template file** so that reference works.
+
+An earlier version hashed a few values (image, readOnly) instead. That is worse
+than no checksum at all: a config-only change leaves the pod template identical,
+so no new ReplicaSet rolls, the release reports success, and the running pod
+keeps the old configuration. Kubernetes does not restart pods on a ConfigMap
+change and AKHQ reads its config only at startup.
+
+---
+
 ## Stage 3 — the switchover (DEFERRED, and the risky one)
 
 `_dispatch()` in `apps/events/services.py` stops resolving a Celery task by name

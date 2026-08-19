@@ -10,5 +10,11 @@ description: |
   Helm renders templates without consulting the API server's schema, so the
   operator's helm_release and this one can be ordered with depends_on.
 type: application
-version: 0.1.0
+
+# BUMP THIS WHENEVER A TEMPLATE OR VALUE CHANGES.
+#
+# terraform's helm_release diffs a LOCAL chart on its version, not on its
+# contents. Edit a template, leave this alone, and `terraform apply` reports
+# "0 changed" and deploys nothing — a silent no-op that looks like success.
+version: 0.5.0
 appVersion: "4.2.1"

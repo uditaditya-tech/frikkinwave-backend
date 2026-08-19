@@ -99,3 +99,52 @@ entityOperator:
     limits:
       cpu: 200m
       memory: 384Mi
+
+# ---------------------------------------------------------------------------
+# AKHQ — the Kafka console.
+#
+# There is no AWS-side view of any of this. MSK would give one, and it was
+# priced before deciding against it: +29%/hr, and its console shows broker
+# health and CloudWatch metrics but has no topic browser, no message inspection
+# and no consumer-lag view — none of the questions actually worth asking. This
+# pod answers all three, on nodes already paid for. See KAFKA.md.
+# ---------------------------------------------------------------------------
+ui:
+  enabled: true
+
+  # PINNED, never `latest`. A mutable tag makes "roll back to what worked"
+  # inexpressible — the same reason app-deploy.sh refuses to tag a dirty tree
+  # with a commit sha. Asserted by tests/test_infrastructure.py.
+  image: tchiotludo/akhq:0.28.0
+
+  # READ-ONLY, and not merely out of caution.
+  #
+  # Topics are KafkaTopic manifests reconciled by the Topic Operator — that
+  # declarative model is what stage 4 builds on. A topic created through this UI
+  # exists in Kafka with no KafkaTopic behind it: invisible to git, unmanaged by
+  # the operator, and gone the next time the cluster is rebuilt from source.
+  # Read-only keeps the manifests authoritative. Browsing messages, consumer
+  # groups and lag all still work.
+  readOnly: true
+
+  service:
+    # ClusterIP, and it must stay that way. This is an UNAUTHENTICATED Kafka
+    # admin console: behind the ALB it would publish read access to every event
+    # payload to the internet under a guessable hostname. Reach it with
+    #     kubectl port-forward -n kafka svc/<release>-kafka-ui 8080:8080
+    # There is deliberately no Ingress template. Asserted by the tests.
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 640Mi
+
+  # Same reasoning as the brokers: a heap that can grow into the container limit
+  # is an OOMKill and a restart loop, not an OutOfMemoryError with a stack trace.
+  jvm:
+    xmx: 384m

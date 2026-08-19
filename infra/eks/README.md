@@ -398,6 +398,36 @@ EBS volumes then outlive the destroy and keep billing, which is the exact orphan
 class the script exists to prevent. It now removes the `Kafka` and
 `KafkaNodePool` resources and uninstalls Strimzi *before* the PVC sweep.
 
+### The Kafka console, and why not MSK
+
+AKHQ runs in the `kafka` namespace. It is the only way to see topics, messages,
+consumer groups and lag — the AWS console shows none of that, and neither would
+MSK's (it has no topic browser or message inspection at all). MSK was priced
+rather than assumed: **+29%/hr**, and it would bill through every session gap
+instead of dying with the cluster.
+
+```bash
+kubectl port-forward -n kafka svc/kafka-kafka-ui 8080:8080
+# http://localhost:8080/ui
+```
+
+**ClusterIP with no Ingress, and read-only, both asserted by tests.** It has no
+authentication, so the only thing making that acceptable is that it cannot be
+reached from outside the cluster.
+
+Traps recorded in full in `KAFKA.md`, but the two that generalise beyond AKHQ:
+
+- **`terraform apply` on a local chart is a silent no-op unless the chart
+  version is bumped** — `helm_release` diffs a local chart on `version`, not
+  contents, and reports "0 changed" while deploying nothing.
+- **Helm's three-way merge goes additive after a failed release** — the next
+  upgrade diffs against the last *successful* manifest, so if the object was not
+  in it, deletions cannot be computed and old fields survive on the live object.
+  Delete the object and let the next apply recreate it. Suspect this whenever a
+  live object disagrees with `helm get manifest`.
+
+---
+
 ---
 
 ## Phase 3 — next
