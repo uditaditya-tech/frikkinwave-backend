@@ -45,6 +45,11 @@ spec:
                 {{- include "frikkinwave.envFrom" . | nindent 16 }}
               env:
                 {{- include "frikkinwave.podIpEnv" . | nindent 16 }}
+                {{- include "frikkinwave.kafkaEnv" . | nindent 16 }}
+              {{- if .Values.kafka.enabled }}
+              volumeMounts:
+                {{- include "frikkinwave.kafkaVolumeMounts" . | nindent 16 }}
+              {{- end }}
               resources:
                 requests:
                   cpu: 50m
@@ -52,4 +57,8 @@ spec:
                 limits:
                   cpu: 300m
                   memory: 384Mi
+          {{- if .Values.kafka.enabled }}
+          volumes:
+            {{- include "frikkinwave.kafkaVolumes" . | nindent 12 }}
+          {{- end }}
 {{- end }}

@@ -287,3 +287,14 @@ variable "strimzi_chart_version" {
   type        = string
   default     = "1.1.0"
 }
+
+variable "kafka_app_user" {
+  description = <<-EOT
+    The KafkaUser the application authenticates as. Must match `appUser` in
+    infra/helm/kafka/values.yaml — Terraform mirrors this user's generated Secret
+    into the app namespace, and a mismatch fails the apply at the wait step
+    rather than silently shipping without credentials.
+  EOT
+  type        = string
+  default     = "frikkinwave-app"
+}

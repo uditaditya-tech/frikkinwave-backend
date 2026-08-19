@@ -11,6 +11,7 @@ import logging
 import uuid
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -82,8 +83,12 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
             if event is None:
                 continue  # already claimed by another relay
 
+            # The consumer lookup is a CELERY concern only. Under Kafka the
+            # producer deliberately does not know who listens — that is the
+            # whole point of stage 4 — so a topic with no entry here is not an
+            # error, it is just a topic nobody has subscribed to yet.
             task_name = EVENT_HANDLERS.get(event.topic)
-            if task_name is None:
+            if task_name is None and settings.EVENT_TRANSPORT != "kafka":
                 event.attempts += 1
                 event.last_error = f"No consumer registered for topic '{event.topic}'"
                 event.save(update_fields=["attempts", "last_error"])
@@ -94,7 +99,7 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
                 continue
 
             try:
-                _dispatch(task_name=task_name, payload=event.payload)
+                _dispatch(topic=event.topic, task_name=task_name, payload=event.payload)
             except Exception as exc:
                 event.attempts += 1
                 event.last_error = repr(exc)
@@ -112,7 +117,34 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
     return published
 
 
-def _dispatch(*, task_name: str, payload: dict[str, Any]) -> None:
+def _dispatch(*, topic: str, task_name: str | None, payload: dict[str, Any]) -> None:
+    """
+    Hand an event off, by whichever transport is configured.
+
+    This function IS stage 3 (KAFKA.md). `publish()` and the outbox are
+    untouched: Kafka does not solve dual-write, so the event row still commits
+    with the state change and the sweep still recovers anything stranded. Only
+    the hand-off moves.
+
+    Raising propagates to `relay_pending`, which increments `attempts`, records
+    `last_error`, and leaves the event unpublished for the next sweep.
+    """
+    if settings.EVENT_TRANSPORT == "kafka":
+        from apps.events.kafka import produce
+
+        # The event id would be the natural key, but it is not passed down here
+        # and partition-by-topic is right for these events anyway: ordering
+        # matters per aggregate, and nothing today depends on cross-topic order.
+        produce(topic=topic, payload=payload)
+        return
+
+    if task_name is None:
+        raise LookupError(f"No consumer registered for topic '{topic}'")
+
+    _dispatch_celery(task_name=task_name, payload=payload)
+
+
+def _dispatch_celery(*, task_name: str, payload: dict[str, Any]) -> None:
     """
     Hand an event to its consumer, resolving the task **by name**.
 

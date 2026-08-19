@@ -26,6 +26,8 @@ spec:
       app.kubernetes.io/component: {{ $name }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include "frikkinwave.configChecksum" $ }}
       labels:
         {{- include "frikkinwave.labels" $ | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}
@@ -49,6 +51,13 @@ spec:
             {{- include "frikkinwave.envFrom" $ | nindent 12 }}
           env:
             {{- include "frikkinwave.podIpEnv" $ | nindent 12 }}
+            {{- if $cfg.runsOutboxRelay }}
+            {{- include "frikkinwave.kafkaEnv" $ | nindent 12 }}
+            {{- end }}
+          {{- if and $cfg.runsOutboxRelay $.Values.kafka.enabled }}
+          volumeMounts:
+            {{- include "frikkinwave.kafkaVolumeMounts" $ | nindent 12 }}
+          {{- end }}
           # No readiness probe: workers serve no traffic, so nothing gates on
           # them. Liveness asks the worker to answer its own control ping, which
           # catches a process that is up but has lost the broker.
@@ -64,5 +73,9 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml $cfg.resources | nindent 12 }}
+      {{- if and $cfg.runsOutboxRelay $.Values.kafka.enabled }}
+      volumes:
+        {{- include "frikkinwave.kafkaVolumes" $ | nindent 8 }}
+      {{- end }}
 {{- end }}
 {{- end }}

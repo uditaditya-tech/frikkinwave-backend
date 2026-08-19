@@ -195,3 +195,65 @@ def test_the_outbox_relay_itself_is_consumed() -> None:
     dispatched — the one failure that breaks all the others at once.
     """
     assert _queue_for_task("events.relay_outbox") in _queues_consumed_by_the_cluster()
+
+
+# ---------------------------------------------------------------------------
+# Kafka credentials reach only the components that run the outbox relay.
+#
+# EVENT_TRANSPORT=kafka needs broker credentials in the worker Deployment and the
+# relay CronJob. Nothing else: web pods write the outbox row and nudge Celery,
+# and the notifications/search workers consume their own queues. Handing them a
+# credential they never use widens the blast radius of any one pod being
+# compromised, for no functionality — and it is the kind of thing that spreads
+# quietly, because mounting a secret never breaks anything.
+# ---------------------------------------------------------------------------
+
+
+def test_kafka_credentials_are_scoped_to_the_relay() -> None:
+    import yaml
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    relay_workers = {
+        name
+        for name, cfg in (values.get("workers") or {}).items()
+        if cfg.get("enabled", True) and cfg.get("runsOutboxRelay")
+    }
+    assert relay_workers == {"worker"}, (
+        f"Expected only the general worker to carry Kafka credentials, got "
+        f"{sorted(relay_workers)}. Every extra one is a pod holding a broker "
+        "credential it never uses."
+    )
+
+
+def test_the_relay_worker_consumes_the_queue_the_relay_task_routes_to() -> None:
+    """
+    The worker flagged `runsOutboxRelay` must actually be the one that runs it.
+    Flag the wrong Deployment and the credentials land on a pod that never
+    produces, while the pod that does produce has none — which fails only once
+    the transport is flipped, in production.
+    """
+    import yaml
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    relay_queue = _queue_for_task("events.relay_outbox")
+    flagged = {
+        name for name, cfg in (values.get("workers") or {}).items() if cfg.get("runsOutboxRelay")
+    }
+    for name in flagged:
+        queues = {q.strip() for q in str(values["workers"][name]["queues"]).split(",")}
+        assert relay_queue in queues, (
+            f"Worker '{name}' is flagged runsOutboxRelay but consumes {sorted(queues)}, "
+            f"not '{relay_queue}' where events.relay_outbox is routed."
+        )
+
+
+def test_the_default_event_transport_is_celery() -> None:
+    """
+    Deploying stage 3 must change nothing until the flag is flipped
+    deliberately. The event backbone works today; it is not worth betting on
+    one deploy.
+    """
+    import yaml
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    assert values["config"]["EVENT_TRANSPORT"] == "celery"

@@ -29,6 +29,16 @@ config:
   CELERY_BROKER_URL: redis://frikkinwave-redis:6379/0
   # Semantic-search relevance floor. 0.8 is unusable for text-embedding-3-small.
   SEARCH_SIMILARITY_THRESHOLD: "0.4"
+  # How the outbox relay hands events off: celery | kafka. Defaults to celery so
+  # deploying stage 3 changes nothing. Flip live, no image rebuild:
+  #   helm upgrade ... --set config.EVENT_TRANSPORT=kafka
+  # and flip straight back if anything looks wrong.
+  EVENT_TRANSPORT: celery
+  KAFKA_BOOTSTRAP_SERVERS: frikkinwave-kafka-bootstrap.kafka.svc.cluster.local:9093
+  KAFKA_SECURITY_PROTOCOL: SASL_SSL
+  KAFKA_SASL_MECHANISM: SCRAM-SHA-512
+  KAFKA_SASL_USERNAME: frikkinwave-app
+  KAFKA_SSL_CA_LOCATION: /etc/kafka-ca/ca.crt
   # gunicorn workers per pod. Each forks a full Django process (~150 MB), so
   # this is bounded by the memory limit below, not by CPU.
   WEB_CONCURRENCY: "2"
@@ -63,6 +73,9 @@ workers:
   # General: feed fan-out, rating rollups, the outbox relay.
   worker:
     enabled: true
+    # This Deployment runs events.relay_outbox, so it is the only worker that
+    # needs Kafka credentials when EVENT_TRANSPORT=kafka.
+    runsOutboxRelay: true
     replicaCount: 1
     concurrency: 2
     queues: celery
@@ -103,6 +116,23 @@ workers:
       limits:
         cpu: 300m
         memory: 448Mi
+
+# ---------------------------------------------------------------------------
+# Kafka client (KAFKA.md stage 3).
+#
+# `enabled` only controls whether the CREDENTIALS are mounted. What the app
+# actually does is decided by config.EVENT_TRANSPORT below — mounting a secret
+# changes no behaviour, so these can be rolled out separately and the transport
+# flipped afterwards with a one-line `helm upgrade --set`.
+#
+# Both Secrets are mirrored into this namespace by Terraform (infra/eks/kafka.tf):
+# Strimzi creates them in the `kafka` namespace and Secrets cannot cross one.
+# ---------------------------------------------------------------------------
+kafka:
+  enabled: true
+  userSecret: kafka-app-user
+  caSecret: kafka-cluster-ca
+  caMountPath: /etc/kafka-ca
 
 redis:
   enabled: true

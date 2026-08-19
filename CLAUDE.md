@@ -282,4 +282,5 @@ Critical ones:
 - `DJANGO_SECRET_KEY` — required in all environments
 - `DATABASE_URL` — postgres connection string
 - `DJANGO_SETTINGS_MODULE` — set to `config.settings.local` for dev, `config.settings.production` for prod
-- `SEARCH_SIMILARITY_THRESHOLD` — semantic-search relevance floor (default `0.4`, `0` disables). Live-tunable in prod via the chart's `config` map (`helm upgrade --set config.SEARCH_SIMILARITY_THRESHOLD=N`), no image rebuild.
+- `SEARCH_SIMILARITY_THRESHOLD` — semantic-search relevance floor (default `0.4`, `0` disables). Tunable via the chart's `config` map (`helm upgrade --set config.SEARCH_SIMILARITY_THRESHOLD=N`), no image rebuild. **This only takes effect because the chart stamps `checksum/config` on the pod templates** — `envFrom` values are injected at container start, so a ConfigMap change alone updates nothing in a running pod and `helm upgrade` still reports success. Don't remove that annotation.
+- `EVENT_TRANSPORT` — `celery` (default) or `kafka`. Chooses how the outbox relay hands events off; `publish()` and the outbox are unaffected. Flip live with `helm upgrade --set config.EVENT_TRANSPORT=kafka` and flip straight back if anything looks wrong. See `KAFKA.md` stage 3.

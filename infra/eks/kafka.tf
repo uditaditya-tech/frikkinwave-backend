@@ -70,3 +70,76 @@ resource "helm_release" "kafka_cluster" {
     kubernetes_storage_class_v1.gp3,
   ]
 }
+
+# ---------------------------------------------------------------------------
+# Kafka credentials, mirrored into the application namespace.
+#
+# Kubernetes Secrets are namespaced and cannot be mounted across namespaces. The
+# Strimzi-generated credential (`frikkinwave-app`) and the cluster CA both live
+# in the `kafka` namespace; the workers that run the outbox relay live in the
+# app namespace. So they have to be copied.
+#
+# NOTE the ordering problem this creates. `helm_release.kafka_cluster` completes
+# when helm has *applied* the custom resources, not when Strimzi has reconciled
+# them — the User Operator creates the credential Secret a minute or two later.
+# A data source alone would therefore fail on a fresh cluster with "secret not
+# found", so the wait below is load-bearing, not belt-and-braces.
+#
+# This is a stopgap. The right answer is External Secrets Operator (already
+# planned for Phase 3) or a replication controller; revisit when ESO lands.
+# ---------------------------------------------------------------------------
+
+resource "terraform_data" "wait_for_kafka_credentials" {
+  triggers_replace = [helm_release.kafka_cluster.metadata.version]
+
+  provisioner "local-exec" {
+    command = <<-CMD
+      kubectl wait --for=condition=Ready kafkauser/${var.kafka_app_user} \
+        -n ${var.kafka_namespace} --timeout=600s
+    CMD
+  }
+
+  depends_on = [helm_release.kafka_cluster]
+}
+
+data "kubernetes_secret_v1" "kafka_app_user" {
+  metadata {
+    name      = var.kafka_app_user
+    namespace = var.kafka_namespace
+  }
+  depends_on = [terraform_data.wait_for_kafka_credentials]
+}
+
+data "kubernetes_secret_v1" "kafka_cluster_ca" {
+  metadata {
+    name      = "${var.project}-cluster-ca-cert"
+    namespace = var.kafka_namespace
+  }
+  depends_on = [terraform_data.wait_for_kafka_credentials]
+}
+
+# The SCRAM password. Mounted as env by the worker and the relay CronJob; the
+# web pods deliberately get nothing, because they only write the outbox row and
+# nudge Celery. Smaller blast radius for the same functionality.
+resource "kubernetes_secret_v1" "kafka_app_user_mirror" {
+  metadata {
+    name      = "kafka-app-user"
+    namespace = var.app_namespace
+  }
+  data = {
+    password = data.kubernetes_secret_v1.kafka_app_user.data["password"]
+  }
+}
+
+# The cluster CA, so clients can verify the brokers' certificates rather than
+# skipping verification — which would give encryption without authentication of
+# the server, and make a man-in-the-middle trivial inside the cluster.
+resource "kubernetes_secret_v1" "kafka_ca_mirror" {
+  metadata {
+    name      = "kafka-cluster-ca"
+    namespace = var.app_namespace
+  }
+  data = {
+    "ca.crt" = data.kubernetes_secret_v1.kafka_cluster_ca.data["ca.crt"]
+  }
+}

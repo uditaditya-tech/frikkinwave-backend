@@ -17,6 +17,8 @@ spec:
       app.kubernetes.io/component: web
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include "frikkinwave.configChecksum" . }}
       labels:
         {{- include "frikkinwave.labels" . | nindent 8 }}
         app.kubernetes.io/component: web

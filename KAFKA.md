@@ -339,14 +339,94 @@ succeeded where it had timed out, and every EBS volume released.
 
 ---
 
-## Stage 3 — the switchover (DEFERRED, and the risky one)
+## Stage 3 — the switchover ✅ DONE (2026-08-19)
 
-`_dispatch()` in `apps/events/services.py` stops resolving a Celery task by name
-and starts producing to a Kafka topic. **`publish()` and the outbox do not
-change.** It is roughly a ten-line diff in one function.
+`_dispatch()` branches on `EVENT_TRANSPORT` (`celery` | `kafka`). **`publish()`
+and the outbox are unchanged** — Kafka does not solve dual-write, so the event
+row still commits with the state change and the sweep still recovers strays.
 
-Put it behind a setting (`EVENT_TRANSPORT=celery|kafka`) so it can be flipped
-back. The event backbone currently works; do not bet it on one deploy.
+**Default is `celery`, so merging changed nothing.** Flip live, no image rebuild:
+
+```bash
+helm upgrade frikkinwave infra/helm/frikkinwave -n frikkinwave --reuse-values \
+  --set config.EVENT_TRANSPORT=kafka
+```
+
+### Verified on the live cluster
+
+A real event through the real path, with the transport flipped:
+
+```
+event_published  topic=profile.updated
+kafka_produced   topic=profile.updated
+outbox_relayed   published=1
+after: published_at 2026-08-19 18:28:44+00:00  attempts 1  last_error ''
+```
+
+Consumed back over TLS + SCRAM with the ACL'd user — the exact payload. Then
+flipped back to `celery` and confirmed. The flag is the point: the event backbone
+works today and is not worth betting on one deploy.
+
+### The diff really is ten lines. The correctness around it is not
+
+- **The produce MUST be synchronous.** `relay_pending()` marks an event published
+  only after a successful hand-off — that is what makes delivery at-least-once.
+  `confluent_kafka.produce()` returns immediately and buffers in memory, so an
+  async produce would mark the row published while the message was still unsent
+  and a crash would lose it *with the database claiming otherwise*. That is
+  precisely the failure the outbox exists to prevent. `apps/events/kafka.py`
+  produces, `flush()`es, and inspects the delivery callback — a rejected message
+  is otherwise indistinguishable from a delivered one.
+- **`acks=all` pairs with `min.insync.replicas=2`.** Two replicas must hold the
+  message before the produce returns. `acks=1` returns once the leader has it and
+  loses it if that leader dies before replicating.
+- **The consumer lookup is a Celery concern only.** Under Kafka a topic with no
+  registered handler is not an error — it is a topic nobody has subscribed to
+  yet, which is the decoupling stage 4 is built on. Parking it would reintroduce
+  exactly the producer-knows-its-consumers coupling Kafka is meant to remove. The
+  Celery path still parks, and its test is unchanged.
+- **Credentials go only where the relay runs** — the general worker and the relay
+  CronJob. Web pods write the outbox row and nudge Celery, so they get none.
+  `tests/test_architecture.py` asserts that stays true.
+
+### Trap: a ConfigMap change does not restart anything
+
+Flipping the flag appeared to work and did nothing. `helm upgrade` reported
+success, the ConfigMap read `kafka`, and every worker still had
+`EVENT_TRANSPORT=celery` in its environment.
+
+**`envFrom` values are injected when a container starts.** Changing a ConfigMap
+never updates a running pod, and an unchanged pod template produces no new
+ReplicaSet to restart it. The chart now stamps
+`checksum/config` on the web and worker pod templates, so a config change rolls
+them. CronJobs do not need it — each run is a fresh pod.
+
+This invalidated a claim in `CLAUDE.md`, now corrected: `SEARCH_SIMILARITY_THRESHOLD`
+was documented as live-tunable by `helm upgrade --set`, which updated the
+ConfigMap and changed no behaviour until something happened to restart the pods.
+
+### Secrets cannot cross namespaces
+
+Strimzi creates the SCRAM credential and the cluster CA in the `kafka` namespace;
+the workers run in `frikkinwave`. Terraform mirrors both
+(`infra/eks/kafka.tf`), and the wait before it is load-bearing:
+`helm_release.kafka_cluster` completes when helm has *applied* the CRs, not when
+Strimzi has reconciled them, so a data source alone fails on a fresh cluster with
+"secret not found". This is a stopgap — External Secrets Operator (Phase 3) or a
+replication controller is the right answer.
+
+### ACLs are real, and the first consumer proved it
+
+A console consumer failed with:
+
+```
+GroupAuthorizationException: Not authorized to access group: console-consumer-18221
+```
+
+The app user has `Read, Describe` on the **`frikkinwave` group prefix** only, and
+the console client had invented a random group name. Working as designed —
+consumers must use a group under that prefix, which is also how stage 4 gives
+each extracted service its own group without an ACL change per service.
 
 ---
 

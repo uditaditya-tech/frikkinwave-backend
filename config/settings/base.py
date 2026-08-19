@@ -219,6 +219,42 @@ CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TASK_EAGER_PROPAGATES = True
 
 # ---------------------------------------------------------------------------
+# Event transport (KAFKA.md stage 3)
+#
+# Which way the outbox relay hands an event off. `publish()` and the outbox are
+# NOT affected by this — they still write a row inside the producer's
+# transaction, because Kafka does not solve dual-write. Only _dispatch() looks
+# at this setting.
+#
+# Defaults to celery so this setting changing nothing is the safe state. Flip it
+# in production without an image rebuild:
+#     helm upgrade ... --set config.EVENT_TRANSPORT=kafka
+# and flip it straight back if anything looks wrong. The event backbone works
+# today; it is not worth betting on one deploy.
+# ---------------------------------------------------------------------------
+EVENT_TRANSPORT = env("EVENT_TRANSPORT", default="celery")
+
+# Only read when EVENT_TRANSPORT=kafka. The credential and CA come from the
+# Strimzi-generated Secrets (KafkaUser `frikkinwave-app` and the cluster CA),
+# mounted into the worker and the relay CronJob — never baked into the image and
+# never in the chart's values.
+KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS", default="")
+# SASL_SSL today (SCRAM-SHA-512). Kept as settings rather than hardcoded so
+# moving to mTLS is a configuration change, not a code change.
+KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL", default="SASL_SSL")
+KAFKA_SASL_MECHANISM = env("KAFKA_SASL_MECHANISM", default="SCRAM-SHA-512")
+KAFKA_SASL_USERNAME = env("KAFKA_SASL_USERNAME", default="")
+KAFKA_SASL_PASSWORD = env("KAFKA_SASL_PASSWORD", default="")
+KAFKA_SSL_CA_LOCATION = env("KAFKA_SSL_CA_LOCATION", default="")
+# mTLS alternative — unset while using SCRAM.
+KAFKA_SSL_CERTIFICATE_LOCATION = env("KAFKA_SSL_CERTIFICATE_LOCATION", default="")
+KAFKA_SSL_KEY_LOCATION = env("KAFKA_SSL_KEY_LOCATION", default="")
+
+#: Seconds to wait for the broker to acknowledge. The relay marks an event
+#: published only after this returns, so it must be a real bound, not infinite.
+KAFKA_FLUSH_TIMEOUT = env.float("KAFKA_FLUSH_TIMEOUT", default=10.0)
+
+# ---------------------------------------------------------------------------
 # drf-spectacular (OpenAPI)
 # ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
