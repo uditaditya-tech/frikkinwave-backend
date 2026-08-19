@@ -455,6 +455,7 @@ three. Every RPC seam needs, explicitly:
 |---|---|---|
 | Event backbone | MSK (Kafka) vs Kinesis vs SNS/SQS | Kafka matches the "event shape today = Kafka schema tomorrow" rule already in `CLAUDE.md`; SNS/SQS is cheaper and simpler to start |
 | Orchestration | ~~ECS vs EKS~~ — **decided: EKS**, applied 2026-08-19 | The ECS stack is deleted; git history has it if the decision ever needs revisiting |
+| Event transport | ~~Celery/Redis vs Kafka~~ — **decided: Kafka**, 2026-08-19. Infra stages 0-2 done; app still on Celery. | See `KAFKA.md`. Replaces Celery *and* Redis-as-broker: every Celery task here is an event consumer. The outbox is unaffected — Kafka does not solve dual-write. Bought for replay and multi-consumer-per-topic, which the current registry structurally cannot express; **not** because durability is lacking, since the outbox already covers that. |
 | RPC transport | gRPC vs HTTP+JSON | gRPC for typed contracts and speed; HTTP is simpler and debuggable |
 | Feed store | Redis sorted sets vs DynamoDB | Redis is faster and simpler; DynamoDB is durable and cheaper at very large inbox volume |
 | Vector store | keep pgvector vs dedicated (Pinecone/Qdrant/OpenSearch) | pgvector + HNSW scales further than people assume — measure before moving |
@@ -463,6 +464,9 @@ three. Every RPC seam needs, explicitly:
 ---
 
 ## Related docs
+
+- **`KAFKA.md`** — the Kafka migration (infrastructure stages 0-2 done; the
+  switchover, consumers, and Celery removal deferred).
 
 - `CLAUDE.md` — the four scale rules this design assumes, plus all conventions and gotchas
 - `CODEBASE.md` — current app layout and the endpoint surface

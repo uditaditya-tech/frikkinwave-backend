@@ -1,0 +1,101 @@
+# ---------------------------------------------------------------------------
+# Kafka cluster values.
+#
+# tests/test_infrastructure.py asserts on the durability and scheduling keys
+# below and cross-checks them against the Terraform stack. They are not free
+# parameters — read the comments before changing one.
+# ---------------------------------------------------------------------------
+
+# The Kafka cluster name. Becomes the prefix for every generated resource, and
+# the bootstrap Service is <name>-kafka-bootstrap.
+clusterName: frikkinwave
+
+# Broker version. Strimzi only ships images for versions it was built against —
+# 1.1.0 supports 4.2.0, 4.2.1 and 4.3.0. Naming an unsupported version leaves
+# the Kafka resource stuck NotReady with the reason in the operator log.
+kafkaVersion: "4.2.1"
+
+# ---------------------------------------------------------------------------
+# Node pool.
+#
+# One pool with BOTH roles: in KRaft the controller quorum is a Kafka role, not
+# a separate ZooKeeper ensemble. Combining them means 3 pods instead of 6, which
+# is what makes this fit on three t4g.medium nodes. Split the roles into two
+# pools when the cluster is big enough that a busy broker starving the
+# controller quorum is a real risk; at this scale it is not.
+# ---------------------------------------------------------------------------
+nodePool:
+  name: dual-role
+  # 3 is the floor for the replication settings below to be satisfiable, and it
+  # matches node_desired_size so the hostname spread can place them.
+  replicas: 3
+  roles:
+    - controller
+    - broker
+
+storage:
+  size: 10Gi
+  # Must name a StorageClass the cluster actually has. Terraform creates gp3 in
+  # infra/eks/ebs-csi.tf; naming anything else parks every broker Pending
+  # forever with no error above the PVC. Asserted by the tests.
+  class: gp3
+  # true — the volumes are recreated from replicas on the next bring-up, and a
+  # retained EBS volume on a torn-down cluster is a silent bill. See the Kafka
+  # teardown block in infra/scripts/eks-down.sh.
+  deleteClaim: true
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 1280Mi
+  limits:
+    cpu: 1000m
+    memory: 1536Mi
+
+# Heap is set explicitly and deliberately well under the memory limit. Kafka
+# relies on the OS page cache for read throughput, so handing the JVM the whole
+# container is actively counterproductive — and a heap that can grow into the
+# limit gets the pod OOMKilled rather than throwing OutOfMemoryError.
+jvm:
+  xms: 1g
+  xmx: 1g
+
+# ---------------------------------------------------------------------------
+# Durability. From KAFKA.md: "anything less and the durability story is theatre."
+#
+# replicationFactor 3 + minInsyncReplicas 2 is the pairing that matters: three
+# copies, and a producer with acks=all needs two of them to acknowledge. That
+# tolerates one broker down with writes still accepted, and one broker down
+# with no data loss. Setting minInsyncReplicas to 1 would keep writes flowing
+# during a failure while quietly giving up the guarantee.
+# ---------------------------------------------------------------------------
+durability:
+  replicationFactor: 3
+  minInsyncReplicas: 2
+
+topology:
+  # HARD across nodes: two brokers on one node means one node failure takes out
+  # two of three replicas, and min.insync.replicas 2 can no longer be met —
+  # the cluster stops accepting writes. This is the constraint worth failing to
+  # schedule over.
+  nodeSpread: DoNotSchedule
+  # SOFT across zones, deliberately, and NOT what KAFKA.md's "one per AZ"
+  # implies. ap-south-1a had zero t4g.small capacity when this cluster was
+  # built, which is the whole reason node_instance_types is a list. A hard zone
+  # constraint converts that capacity shortfall into a broker stuck Pending
+  # indefinitely. ScheduleAnyway spreads across AZs whenever it can and
+  # degrades to running rather than not running when it cannot.
+  zoneSpread: ScheduleAnyway
+
+# The Topic Operator reconciles KafkaTopic resources into real topics, so a
+# topic is a manifest under review rather than a shell command someone ran once.
+# Stage 4 declares its topics this way.
+entityOperator:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 384Mi

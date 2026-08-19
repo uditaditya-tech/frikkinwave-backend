@@ -319,10 +319,128 @@ For a genuinely empty database — including the first apply in a fresh AWS
 account, where no snapshot exists and the lookup would fail — set
 `db_restore_from_latest_snapshot = false`.
 
+## Kafka stages 0-2 — done ✅ (2026-08-19)
+
+Strimzi 1.1.0 + Kafka 4.2.1, 3 KRaft combined controller+broker nodes, one per
+node and one per AZ, 10 Gi gp3 each. **The application is still entirely on
+Celery** — Kafka runs alongside with no producer and no consumer. Full detail
+and the deferred stages are in `KAFKA.md`; the cluster-level traps are here.
+
+### Trap: this cluster could not provision ANY persistent storage
+
+Two separate faults stacked, and the usual diagnosis catches only the second.
+
+1. **No default StorageClass.** `gp2` shipped with `IsDefaultClass: No`, so a
+   PVC naming no class got no class at all. The binder reported
+   `no persistent volumes available for this claim and no storage class is set`
+   and never consulted a provisioner.
+2. **`gp2`'s provisioner is `kubernetes.io/aws-ebs`** — the in-tree one, removed
+   from Kubernetes long before 1.36. So naming it explicitly would not have
+   helped either.
+
+`infra/eks/ebs-csi.tf` installs the EBS CSI driver (IRSA + addon) and a **gp3**
+class marked default, fixing both. `gp2` is left alone; it is inert.
+
+**Verify with a PVC that has a consumer pod.** Both classes are
+`WaitForFirstConsumer` — they must be, since EBS volumes are zonal and have to
+be created in the AZ the pod lands in — so a pod-less PVC stays `Pending` *even
+when everything works*. A bare PVC reports failure after a successful fix. And
+do not trust `aws eks list-addons` reporting ACTIVE: it did, while nothing could
+provision. The working probe is in `KAFKA.md` stage 0.
+
+### Trap: `-target` does not fence off one resource
+
+The intent was to apply the storage fix alone before touching nodes.
+`-target=aws_eks_addon.ebs_csi` pulled `aws_eks_node_group.main` in through its
+`depends_on`, and because that resource's config had already changed, the node
+group replacement started too. `-target` follows dependency edges. If you want
+true isolation, stage the *config* changes, not the apply.
+
+### Trap: `node_desired_size` on its own is a no-op
+
+`aws_eks_node_group.main` carries `ignore_changes = [scaling_config[0].desired_size]`
+so the autoscaler is not fought on every apply. The consequence is that raising
+`node_desired_size` does **nothing** to a running group. It worked here only
+because `instance_types` changed in the same commit and forces replacement — and
+a replacement is a *create*, which `ignore_changes` has no say over. Change that
+variable alone and it silently does nothing.
+
+### Node capacity: memory was not the only ceiling
+
+Nodes went from 2× t4g.small to 3× (`["t4g.medium", "t4g.large"]`). Pods-per-node
+is capped by **ENI capacity, not RAM**: t4g.small allows 11, t4g.medium 17. At 8
+app pods plus DaemonSets on two nodes, brokers would have hit the pod cap even
+if the memory had fit.
+
+**ap-south-1a came up as a t4g.large** — the ASG fell back to the second type in
+the list, which is exactly why that variable is a list (1a had zero t4g.small
+capacity when this cluster was built). All three AZs are populated for the first
+time. It also costs double a medium: actual spend is **$0.264/hr**, not the
+$0.243 the plan predicted. See the cost table in `KAFKA.md`.
+
+The replacement ran with the app live — `create_before_destroy` plus the PDB held
+the web tier through the drain and `/api/health/` returned 200 throughout.
+
+### Terraform cannot create a CRD and a CR of it in one apply
+
+`kubernetes_manifest` validates against the API server's schema at **plan** time,
+when the CRD does not yet exist. So the Kafka resources live in a small local
+chart (`infra/helm/kafka/`) installed by a second `helm_release` ordered with
+`depends_on` — Helm does no such lookup. Also note Strimzi 1.x serves **only**
+`kafka.strimzi.io/v1`; `v1beta2`, which nearly every example online still uses,
+was removed.
+
+### `eks-down.sh` had a Kafka-shaped hole
+
+It deleted all PVCs cluster-wide before `terraform destroy`. With the Strimzi
+operator still running, it recreates the broker PVCs within seconds — and those
+EBS volumes then outlive the destroy and keep billing, which is the exact orphan
+class the script exists to prevent. It now removes the `Kafka` and
+`KafkaNodePool` resources and uninstalls Strimzi *before* the PVC sweep.
+
+---
+
 ## Phase 3 — next
 
 IRSA + External Secrets (syncs the SSM params written in Phase 2) + HPA →
 Helm/ArgoCD → KEDA scale-to-zero on the Celery worker + Prometheus/Grafana.
+
+---
+
+## Open items (carried across sessions)
+
+Ordered by consequence, not effort.
+
+- **`KAFKA.md` stages 3-5** — the switchover, the consumers, and removing
+  Celery. Stages 0-2 are done (storage, nodes, Kafka itself); stage 3 is the
+  first one that touches application code and the first that is not trivially
+  reversible.
+- **The budget alarm lives in this disposable stack**, so `eks-down.sh` destroys
+  it exactly when it would be most useful, since orphaned resources bill *after*
+  teardown. Should move to `infra/dns/` or its own tiny stack. Matters more than
+  it looks: credits expire December 2026 and one forgotten month of uptime is
+  ~96% of the budget.
+- **Notification emails have never been delivered.** `EMAIL_HOST_USER` /
+  `EMAIL_HOST_PASSWORD` are unset everywhere, so every send fails with
+  `SMTPSenderRefused(550, 'Unauthenticated senders not allowed')` and retries
+  three times. The notifications service is correct; it has simply never
+  succeeded. Plumbing is a Terraform variable → SSM → Secret; the SendGrid key
+  goes in `terraform.tfvars`.
+- **Dev tooling ships to production.** `requirements/base.txt` is a single file
+  containing pytest, mypy, ruff, pre-commit, faker and the stubs, and the
+  Dockerfile installs it into the runtime image — 47.5 MB of test and lint
+  tooling in every pod. The size is secondary; the attack surface is the point.
+  Split into `base.txt` + `dev.txt` (touches Dockerfile, CI, setup docs).
+- **Three redundant RDS snapshots** from June. Nothing references a specific id
+  any more (restore is discovered), so they are safe to delete — but deletion is
+  irreversible and has never been explicitly approved.
+- **AWS credit balance and coverage are unverified.** No API exposes them, and
+  Cost Explorer reports $0.00 for every month including June when ECS ran, which
+  is not credible. Check Billing → Credits by hand.
+- **The `18dca52` image was deleted from ECR** because it was mislabelled — built
+  from a dirty tree, so it contained code no commit had. Consequence:
+  `helm rollback frikkinwave 5` will fail with ImagePullBackOff. Revisions 1-4
+  and 6 are fine.
 
 ---
 

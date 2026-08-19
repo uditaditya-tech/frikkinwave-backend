@@ -49,19 +49,35 @@ variable "node_instance_types" {
     t4g.small was unavailable in ap-south-1a, so the ASG could not balance and
     silently left every node in one zone. Extra types give it a fallback.
 
-    t4g.small = 2 vCPU / 2 GB. t4g.medium (4 GB) is the fallback and costs
-    roughly double, so it is second: the ASG only reaches for it when small is
-    unavailable. Bump the whole list before adding Kafka (Strimzi) or a full
-    Prometheus stack — 2 GB will not hold them.
+    t4g.medium = 2 vCPU / 4 GB, with t4g.large (8 GB) as the fallback. This was
+    ["t4g.small", "t4g.medium"] until Kafka: three brokers want ~1 GB of heap
+    each plus page cache, and 2 GB nodes already running the web/worker/search/
+    notifications/redis set have nowhere to put them.
+
+    Memory is not the only ceiling. Pods-per-node is capped by ENI capacity, not
+    RAM: t4g.small allows 11, t4g.medium 17. At 8 app pods plus DaemonSets on
+    two nodes we were close enough to 11 that adding brokers would have hit the
+    pod cap even if the memory had fit.
   EOT
   type        = list(string)
-  default     = ["t4g.small", "t4g.medium"]
+  default     = ["t4g.medium", "t4g.large"]
 }
 
 variable "node_desired_size" {
-  description = "Nodes to run. 2 gives real multi-node scheduling; 1 halves the node cost."
+  description = <<-EOT
+    Nodes to run. 3 so each Kafka broker gets its own node — the brokers use a
+    hard topology spread across hostname, so a fourth broker would sit Pending
+    and a third node is what makes the spread satisfiable.
+
+    A trap worth knowing: aws_eks_node_group has
+    `ignore_changes = [scaling_config[0].desired_size]`, so raising this alone
+    does NOTHING to a running group. It takes effect here only because
+    instance_types changed in the same commit, and that attribute forces
+    replacement — the replacement group is built fresh from config, ignore_changes
+    having no say over a create. Change this on its own and it silently no-ops.
+  EOT
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "node_min_size" {
@@ -70,8 +86,9 @@ variable "node_min_size" {
 }
 
 variable "node_max_size" {
-  type    = number
-  default = 3
+  description = "Headroom above desired for a rolling node replacement."
+  type        = number
+  default     = 4
 }
 
 # ---------------------------------------------------------------------------
@@ -236,4 +253,37 @@ variable "openai_api_key" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+# ---------------------------------------------------------------------------
+# Kafka (see KAFKA.md)
+# ---------------------------------------------------------------------------
+
+variable "kafka_namespace" {
+  description = "Namespace for the Strimzi operator and the Kafka cluster."
+  type        = string
+  default     = "kafka"
+}
+
+variable "strimzi_chart_version" {
+  description = <<-EOT
+    Chart version for strimzi-kafka-operator. Chart and app version track each
+    other exactly, so 1.1.0 here means Strimzi 1.1.0.
+
+    Note the numbering: the project went 0.51.0 -> 1.0.0, so "1.1.0" is one
+    minor after the first stable, not a decade of majors.
+
+    Two things are version-sensitive and will bite on an upgrade:
+
+      1. API VERSION. 1.x serves only kafka.strimzi.io/v1; v1beta2 is gone. The
+         manifests in infra/helm/kafka are written for v1 and a test asserts it.
+      2. SUPPORTED KAFKA VERSIONS. Each operator release ships images for a
+         short list only — 1.1.0 has 4.2.0, 4.2.1, 4.3.0. Read the list before
+         changing kafkaVersion in the chart:
+
+             helm template strimzi strimzi/strimzi-kafka-operator \
+               --version <v> | grep -A6 STRIMZI_KAFKA_IMAGES
+  EOT
+  type        = string
+  default     = "1.1.0"
 }

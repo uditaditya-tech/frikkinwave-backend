@@ -1,0 +1,98 @@
+{{- /*
+  API VERSION: kafka.strimzi.io/v1, NOT v1beta2.
+
+  Strimzi 1.1.0 serves only v1 — v1beta2 was removed, not merely deprecated.
+  Essentially every Strimzi example in circulation is still v1beta2 and will be
+  rejected outright by the API server. Verified against the chart's own CRDs.
+
+  The same graduation moved `replicas` and `storage` off spec.kafka entirely:
+  in v1 they exist ONLY on KafkaNodePool, and spec.kafka requires just
+  `listeners`. Node pools and KRaft are no longer opt-in.
+*/}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: {{ .Values.nodePool.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    # This label is what binds the pool to its Kafka. A typo here does not
+    # error — the pool is simply owned by no cluster and nothing is created.
+    strimzi.io/cluster: {{ .Values.clusterName }}
+spec:
+  replicas: {{ .Values.nodePool.replicas }}
+  roles:
+{{ toYaml .Values.nodePool.roles | indent 4 }}
+  storage:
+    # jbod even for a single volume: converting a persistent-claim to jbod later
+    # is not an in-place change, so starting here keeps adding a disk a matter
+    # of appending an entry.
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: {{ .Values.storage.size }}
+        class: {{ .Values.storage.class }}
+        deleteClaim: {{ .Values.storage.deleteClaim }}
+        # KRaft metadata log shares this volume rather than demanding its own.
+        kraftMetadata: shared
+  resources:
+{{ toYaml .Values.resources | indent 4 }}
+  jvmOptions:
+    -Xms: {{ .Values.jvm.xms }}
+    -Xmx: {{ .Values.jvm.xmx }}
+  template:
+    pod:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.topology.nodeSpread }}
+          labelSelector:
+            matchLabels:
+              strimzi.io/cluster: {{ .Values.clusterName }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.topology.zoneSpread }}
+          labelSelector:
+            matchLabels:
+              strimzi.io/cluster: {{ .Values.clusterName }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ .Values.clusterName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Still declared explicitly even though v1 makes both mandatory: they cost
+    # nothing and they state the intent for anyone reading this who last used
+    # Strimzi when ZooKeeper was the default.
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: {{ .Values.kafkaVersion | quote }}
+    listeners:
+      # Plaintext, internal only. There is no route into this from outside the
+      # cluster and no client outside it — adding TLS and auth before there is
+      # a consumer would be securing a door in a field. Stage 3/4 revisit this
+      # when producers and consumers actually exist.
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      # Topics created without an explicit replication factor.
+      default.replication.factor: {{ .Values.durability.replicationFactor }}
+      min.insync.replicas: {{ .Values.durability.minInsyncReplicas }}
+      # Kafka's OWN internal topics do not inherit the defaults above — they are
+      # configured separately and default to 1 on a fresh cluster. Consumer
+      # offsets surviving a broker loss depends on this line, not on the one
+      # above it.
+      offsets.topic.replication.factor: {{ .Values.durability.replicationFactor }}
+      transaction.state.log.replication.factor: {{ .Values.durability.replicationFactor }}
+      transaction.state.log.min.isr: {{ .Values.durability.minInsyncReplicas }}
+{{- if .Values.entityOperator.enabled }}
+  entityOperator:
+    topicOperator:
+      resources:
+{{ toYaml .Values.entityOperator.resources | indent 8 }}
+{{- end }}

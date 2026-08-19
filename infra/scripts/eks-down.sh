@@ -40,6 +40,19 @@ if aws eks update-kubeconfig --name "${CLUSTER}" --region "${REGION}" >/dev/null
   kubectl delete ingress --all --all-namespaces --ignore-not-found --timeout=120s || true
   kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer \
     --ignore-not-found --timeout=120s || true
+  # BEFORE the PVC sweep, and this ordering is the whole point. The Strimzi
+  # operator reconciles its Kafka cluster continuously: delete a broker's PVC
+  # while the operator is still running and it recreates it within seconds. The
+  # replacement EBS volumes are then younger than the sweep, survive the
+  # destroy, and keep billing — exactly the orphan class this script exists to
+  # prevent. Remove the thing that owns them first.
+  if kubectl get crd kafkas.kafka.strimzi.io >/dev/null 2>&1; then
+    echo "==> Removing the Kafka cluster and the Strimzi operator (they recreate PVCs)"
+    kubectl delete kafka --all -n kafka --ignore-not-found --timeout=180s || true
+    kubectl delete kafkanodepool --all -n kafka --ignore-not-found --timeout=120s || true
+    helm uninstall strimzi -n kafka --wait --timeout 5m 2>/dev/null || true
+  fi
+
   echo "==> Removing PersistentVolumeClaims (they own EBS volumes)"
   kubectl delete pvc --all --all-namespaces --ignore-not-found --timeout=120s || true
   echo "    Waiting for AWS to release them..."

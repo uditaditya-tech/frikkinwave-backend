@@ -1,0 +1,14 @@
+apiVersion: v2
+name: kafka
+description: |
+  The Strimzi Kafka cluster: one KafkaNodePool of combined controller+broker
+  nodes, and the Kafka resource that configures them.
+
+  A chart rather than Terraform kubernetes_manifest resources, for one specific
+  reason: kubernetes_manifest requires the CRD to be present at PLAN time, so a
+  CRD and a custom resource of that CRD can never be created by the same apply.
+  Helm renders templates without consulting the API server's schema, so the
+  operator's helm_release and this one can be ordered with depends_on.
+type: application
+version: 0.1.0
+appVersion: "4.2.1"

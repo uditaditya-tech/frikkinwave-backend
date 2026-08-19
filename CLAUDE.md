@@ -10,7 +10,14 @@ See `PROJECT.md` for what this is and why.
 See `ROADMAP.md` for current phase and next sub-steps.
 See `DATAMODEL.md` for current and planned data models.
 See `CODEBASE.md` for directory structure and where things live.
-See `MICROSERVICES.md` for the service-extraction target architecture and scaling path. Mostly planning, but the **Stage 0 groundwork is built**: the transactional outbox (`apps/events`), DTO identity boundary (`UserRef`), the denormalized rating rollup, and the guardrail tests. No services are extracted yet.
+See `MICROSERVICES.md` for the service-extraction target architecture and scaling path.
+See `KAFKA.md` for the in-progress Kafka migration — **stages 0-2 DONE, 3-5 deferred**.
+
+**Two services are extracted and live**: `apps/notifications` and `apps/search`. Each has its own
+queue, its own Deployment, no cross-app model imports, and self-contained event payloads. They still
+share the image and the database — the *contract* is cut, the packaging is not. The groundwork
+underneath them (transactional outbox in `apps/events`, the `UserRef` DTO boundary, the denormalized
+rating rollup, the guardrail tests in `tests/test_architecture.py`) is all in place.
 
 ---
 
@@ -247,7 +254,11 @@ Manual run: `pre-commit run --all-files`
 ## Infrastructure (AWS) — see `infra/README.md`
 
 - **Two Terraform stacks.** `infra/dns/` is PERSISTENT (Route 53 zone + ACM cert) — **never `terraform destroy` it** or the GoDaddy NS delegation breaks. `infra/eks/` is the disposable app stack (VPC, EKS, RDS, ECR, load balancer controller); destroy/apply freely. It discovers the zone + cert via `data` sources.
-- **DEPLOYMENT STATE: live on EKS as of 2026-08-19.** `https://api.frikkinwave.com/api/health/` returns 200 from Kubernetes: **web ×2, worker, notifications, search, redis** across two AZs, behind an ALB, on a 2-node ARM64 cluster. **This stack bills ~$0.20/hr and is meant to be torn down between sessions** with `./infra/scripts/eks-down.sh`. If you are reading this at the start of a session, verify before assuming: `aws eks list-clusters --region ap-south-1`. *(Update this bullet when the deployment state changes.)*
+- **DEPLOYMENT STATE: live on EKS, last verified 2026-08-19.** `https://api.frikkinwave.com/api/health/` returns 200 from Kubernetes: **web x2, worker, notifications, search, redis** on **3** ARM64 nodes across ap-south-1a/1b/1c, behind an ALB, plus **Strimzi + a 3-broker Kafka cluster** in the `kafka` namespace. Running image `frikkinwave-prod:383f352`, helm revision 6. **~$0.26/hr — tear down between sessions** with `./infra/scripts/eks-down.sh`. Verify before assuming: `aws eks list-clusters --region ap-south-1`. *(Update this bullet when the state changes.)*
+  - **KAFKA.md stages 0-2 are DONE.** Storage works (EBS CSI + a default gp3 class in `infra/eks/ebs-csi.tf`); nodes are 3× t4g.medium/large; Strimzi 1.1.0 runs Kafka 4.2.1 in KRaft, 3 brokers one per node and per AZ, RF 3 / `min.insync.replicas` 2, verified with a produce/consume round-trip. **The app is still entirely on Celery** — nothing produces to or consumes from Kafka. **NEXT UP: stages 3-5**, the first work that touches application code.
+  - **Kafka infra invariants are enforced by `tests/test_infrastructure.py`**, on the same principle as the queue guardrails: a StorageClass the chart names but Terraform does not create, a replication factor quietly dropped to 1, or more brokers than nodes are all *silent* at runtime. Don't weaken those tests to make a change pass.
+  - **Anything stateful needs the gp3 class, and the probe needs a consumer pod.** Both storage classes are `WaitForFirstConsumer` (EBS volumes are zonal), so a PVC with no pod sits `Pending` even when storage is perfectly healthy — a bare-PVC probe reports failure after a successful fix.
+  - **Redis is PARKED.** It is broker-only today and nothing caches. It is kept for the read-through cache in MICROSERVICES.md §3, not because it is in use. If that work never happens, delete it.
   - **The database restores itself.** Teardown takes a final snapshot; the next apply discovers the newest one automatically. **Never hand-edit `db_snapshot_identifier` on a running stack** — it is `ForceNew`, so changing it destroys and recreates the database rather than re-restoring it. `lifecycle.ignore_changes` now blocks that; don't remove it.
   - **Bring it up:** `./infra/scripts/eks-up.sh` (~15 min, Terraform: cluster/RDS/ECR/LB controller) then `./infra/scripts/app-deploy.sh` (~5 min, build + push + `helm upgrade` + Route 53 + verify). Terraform owns AWS; Helm owns the app.
   - **Read `infra/eks/README.md` before touching this.** It records four traps already paid for: the EKS-version 6x extended-support billing trap, the access-entry 409, that a **restored snapshot predating a denormalization needs `backfill_profile_ratings` run by hand** (migrate gives you the schema, never the derived data), and negative DNS caching making a healthy deploy look broken.
