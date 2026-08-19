@@ -102,13 +102,13 @@ addons (vpc-cni / coredns / kube-proxy), EKS access entry, AWS Budget alarm.
 > Balancer Controller discovers where to place an ALB. Without them it creates
 > nothing and emits no useful error. Most common EKS setup mistake.
 
-## Phase 2 — built, not yet applied ⏳
+## Phase 2 — done ✅
 
 Goal: **`https://api.frikkinwave.com/api/health/` returns 200, served from Kubernetes.**
 
-Everything is written and validated offline (`terraform validate`, `helm lint`,
-`helm template`). It has **not been applied against AWS yet** — the cluster
-bills from the moment it exists, so the code was finished first.
+Applied and verified 2026-08-19: `https://api.frikkinwave.com/api/health/`
+returned `{"status": "ok"}` over TLS from two Kubernetes pods behind an
+ALB, with the demo dataset paginating and the event backbone delivering.
 
 | Piece | Where | Notes |
 |---|---|---|
@@ -171,6 +171,57 @@ post-commit nudge ever ran.
 **Route 53 is upserted by the script, not Terraform.** The ALB is created by the
 load balancer controller, so Terraform does not know it exists and cannot own an
 alias to it. `eks-down.sh` removes the record.
+
+### What was verified on the live cluster
+
+| Check | Result |
+|---|---|
+| `/api/health/` over TLS | `{"status": "ok"}`, 200, cert `CN=api.frikkinwave.com` |
+| HTTP → HTTPS | 301 at the ALB, before Django |
+| ALB target health | both pod IPs `healthy` (so the `POD_IP` fix works) |
+| Migration Job | `Complete` in 17s, before the Deployments rolled |
+| Demo data | profiles/followers/following all paginate (`has_next: true`) |
+| Rating rollup | profile embed and reviews endpoint agree (4.33 / 24) |
+| List feed | carries no `rating` key — the N+1 guard holds |
+| Outbox end-to-end | `publish()` → nudge → relay → worker ran the consumer, `published_at` set, 1 attempt, no error |
+| Relay CronJob | fires on schedule, `Complete` |
+| Worker | connected to `redis://frikkinwave-redis:6379/0`, ready |
+
+### Trap: a restored snapshot can predate a denormalization
+
+The restore snapshot is from 2026-06-10, *before* the rating rollup was
+denormalized onto the profile. `migrate` added `rating_avg` / `rating_count`
+with empty defaults and — correctly — did not invent data for them. The result
+is a database that is fully migrated and quietly wrong: every profile reported
+`{"average_rating": null, "count": 0}` while `/api/reviews/<user>/summary/`,
+which reads the source table, returned 4.33 over 24 reviews.
+
+Nothing in the deploy path runs the backfill, and nothing fails. Only comparing
+the two endpoints reveals it:
+
+```bash
+kubectl exec -n frikkinwave deploy/frikkinwave-web -- python manage.py backfill_profile_ratings
+```
+
+**Run this after any restore from a snapshot older than the denormalization.**
+The general rule: restoring an old snapshot forward through migrations gives you
+the right *schema*, never the derived *data*.
+
+### Trap: negative DNS caching makes a good deploy look broken
+
+`app-deploy.sh` creates the Route 53 alias and then polls the public URL. The
+name did not exist a moment earlier, so a resolver that was asked for it during
+the deploy has cached the NXDOMAIN — for up to the zone's SOA minimum (900s).
+`dig` against 8.8.8.8 succeeds while `curl` still fails with "could not
+resolve", which reads like a DNS misconfiguration and is not one.
+
+Confirm the stack is actually fine without waiting:
+
+```bash
+curl --resolve api.frikkinwave.com:443:<alb-ip> https://api.frikkinwave.com/api/health/
+```
+
+That keeps real SNI and certificate validation and only bypasses the lookup.
 
 ### Snapshot rotation trap
 
