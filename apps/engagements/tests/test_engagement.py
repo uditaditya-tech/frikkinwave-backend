@@ -2,7 +2,7 @@
 Engagement (hire-intent) flow tests — send, list, accept, decline, complete,
 retrieve + reveal, and email notifications.
 
-Notifications are Celery tasks emitted via transaction.on_commit, so those tests
+Notifications are Kafka consumers fed from the outbox, so those tests
 wrap the request in django_capture_on_commit_callbacks(execute=True).
 """
 

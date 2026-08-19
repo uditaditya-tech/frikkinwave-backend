@@ -135,7 +135,7 @@ def get_user_or_raise(*, username: str) -> UserRef:
 #
 # Public entry point for *other apps*: a producer (listings, bands, …) calls
 # `record_activity(...)` from its service layer after creating something. We
-# don't write the Activity inline — we emit a post-commit Celery event so the
+# don't write the Activity inline — we publish an event so the
 # fan-out (canonical Activity + a FeedEntry per follower) happens off the
 # request, and a rolled-back action never produces a phantom activity.
 #

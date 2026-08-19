@@ -9,8 +9,8 @@ Adding a second consumer of `profile.updated` is now a matter of another service
 declaring its own subscription under its own group id — no change to the producer
 and nothing to coordinate.
 
-The handlers are the same `services` calls the Celery tasks make. Nothing about
-the business logic moves; only the thing that invokes it.
+The handlers are the same `services` calls the Celery tasks used to make. None of
+the business logic moved; only the thing that invokes it.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
 apiVersion: v2
 name: frikkinwave
 description: |
-  The frikkinwave backend on Kubernetes: Django/gunicorn web, a Celery worker,
-  an in-cluster Redis broker, schema migrations as a pre-upgrade Job, and the
-  transactional-outbox relay as a CronJob.
+  The frikkinwave backend on Kubernetes: Django/gunicorn web, the transactional-
+  outbox relay, four Kafka consumer groups, and schema migrations as a
+  pre-upgrade Job.
 type: application
 
 # Chart version — bump when the templates change shape.

@@ -1,9 +1,7 @@
-amqp==5.3.1
 annotated-types==0.7.0
 anyio==4.13.0
 asgiref==3.11.1
 attrs==26.1.0
-billiard==4.2.4
 # Kafka client — the only event transport (KAFKA.md). librdkafka-backed;
 # ships manylinux_2_28_aarch64 wheels, so the Graviton image needs no source build.
 confluent-kafka==2.15.0
@@ -38,7 +36,6 @@ iniconfig==2.3.0
 jiter==0.15.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
-kombu==5.6.2
 librt==0.11.0
 mypy==1.20.2
 mypy-extensions==1.1.0
@@ -63,7 +60,6 @@ python-dateutil==2.9.0.post0
 python-discovery==1.4.0
 python-json-logger==4.1.0
 pyyaml==6.0.3
-redis==8.0.0
 referencing==0.37.0
 rpds-py==2026.5.1
 ruff==0.15.15
@@ -78,7 +74,6 @@ tzdata==2026.2
 tzlocal==5.3.1
 uritemplate==4.2.0
 uuid6==2025.0.1
-vine==5.1.0
 virtualenv==21.4.1
 wcwidth==0.7.0
 whitenoise==6.12.0

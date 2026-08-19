@@ -7,7 +7,7 @@ index, which is the whole point of these: the two apps are only connected by an
 event, and this is what proves the connection still works.
 
 A fake OpenAI client is injected via monkeypatch — no network, no API key. The
-pipeline runs profile save → on_commit → eager Celery task → service → store, so
+pipeline runs profile save → on_commit → inline relay → consumer → service → store, so
 API-level tests wrap the request in django_capture_on_commit_callbacks.
 """
 

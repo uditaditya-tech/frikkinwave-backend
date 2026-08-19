@@ -1,11 +1,9 @@
 # ---------------------------------------------------------------------------
 # Strimzi + the Kafka cluster.
 #
-# INFRASTRUCTURE ONLY. The application stays on Celery — Kafka runs alongside
-# it and nothing produces to or consumes from it yet. That is deliberate: it
-# keeps everything here reversible, and it separates "can this cluster run
-# Kafka" from "does the event backbone still work", which are two failures
-# nobody wants to debug at the same time. See KAFKA.md stages 3-5.
+# This is the event backbone. The application produces to it through the outbox
+# relay and consumes from it in four consumer groups; there is no other
+# transport. See KAFKA.md.
 #
 # Strimzi on nodes we already pay for, rather than MSK: MSK Serverless carries a
 # base charge near $0.75/hr before a single byte of throughput — four times the
@@ -120,8 +118,8 @@ data "kubernetes_secret_v1" "kafka_cluster_ca" {
 
 # The mTLS client certificate and its private key, issued by Strimzi and signed
 # by the cluster CA. Mounted as FILES by the worker and the relay CronJob; the
-# web pods deliberately get nothing, because they only write the outbox row and
-# nudge Celery. Smaller blast radius for the same functionality.
+# web pods deliberately get nothing, because they only write the outbox row —
+# the relay does the dispatching. Smaller blast radius for the same functionality.
 #
 # Under mTLS the principal Kafka authorizes is the certificate subject
 # (CN=frikkinwave-app), so possession of this key is the identity — which is why

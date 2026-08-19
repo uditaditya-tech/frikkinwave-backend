@@ -51,8 +51,8 @@ variable "node_instance_types" {
 
     t4g.medium = 2 vCPU / 4 GB, with t4g.large (8 GB) as the fallback. This was
     ["t4g.small", "t4g.medium"] until Kafka: three brokers want ~1 GB of heap
-    each plus page cache, and 2 GB nodes already running the web/worker/search/
-    notifications/redis set have nowhere to put them.
+    each plus page cache, and 2 GB nodes already running the web, relay and
+    consumer-group pods have nowhere to put them.
 
     Memory is not the only ceiling. Pods-per-node is capped by ENI capacity, not
     RAM: t4g.small allows 11, t4g.medium 17. At 8 app pods plus DaemonSets on

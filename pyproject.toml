@@ -52,9 +52,8 @@ module = ["apps.*.admin"]
 disable_error_code = ["type-arg"]
 
 [[tool.mypy.overrides]]
-# Celery's task decorators are untyped in the shipped stubs, so @app.task /
-# @shared_task trip `untyped-decorator` under strict mode. Suppress it in the
-# Django management commands use untyped BaseCommand hooks; bodies stay typed.
+# Django's BaseCommand hooks are untyped, so command classes trip
+# `untyped-decorator` / `misc` under strict mode. Bodies stay typed.
 module = ["apps.*.management.commands.*"]
 disable_error_code = ["untyped-decorator", "misc"]
 

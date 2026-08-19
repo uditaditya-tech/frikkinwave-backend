@@ -136,25 +136,22 @@ class TestUserRefContract:
 
 
 # ---------------------------------------------------------------------------
-# Queue routing must match what the cluster actually consumes.
+# Deployment wiring must match what the code declares.
 #
-# Splitting notifications onto their own queue introduced a failure mode that is
-# completely silent: route a task to a queue no worker is started with and it is
-# never executed, never retried, and never logged as an error. It simply sits in
-# Redis. Nothing in Celery, Kubernetes, or the outbox notices.
-#
-# This ties the two halves together — Celery's routing table on one side, the
-# Helm chart's worker commands on the other — so the drift fails the build.
+# The failure these guard is silent by nature: work that is never done, with
+# nothing in the application, Kubernetes, or the outbox reporting it. That was
+# true of Celery queues nobody consumed and it is true of consumer groups nobody
+# runs — only the mechanism changed.
+# ---------------------------------------------------------------------------
 CHART_VALUES = APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "values.yaml"
 
 
 # ---------------------------------------------------------------------------
 # Kafka credentials reach only the components that run the outbox relay.
 #
-# The relay and the consumer Deployments are the Kafka clients; they need the
-# relay CronJob. Nothing else: web pods write the outbox row and nudge Celery,
-# and the notifications/search workers consume their own queues. Handing them a
-# credential they never use widens the blast radius of any one pod being
+# The relay and the consumer Deployments are the Kafka clients and need the
+# credentials. Nothing else does: web pods only write the outbox row. Handing a
+# credential to a pod that never uses it widens the blast radius of that pod being
 # compromised, for no functionality — and it is the kind of thing that spreads
 # quietly, because mounting a secret never breaks anything.
 # ---------------------------------------------------------------------------
@@ -282,7 +279,7 @@ def test_a_consumer_group_maps_to_an_app_that_declares_subscriptions() -> None:
 def test_notifications_consumers_import_no_other_app() -> None:
     """
     The extracted-service boundary, restated for the Kafka path. It held for the
-    Celery tasks and erodes silently if it is not asserted for their replacement.
+    Celery tasks and erodes just as silently now, so it is asserted here too.
     """
     tree = ast.parse((APPS_DIR / "notifications" / "consumers.py").read_text())
     for node in _runtime_imports(tree):
