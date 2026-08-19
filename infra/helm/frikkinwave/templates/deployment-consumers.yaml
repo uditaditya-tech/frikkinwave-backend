@@ -1,0 +1,62 @@
+{{- /*
+One Deployment per Kafka consumer group (KAFKA.md stage 4b).
+
+Replaces `celery worker --queues=<queue>` with
+`consume_events --group <name>`. Every group gets the Kafka client credentials,
+because unlike the Celery workers these ARE the Kafka clients.
+
+No readiness probe: consumers serve no traffic, so nothing gates on them.
+No liveness probe either, deliberately — the honest check is "is this group's
+consumer lag falling", which needs the broker, not the pod. A probe that only
+proves the process is alive would give false confidence about a consumer that is
+running and stuck.
+*/ -}}
+{{- if and .Values.consumers.enabled .Values.kafka.enabled }}
+{{- range $group, $cfg := .Values.consumers.groups }}
+{{- $d := $.Values.consumers.defaults }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frikkinwave.fullname" $ }}-consume-{{ $group }}
+  labels:
+    {{- include "frikkinwave.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: consume-{{ $group }}
+spec:
+  replicas: {{ $cfg.replicaCount | default $d.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "frikkinwave.name" $ }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: consume-{{ $group }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "frikkinwave.configChecksum" $ }}
+      labels:
+        {{- include "frikkinwave.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: consume-{{ $group }}
+    spec:
+      securityContext:
+        {{- include "frikkinwave.kafkaPodSecurityContext" $ | nindent 8 }}
+      # SIGTERM must reach the poll loop with time to finish and commit the
+      # message in flight, or that work is redone on every rollout.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: consume-{{ $group }}
+          image: {{ include "frikkinwave.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["python", "manage.py", "consume_events", "--group", "{{ $group }}"]
+          envFrom:
+            {{- include "frikkinwave.envFrom" $ | nindent 12 }}
+          env:
+            {{- include "frikkinwave.podIpEnv" $ | nindent 12 }}
+          volumeMounts:
+            {{- include "frikkinwave.kafkaVolumeMounts" $ | nindent 12 }}
+          resources:
+            {{- toYaml ($cfg.resources | default $d.resources) | nindent 12 }}
+      volumes:
+        {{- include "frikkinwave.kafkaVolumes" $ | nindent 8 }}
+{{- end }}
+{{- end }}

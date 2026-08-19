@@ -16,5 +16,5 @@ type: application
 # terraform's helm_release diffs a LOCAL chart on its version, not on its
 # contents. Edit a template, leave this alone, and `terraform apply` reports
 # "0 changed" and deploys nothing — a silent no-op that looks like success.
-version: 0.9.0
+version: 0.10.0
 appVersion: "4.2.1"

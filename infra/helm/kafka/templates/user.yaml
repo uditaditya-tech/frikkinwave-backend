@@ -36,9 +36,18 @@ spec:
           name: {{ . | quote }}
           patternType: literal
         operations: [Read, Write, Describe]
+      # And its dead-letter topic. Without this the consumer's dead-letter
+      # produce is DENIED, the handler raises, and the partition stalls on the
+      # very message the DLT exists to move past — turning the safety valve into
+      # the outage it was meant to prevent.
+      - resource:
+          type: topic
+          name: {{ printf "%s%s" . $.Values.dltSuffix | quote }}
+          patternType: literal
+        operations: [Read, Write, Describe]
 {{- end }}
-      # Consumer groups. A prefix so stage 4 can give each extracted service its
-      # own group without an ACL change per service.
+      # Consumer groups. A prefix so each extracted service gets its own group
+      # without an ACL change per service.
       - resource:
           type: group
           name: {{ .Values.consumerGroupPrefix | quote }}

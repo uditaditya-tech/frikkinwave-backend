@@ -27,3 +27,31 @@ spec:
   config:
     min.insync.replicas: {{ $.Values.durability.minInsyncReplicas | quote }}
 {{- end }}
+
+{{- /*
+  Dead-letter topics, one per event topic.
+
+  Not optional: the consumer runtime produces here when a message cannot be
+  handled, and with `authorization: simple` an unlisted topic is DENIED — a
+  dead-letter produce would fail, the handler would raise, and the partition
+  would stall on exactly the message the DLT exists to get out of the way.
+
+  Single partition and no retention override: these should be empty, and when
+  they are not, ordering and volume are not the interesting properties.
+*/}}
+{{- range .Values.topics }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ printf "%s%s" . $.Values.dltSuffix | replace "." "-" | replace "_" "-" }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.Values.clusterName }}
+spec:
+  topicName: {{ printf "%s%s" . $.Values.dltSuffix | quote }}
+  partitions: 1
+  replicas: {{ $.Values.durability.replicationFactor }}
+  config:
+    min.insync.replicas: {{ $.Values.durability.minInsyncReplicas | quote }}
+{{- end }}

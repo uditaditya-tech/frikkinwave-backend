@@ -118,6 +118,12 @@ consumerGroupPrefix: frikkinwave
 # ACLs need names: an authorization rule over a topic the chart does not know
 # about cannot be written, and `simple` authorization denies anything ungranted.
 # ---------------------------------------------------------------------------
+# Dead-letter suffix. MUST match KAFKA_DLT_SUFFIX in config/settings/base.py —
+# the consumer produces to <topic><suffix>, and `authorization: simple` denies
+# any topic not granted below, so a mismatch turns every dead-letter into a
+# stalled partition. A test compares the two.
+dltSuffix: ".dlt"
+
 topics:
   - activity.recorded
   - band.invite_accepted

@@ -595,17 +595,105 @@ The Celery queue tests stay until stage 5 removes Celery. What *changes* under
 Kafka is the direction: a topic with **no** subscriber is no longer a bug — that
 decoupling is the point — while a declared subscription nobody runs still is.
 
-### Stage 4b — NOT DONE
+## Stage 4b — consumers live ✅ DONE (2026-08-19)
 
-Still outstanding, and it needs a live cluster:
+Four Deployments, one per group, each running
+`manage.py consume_events --group <app>`. This is what replaces
+`celery worker --queues=<queue>`.
 
-- a Deployment per consumer group in the Helm chart, replacing the Celery workers
-- a test tying declared groups to Deployments that actually run them — the exact
-  Kafka analogue of the queue test, and the same silent failure
-- `KafkaTopic` manifests for the `.dlt` topics
-- live verification: real events through real consumer groups over mTLS
+```
+frikkinwave-consume-notifications   1/1 Running
+frikkinwave-consume-reviews         1/1 Running
+frikkinwave-consume-search          1/1 Running
+frikkinwave-consume-social          1/1 Running
+```
 
-Until then the consumers exist and are tested, and nothing runs them.
+Each subscribed to exactly its declared topics — 13 across four groups, matching
+the registry:
+
+```
+consumer_started group=social  topics=["activity.recorded","follow.created","follow.removed"]
+consumer_started group=search  topics=["profile.updated"]
+```
+
+**26 KafkaTopics** now: the 13 event topics plus a `.dlt` for each. The DLT
+topics are not optional — `authorization: simple` denies any topic not granted,
+so without them (and their ACLs) a dead-letter produce would be **denied**, the
+handler would raise, and the partition would stall on precisely the message the
+DLT exists to move past. The safety valve would become the outage.
+
+### Verified live, end to end
+
+**Success path** — a real `follow.created` through the whole chain:
+
+```
+event_published → kafka_produced → outbox_relayed          (producer side)
+feed_backfilled  count=0
+event_consumed   topic=follow.created group=social attempt=1   (consumer side)
+```
+
+**The property that actually matters** — a poison message must not block its
+partition. Published a `follow.created` missing a required key, immediately
+followed by a valid one:
+
+```
+event_handler_failed  attempt=1
+event_handler_failed  attempt=2
+event_handler_failed  attempt=3
+kafka_produced        topic=follow.created.dlt
+event_dead_lettered   topic=follow.created
+event_consumed        topic=follow.created attempt=1   <-- the message BEHIND it
+```
+
+That last line is the whole point. Under Celery a permanently failing task was an
+isolated nuisance; here, not committing would have stalled every message behind
+it. The dead-letter record read back over mTLS:
+
+```json
+{"original_topic": "follow.created", "consumer_group": "social",
+ "error": "KeyError('followed_id')", "failed_at": 1787171428.43,
+ "payload": "{\"follower_id\": \"63abea57-...\"}"}
+```
+
+Original topic, group, exact error, raw payload — enough to diagnose without
+guessing. Then flipped back to `celery`.
+
+### Guardrails added
+
+`tests/test_architecture.py` now ties the four halves together, each guarding a
+silent failure:
+
+- every app declaring `SUBSCRIPTIONS` has a Deployment running its group —
+  the Kafka analogue of the Celery queue test, identical failure shape
+- no Deployment runs a group that declares nothing (it would CrashLoop on start)
+- `dltSuffix` in the Kafka chart matches `KAFKA_DLT_SUFFIX` in settings — a
+  mismatch denies every dead-letter produce
+- `consumerGroupPrefix` matches `KAFKA_CONSUMER_GROUP_PREFIX` — a mismatch fails
+  group authorization, which looks like a consumer that starts and reads nothing
+
+### Consumers run alongside Celery, idling
+
+While `EVENT_TRANSPORT` is `celery` the consumer Deployments poll topics nothing
+publishes to. That idle cost (~4 × 224 Mi) is the price of the flag staying
+reversible. Stage 5 deletes the Celery side and the cost with it.
+
+### Traps hit bringing the cluster back
+
+- **`eks-up.sh` failed twice on `no such host`** for the *previous* cluster's
+  endpoint. The stack is recreated with a new endpoint, and the local kubeconfig
+  still pointed at the dead one. `aws eks update-kubeconfig` then a plain
+  `terraform apply` converged. Worth doing that first on any rebuild.
+- **`api.frikkinwave.com` looked dead (`curl` → 000) while the app was fine.**
+  The Route 53 alias was correct and resolved at the authoritative nameserver;
+  only the local resolver had the negative cache. The trap is already in
+  `infra/eks/README.md` — confirm against the zone's own NS before debugging the
+  cluster:
+
+  ```bash
+  dig +short @<zone-nameserver> api.frikkinwave.com
+  ```
+
+---
 
 ---
 

@@ -354,3 +354,79 @@ def test_notifications_consumers_import_no_other_app() -> None:
                 f"apps/notifications/consumers.py imports {mod}; notifications is an "
                 "extracted service and its payloads must be self-contained."
             )
+
+
+def _deployed_consumer_groups() -> set[str]:
+    """Every group the chart actually starts a Deployment for."""
+    import yaml
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    consumers = values.get("consumers") or {}
+    if not consumers.get("enabled", False):
+        return set()
+    return set(consumers.get("groups") or {})
+
+
+def test_every_declared_consumer_group_has_a_deployment() -> None:
+    """
+    The Kafka analogue of the Celery queue test, guarding the identical failure.
+
+    An app declares SUBSCRIPTIONS and nothing runs them: the topic fills, no
+    group ever reads it, and there is no error anywhere — same shape as a task
+    routed to a queue no worker consumes. If this fails, add the group to
+    `consumers.groups` in the chart, don't delete the assertion.
+    """
+    declared = {app for apps in _kafka_subscriptions().values() for app in apps}
+    deployed = _deployed_consumer_groups()
+    assert deployed, "No consumer groups found in the Helm values — parsing broke."
+
+    stranded = sorted(declared - deployed)
+    assert not stranded, (
+        f"These apps declare subscriptions but no Deployment runs them: {stranded}. "
+        f"Deployed groups: {sorted(deployed)}."
+    )
+
+
+def test_no_deployment_runs_a_group_that_declares_nothing() -> None:
+    """
+    The reverse: a Deployment whose group has no consumers.py starts, fails to
+    resolve subscriptions, and CrashLoops. Better caught here than at 3am.
+    """
+    declared = {app for apps in _kafka_subscriptions().values() for app in apps}
+    orphans = sorted(_deployed_consumer_groups() - declared)
+    assert not orphans, (
+        f"These Deployments run groups that declare no subscriptions: {orphans}. "
+        "consume_events raises on start, so they will CrashLoop."
+    )
+
+
+def test_the_dead_letter_suffix_matches_the_kafka_chart() -> None:
+    """
+    The consumer produces to `<topic><suffix>`, and `authorization: simple`
+    denies any topic not granted. If the app's suffix and the chart's disagree,
+    every dead-letter produce is DENIED — the handler raises, and the partition
+    stalls on exactly the message the DLT exists to move past. The safety valve
+    becomes the outage.
+    """
+    import yaml
+    from django.conf import settings
+
+    kafka_values = yaml.safe_load(
+        (APPS_DIR.parent / "infra" / "helm" / "kafka" / "values.yaml").read_text()
+    )
+    assert kafka_values["dltSuffix"] == settings.KAFKA_DLT_SUFFIX
+
+
+def test_the_consumer_group_prefix_matches_the_acl() -> None:
+    """
+    Group ids are `<prefix>.<app>` and the KafkaUser grants the prefix as a
+    prefix ACL. A mismatch fails authorization at join time, which looks like a
+    consumer that starts cleanly and reads nothing.
+    """
+    import yaml
+    from django.conf import settings
+
+    kafka_values = yaml.safe_load(
+        (APPS_DIR.parent / "infra" / "helm" / "kafka" / "values.yaml").read_text()
+    )
+    assert kafka_values["consumerGroupPrefix"] == settings.KAFKA_CONSUMER_GROUP_PREFIX

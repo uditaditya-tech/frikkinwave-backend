@@ -121,6 +121,43 @@ workers:
         memory: 448Mi
 
 # ---------------------------------------------------------------------------
+# Kafka consumer groups (KAFKA.md stage 4b).
+#
+# One Deployment per group, each running `consume_events --group <name>`. This is
+# what replaces `celery worker --queues=<queue>`, and the shape is deliberately
+# the same as `workers` above so the comparison is obvious.
+#
+# The group name IS the app label: `search` runs apps/search/consumers.py. There
+# is no mapping between them and therefore nothing to drift.
+#
+# These run alongside the Celery workers while EVENT_TRANSPORT is celery, where
+# they simply poll topics nothing is publishing to. That idle cost is the price
+# of the flag staying reversible; stage 5 deletes the Celery side.
+#
+# SAME SILENT FAILURE as the Celery queues: a group declared in a consumers.py
+# with no Deployment here is never run, and nothing anywhere reports it.
+# tests/test_architecture.py ties the two together.
+# ---------------------------------------------------------------------------
+consumers:
+  enabled: true
+  # Modest: a consumer is a poll loop plus a Django process. Concurrency comes
+  # from partitions and replicas, not from threads inside one pod.
+  defaults:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 224Mi
+      limits:
+        cpu: 300m
+        memory: 384Mi
+  groups:
+    notifications: {}
+    search: {}
+    social: {}
+    reviews: {}
+
+# ---------------------------------------------------------------------------
 # Kafka client (KAFKA.md stage 3).
 #
 # `enabled` only controls whether the CREDENTIALS are mounted. What the app
