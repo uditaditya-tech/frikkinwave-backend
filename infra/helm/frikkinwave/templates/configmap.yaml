@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Non-secret configuration.
+#
+# Annotated as a Helm hook purely for ORDERING. The migration Job below is a
+# pre-install/pre-upgrade hook, and Helm creates *all* hooks before *any*
+# ordinary resource — so a plain ConfigMap would not exist yet when the Job's
+# pod starts, and the first install would hang in CreateContainerConfigError.
+# Giving the ConfigMap a lighter hook weight puts it first.
+#
+# It is not deleted after the hook completes (only the Job carries a
+# hook-succeeded policy), so the web and worker Deployments reference it
+# normally.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-config
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  {{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

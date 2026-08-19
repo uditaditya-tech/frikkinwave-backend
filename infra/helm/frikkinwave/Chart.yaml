@@ -1,0 +1,14 @@
+apiVersion: v2
+name: frikkinwave
+description: |
+  The frikkinwave backend on Kubernetes: Django/gunicorn web, a Celery worker,
+  an in-cluster Redis broker, schema migrations as a pre-upgrade Job, and the
+  transactional-outbox relay as a CronJob.
+type: application
+
+# Chart version — bump when the templates change shape.
+version: 0.1.0
+
+# The app version is supplied per-deploy as the image tag, so this is only a
+# label. See infra/scripts/app-deploy.sh.
+appVersion: "0.1.0"

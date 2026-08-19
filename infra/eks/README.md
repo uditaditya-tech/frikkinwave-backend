@@ -102,31 +102,87 @@ addons (vpc-cni / coredns / kube-proxy), EKS access entry, AWS Budget alarm.
 > Balancer Controller discovers where to place an ALB. Without them it creates
 > nothing and emits no useful error. Most common EKS setup mistake.
 
-## Phase 2 — next (not built)
+## Phase 2 — built, not yet applied ⏳
 
 Goal: **`https://api.frikkinwave.com/api/health/` returns 200, served from Kubernetes.**
 
-1. **ECR** — recreate the repo (the old one died with the ECS stack) and push the
-   `linux/arm64` image.
-2. **RDS** — restore from snapshot **`frikkinwave-prod-final-528299d1`**
-   (2026-06-10, 20 GB). It carries the reference data, the real profiles
-   (`jazzcat`, `udit94`), and the whole `demo-*` Phase 5 dataset, so every list
-   endpoint paginates for a frontend. Verify the snapshot still exists first:
-   `aws rds describe-db-snapshots --region ap-south-1 --snapshot-type manual`
-3. **AWS Load Balancer Controller** — via IRSA + `helm_release`.
-4. **Redis** — in-cluster (saves ~$13/mo vs ElastiCache, and gives KEDA an
-   in-cluster broker to watch later). ElastiCache remains an option if
-   durability matters more than cost.
-5. **Helm chart** — web + worker Deployments, Service, Ingress → ALB reusing the
-   **existing ACM cert** from the dns stack, liveness/readiness on
-   `/api/health/`, ConfigMap, and migrations as a **`Job`** (never on container
-   start — concurrent pods would race, same reason the ECS stack used a one-off
-   task).
-6. **Outbox relay** — `manage.py relay_outbox` as a **CronJob**. This is what
-   makes event delivery *guaranteed*; the post-commit nudge alone can be lost.
-   Nothing schedules it today, so wire it in this phase.
+Everything is written and validated offline (`terraform validate`, `helm lint`,
+`helm template`). It has **not been applied against AWS yet** — the cluster
+bills from the moment it exists, so the code was finished first.
 
-Later phases: IRSA + External Secrets (reads the existing SSM params) + HPA →
+| Piece | Where | Notes |
+|---|---|---|
+| ECR repo | `ecr.tf` | Recreated; the old one died with the ECS stack. |
+| RDS | `rds.tf` | Restored from a snapshot, in the public subnets, reachable only from the cluster SG. |
+| Secrets | `secrets.tf` | Terraform writes both a Kubernetes Secret (read today) and SSM params (for Phase 3). |
+| LB controller | `lb-controller.tf` | IRSA role + vendored IAM policy + `helm_release`. |
+| App chart | `../helm/frikkinwave/` | web, worker, Redis, migration Job, outbox CronJob, Ingress. |
+| Deploy | `../scripts/app-deploy.sh` | Build/push, `helm upgrade`, Route 53 alias, verify. |
+
+### Flow
+
+```bash
+./infra/scripts/eks-up.sh       # ~15 min: cluster, RDS, ECR, LB controller
+```
+
+```bash
+./infra/scripts/app-deploy.sh   # ~5 min: build, push, helm upgrade, DNS, verify
+```
+
+```bash
+./infra/scripts/eks-down.sh     # back to $0
+```
+
+`eks-up.sh` needs `infra/eks/terraform.tfvars` (git-ignored) — copy
+`terraform.tfvars.example` and set `django_secret_key`.
+
+### Decisions worth knowing
+
+**Terraform owns AWS; Helm owns the app.** Shipping a new image is a ~30s
+`helm upgrade` rather than a `terraform apply` over the whole stack. It is also
+the natural on-ramp to ArgoCD later.
+
+**`POD_IP` had to be added to the app.** `production.py` whitelisted the
+container's own IP by reading the *ECS* metadata endpoint, which does not exist
+on EKS. Both the kubelet probes and the ALB health check (ip-mode targets) send
+the pod IP as the `Host` header, so without this every readiness probe gets a
+Django 400 and no pod ever reaches Ready. The pod IP now arrives via the
+downward API; the ECS branch is kept for the legacy stack.
+
+**Migrations are a `pre-upgrade` hook Job.** Never a container entrypoint step —
+every replica would race the same migration on every rollout. As a hook it must
+succeed before Helm touches the Deployments, so a failed migration leaves the
+previous version serving.
+
+**The ConfigMap is also a hook,** at a lighter weight. Helm creates *all* hooks
+before *any* ordinary resource, so a plain ConfigMap would not exist yet when
+the migration Job's pod starts, and a first install would hang in
+`CreateContainerConfigError`.
+
+**Redis is in-cluster with no persistence.** Saves ~$13/mo against ElastiCache,
+and losing the queue is survivable *because of the transactional outbox*: events
+commit to Postgres with the state change, and the relay CronJob re-dispatches
+anything unpublished. Redis holds work in flight, not the record of it.
+
+**The outbox relay CronJob is new here.** Nothing scheduled `relay_outbox`
+before, so "guaranteed delivery" was theoretical — only the best-effort
+post-commit nudge ever ran.
+
+**Route 53 is upserted by the script, not Terraform.** The ALB is created by the
+load balancer controller, so Terraform does not know it exists and cannot own an
+alias to it. `eks-down.sh` removes the record.
+
+### Snapshot rotation trap
+
+`eks-down.sh` takes a **final snapshot with a fresh random suffix**, but
+`db_snapshot_identifier` in `variables.tf` still names the previous one. Apply
+again without updating it and RDS restores the *older* snapshot — the session's
+data is not lost, it just silently is not what comes back. The down script
+prints the new snapshot id at the end; move it into `variables.tf` to keep it.
+
+## Phase 3 — next
+
+IRSA + External Secrets (syncs the SSM params written in Phase 2) + HPA →
 Helm/ArgoCD → KEDA scale-to-zero on the Celery worker + Prometheus/Grafana.
 
 ---
@@ -137,7 +193,9 @@ Helm/ArgoCD → KEDA scale-to-zero on the Celery worker + Prometheus/Grafana.
   `eks-down.sh` — exactly when it would be most useful, since orphaned resources
   bill *after* teardown. It should move to `infra/dns/` (persistent) or become
   its own tiny stack. There is a pre-existing account-level budget as a backstop.
-- **`helm` CLI is not installed locally.** Terraform's helm provider does not
-  need it, but you will want it to debug releases: `brew install helm`.
+- **`.terraform.lock.hcl` is git-ignored for this stack** (`.gitignore` lines
+  68-69), which contradicts the comment above it saying lock files are committed
+  for reproducible provider versions. The other two stacks commit theirs. Worth
+  reconciling — it matters more now that this stack pins four providers.
 - **Credit expiry is unknown.** Check it — it determines how much urgency the
   EKS work carries.

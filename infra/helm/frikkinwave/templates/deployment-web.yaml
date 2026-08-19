@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-web
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.web.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        {{- include "frikkinwave.labels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      # Spread replicas across nodes so losing one node cannot take out the
+      # whole web tier. Soft, not required: the node group can drop to one node.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+                    app.kubernetes.io/component: web
+      containers:
+        - name: web
+          image: {{ include "frikkinwave.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.port }}
+          envFrom:
+            {{- include "frikkinwave.envFrom" . | nindent 12 }}
+          env:
+            {{- include "frikkinwave.podIpEnv" . | nindent 12 }}
+          # /api/health/ is exempt from SECURE_SSL_REDIRECT (production.py), so
+          # a plain-HTTP probe gets 200 rather than a 301 the kubelet counts as
+          # a failure.
+          readinessProbe:
+            httpGet:
+              path: /api/health/
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health/
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}

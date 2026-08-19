@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-web
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  # ClusterIP, not LoadBalancer: the Ingress owns the ALB. A LoadBalancer
+  # Service here would provision a second, redundant load balancer.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: web

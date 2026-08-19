@@ -1,0 +1,50 @@
+{{- if .Values.ingress.enabled }}
+# ---------------------------------------------------------------------------
+# The public entry point.
+#
+# This object is the whole reason the AWS Load Balancer Controller is installed:
+# the controller reads these annotations and provisions a real ALB, listeners,
+# and target groups. Kubernetes has no built-in notion of an ALB.
+#
+# It also depends on the subnet tags from network.tf. Without
+# kubernetes.io/role/elb on the public subnets the controller cannot decide
+# where to place the load balancer, creates nothing, and logs an error that does
+# not mention subnets. That is the single most common EKS setup failure.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # ip-mode targets the pod IPs directly rather than a node port, so the ALB
+    # health check reaches the pod — which is why POD_IP must be in
+    # ALLOWED_HOSTS (see _helpers.tpl).
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # Redirect at the edge so plain HTTP never reaches Django. Django would
+    # redirect too (SECURE_SSL_REDIRECT), but only after burning a request.
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: {{ required "ingress.certificateArn is required (set by app-deploy.sh from the dns stack)" .Values.ingress.certificateArn | quote }}
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health/
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/success-codes: "200"
+    # A stable name keeps the Route 53 alias valid across chart upgrades.
+    alb.ingress.kubernetes.io/load-balancer-name: {{ .Values.ingress.loadBalancerName | quote }}
+    alb.ingress.kubernetes.io/tags: Project=frikkinwave,ManagedBy=helm,Stack=eks
+spec:
+  ingressClassName: alb
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "frikkinwave.fullname" . }}-web
+                port:
+                  number: 80
+{{- end }}

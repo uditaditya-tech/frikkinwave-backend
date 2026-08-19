@@ -33,6 +33,9 @@ read -r -p "    Type 'yes' to confirm: " CONFIRM
 # Delete controller-owned AWS resources by deleting the K8s objects that own
 # them. Best-effort: the cluster may already be unreachable.
 if aws eks update-kubeconfig --name "${CLUSTER}" --region "${REGION}" >/dev/null 2>&1; then
+  echo "==> Uninstalling the application release (removes its Ingress, and so its ALB)"
+  helm uninstall frikkinwave -n frikkinwave --wait --timeout 5m 2>/dev/null || true
+
   echo "==> Removing Ingresses and Services of type LoadBalancer (they own ALBs/NLBs)"
   kubectl delete ingress --all --all-namespaces --ignore-not-found --timeout=120s || true
   kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer \
@@ -41,6 +44,25 @@ if aws eks update-kubeconfig --name "${CLUSTER}" --region "${REGION}" >/dev/null
   kubectl delete pvc --all --all-namespaces --ignore-not-found --timeout=120s || true
   echo "    Waiting for AWS to release them..."
   sleep 30
+fi
+
+# The alias record would otherwise point at an ALB that no longer exists.
+# Harmless (it just fails to resolve) but it makes `dig` lie about the state of
+# the world, which costs ten confused minutes on the next bring-up.
+API_DOMAIN="$(terraform -chdir="${TF_DIR}" output -raw api_domain 2>/dev/null || echo '')"
+ZONE_ID="$(terraform -chdir="${TF_DIR}" output -raw route53_zone_id 2>/dev/null || echo '')"
+if [ -n "${API_DOMAIN}" ] && [ -n "${ZONE_ID}" ]; then
+  echo "==> Removing the ${API_DOMAIN} alias record"
+  EXISTING="$(aws route53 list-resource-record-sets --hosted-zone-id "${ZONE_ID}" \
+    --query "ResourceRecordSets[?Name=='${API_DOMAIN}.' && Type=='A']" --output json 2>/dev/null || echo '[]')"
+  if [ "$(echo "${EXISTING}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" != "0" ]; then
+    aws route53 change-resource-record-sets --hosted-zone-id "${ZONE_ID}" \
+      --change-batch "$(echo "${EXISTING}" | python3 -c '
+import json, sys
+rrs = json.load(sys.stdin)[0]
+print(json.dumps({"Changes": [{"Action": "DELETE", "ResourceRecordSet": rrs}]}))
+')" >/dev/null 2>&1 || echo "    (could not delete; remove it by hand if it lingers)"
+  fi
 fi
 
 echo "==> terraform destroy"
@@ -61,6 +83,24 @@ if [ -n "${VPC_ID}" ]; then
     exit 1
   fi
   echo "    None found."
+fi
+
+# ---------------------------------------------------------------------------
+# The database outlived the stack. Say so loudly.
+#
+# Destroy takes a FINAL SNAPSHOT with a fresh random suffix, but the
+# db_snapshot_identifier default in variables.tf still names the previous one.
+# Apply again without updating it and RDS restores the older snapshot — the
+# session's data is not lost, it is just silently not what comes back.
+# ---------------------------------------------------------------------------
+LATEST_SNAP="$(aws rds describe-db-snapshots --region "${REGION}" --snapshot-type manual \
+  --query 'sort_by(DBSnapshots,&SnapshotCreateTime)[-1].DBSnapshotIdentifier' \
+  --output text 2>/dev/null || echo '')"
+if [ -n "${LATEST_SNAP}" ] && [ "${LATEST_SNAP}" != "None" ]; then
+  echo
+  echo "==> Newest RDS snapshot: ${LATEST_SNAP}"
+  echo "    To restore THIS session's data on the next apply, set that as the"
+  echo "    db_snapshot_identifier default in infra/eks/variables.tf."
 fi
 
 echo "==> Destroyed. Back to \$0/hr."

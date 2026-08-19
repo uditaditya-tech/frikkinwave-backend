@@ -36,3 +36,39 @@ output "console_url" {
   description = "EKS console — Resources tab lists pods/deployments."
   value       = "https://${var.region}.console.aws.amazon.com/eks/clusters/${aws_eks_cluster.main.name}?region=${var.region}"
 }
+
+# ---------------------------------------------------------------------------
+# Phase 2
+# ---------------------------------------------------------------------------
+
+output "ecr_repository_url" {
+  description = "Push target for the app image (linux/arm64)."
+  value       = aws_ecr_repository.app.repository_url
+}
+
+output "db_endpoint" {
+  description = "RDS address. Private to the VPC — not reachable from a laptop."
+  value       = aws_db_instance.main.address
+}
+
+output "app_namespace" {
+  value = var.app_namespace
+}
+
+output "app_secret_name" {
+  description = "Kubernetes Secret the chart mounts via envFrom."
+  value       = kubernetes_secret.app.metadata[0].name
+}
+
+output "api_domain" {
+  value = var.api_domain
+}
+
+output "acm_certificate_arn" {
+  description = "Cert from the persistent dns stack, attached to the ALB by the Ingress."
+  value       = data.aws_acm_certificate.api.arn
+}
+
+output "route53_zone_id" {
+  value = data.aws_route53_zone.api.zone_id
+}

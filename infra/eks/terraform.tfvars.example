@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+#
+#   cp infra/eks/terraform.tfvars.example infra/eks/terraform.tfvars
+
+# Required. The Django SECRET_KEY the pods run with.
+django_secret_key = "replace-me"
+
+# Optional. Empty disables the AI features (search returns [], compatibility
+# 503s, coach returns a null tip) rather than erroring.
+openai_api_key = ""
+
+# Optional. Restore the database from a specific snapshot on create. The default
+# in variables.tf is the final snapshot from the ECS teardown, which carries the
+# demo dataset. Set to "" for a fresh, empty database.
+# db_snapshot_identifier = "frikkinwave-prod-final-528299d1"

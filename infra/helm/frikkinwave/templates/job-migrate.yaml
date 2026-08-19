@@ -1,0 +1,52 @@
+{{- if .Values.migrations.enabled }}
+# ---------------------------------------------------------------------------
+# Schema migrations — a Job, never a container entrypoint step.
+#
+# Running `migrate` on container start would have every replica race the same
+# migration on every rollout. Same reason the ECS stack used a one-off task.
+#
+# As a pre-upgrade hook this Job must SUCCEED before Helm touches the
+# Deployments, so a failed migration leaves the previous version serving rather
+# than rolling out code whose schema was never applied.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # The revision suffix gives each upgrade its own Job name, so a failed run's
+  # logs survive for inspection instead of being overwritten.
+  name: {{ include "frikkinwave.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    # Clear the previous attempt on the way in, not on the way out — a failed
+    # Job sticks around with its logs.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "frikkinwave.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "frikkinwave.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            {{- include "frikkinwave.envFrom" . | nindent 12 }}
+          env:
+            {{- include "frikkinwave.podIpEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+{{- end }}

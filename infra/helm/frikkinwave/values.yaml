@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------------------
+# Defaults. Values that come from Terraform outputs (image repository, cert ARN)
+# are injected by infra/scripts/app-deploy.sh rather than committed here, so the
+# chart never drifts from the live stack.
+# ---------------------------------------------------------------------------
+
+image:
+  # Set by app-deploy.sh from `terraform output ecr_repository_url`.
+  repository: ""
+  # Overridden per deploy with the git sha. "latest" is a fallback, not a habit:
+  # a mutable tag makes a rollback impossible to describe.
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# The Secret is created by Terraform (infra/eks/secrets.tf), not by this chart —
+# the RDS password is generated there and must not travel through helm values.
+# Supplies DJANGO_SECRET_KEY, DATABASE_URL, OPENAI_API_KEY.
+existingSecret: frikkinwave-prod-secrets
+
+# Non-secret configuration. Rendered into a ConfigMap and consumed with envFrom.
+config:
+  DJANGO_SETTINGS_MODULE: config.settings.production
+  # The ALB forwards the public hostname; the pod's own IP is appended at
+  # runtime from the downward API (see production.py).
+  ALLOWED_HOSTS: api.frikkinwave.com
+  CORS_ALLOWED_ORIGINS: https://frikkinwave.com,https://www.frikkinwave.com
+  CSRF_TRUSTED_ORIGINS: https://api.frikkinwave.com,https://frikkinwave.com
+  # In-cluster Redis, addressed by its Service DNS name.
+  CELERY_BROKER_URL: redis://frikkinwave-redis:6379/0
+  # Semantic-search relevance floor. 0.8 is unusable for text-embedding-3-small.
+  SEARCH_SIMILARITY_THRESHOLD: "0.4"
+  # gunicorn workers per pod. Each forks a full Django process (~150 MB), so
+  # this is bounded by the memory limit below, not by CPU.
+  WEB_CONCURRENCY: "2"
+
+web:
+  replicaCount: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 150m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 640Mi
+
+worker:
+  replicaCount: 1
+  # Concurrency 2 on a shared t4g.small; the work is IO-bound (OpenAI calls, DB).
+  concurrency: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+migrations:
+  enabled: true
+  # Generous: a migration that needs a table rewrite should not be killed halfway.
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+
+# `manage.py relay_outbox` — the sweep that makes event delivery guaranteed.
+# The post-commit nudge is best-effort and is lost if the process dies between
+# COMMIT and the enqueue; this is what recovers those.
+outboxRelay:
+  enabled: true
+  schedule: "*/5 * * * *"
+
+ingress:
+  enabled: true
+  host: api.frikkinwave.com
+  # Set by app-deploy.sh from `terraform output acm_certificate_arn`.
+  certificateArn: ""
+  # A stable ALB name keeps the Route 53 alias pointing at the same target
+  # across chart upgrades.
+  loadBalancerName: frikkinwave-prod

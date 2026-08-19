@@ -14,11 +14,22 @@ DEBUG = False
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 
-# AWS ALB health checks reach the container using the task's own private IP as
-# the Host header (IP-type target group), which isn't in ALLOWED_HOSTS — Django
-# would 400 every health check. Append the task's private IPv4, read from the
-# ECS container metadata endpoint, so /api/health/ passes. Fails open: a missing
-# or slow metadata endpoint never blocks startup.
+# Health checks reach the container using its own private IP as the Host header,
+# which isn't in ALLOWED_HOSTS — Django would 400 every one of them. Both
+# platforms need the container's own IP appended; they just expose it
+# differently. Fails open in each case: a missing value never blocks startup.
+#
+# Kubernetes (EKS, current): the pod IP is injected as POD_IP via the downward
+# API (see the Helm chart's web/worker Deployments). This covers BOTH the ALB
+# target-group health check (the LB controller uses ip-mode targets, so it hits
+# the pod directly) and the kubelet liveness/readiness probes, which also use
+# the pod IP as Host. Without this, no pod ever reaches Ready.
+_pod_ip = os.environ.get("POD_IP")
+if _pod_ip:
+    ALLOWED_HOSTS += [_pod_ip]
+
+# ECS/Fargate (legacy stack, kept as a fallback): read the task's private IPv4
+# from the container metadata endpoint.
 _ecs_metadata_uri = os.environ.get("ECS_CONTAINER_METADATA_URI_V4")
 if _ecs_metadata_uri:
     try:

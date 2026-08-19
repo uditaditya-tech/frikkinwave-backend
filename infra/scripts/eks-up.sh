@@ -46,4 +46,6 @@ kubectl get pods -A
 echo
 echo "==> Cluster is up."
 echo "    Console: $(terraform -chdir="${TF_DIR}" output -raw console_url)"
+echo
+echo "    Deploy the app:       ./infra/scripts/app-deploy.sh"
 echo "    Tear down when done:  ./infra/scripts/eks-down.sh"
