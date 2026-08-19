@@ -24,7 +24,14 @@ resource "aws_internet_gateway" "main" {
 }
 
 resource "aws_subnet" "public" {
-  count                   = 2 # two AZs — EKS requires a minimum of two
+  # Three AZs, not the two EKS requires as a minimum.
+  #
+  # Learned the hard way: with two subnets the node group could not balance,
+  # because ap-south-1a had no t4g.small capacity at all
+  # (InsufficientInstanceCapacity, retried every 4 min for half an hour). Both
+  # nodes ended up in 1b and the cluster had zero AZ redundancy while looking
+  # multi-AZ. A third AZ gives the ASG somewhere else to go when one is full.
+  count                   = 3
   vpc_id                  = aws_vpc.main.id
   cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]

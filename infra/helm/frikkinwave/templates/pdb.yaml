@@ -1,0 +1,28 @@
+{{- if gt (int .Values.web.replicaCount) 1 }}
+# ---------------------------------------------------------------------------
+# Keep at least one web pod serving during *voluntary* disruption — a node
+# drain, a node group replacement, a cluster upgrade.
+#
+# Without this, draining a node can evict web pods faster than their
+# replacements pass readiness, and the site goes down during an operation that
+# was supposed to be safe. Replacing the node group (which is exactly what the
+# three-AZ change does) is the immediate case.
+#
+# minAvailable: 1 rather than a percentage: with 2 replicas it is unambiguous,
+# and it still lets a drain make progress one pod at a time.
+# ---------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-web
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: web
+{{- end }}

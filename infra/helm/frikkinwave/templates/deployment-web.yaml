@@ -18,19 +18,48 @@ spec:
         {{- include "frikkinwave.labels" . | nindent 8 }}
         app.kubernetes.io/component: web
     spec:
-      # Spread replicas across nodes so losing one node cannot take out the
-      # whole web tier. Soft, not required: the node group can drop to one node.
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector:
-                  matchLabels:
-                    app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
-                    app.kubernetes.io/instance: {{ .Release.Name }}
-                    app.kubernetes.io/component: web
+      # Spread replicas so losing one node — or one availability zone — cannot
+      # take out the whole web tier.
+      #
+      # The two constraints have deliberately different strictness:
+      #
+      #   hostname: DoNotSchedule. Two replicas on one node is never acceptable
+      #     and is always avoidable, since the node group runs >= 2 nodes.
+      #
+      #   zone: ScheduleAnyway. It would be nice to make this hard too, but AWS
+      #     capacity is not guaranteed — ap-south-1a had no t4g.small at all
+      #     when this cluster was built. A hard zone constraint would leave
+      #     replicas Pending and the site down rather than merely non-HA. The
+      #     scheduler still prefers spreading; it just will not refuse to run.
+      #
+      # matchLabelKeys: [pod-template-hash] is load-bearing. Spread is evaluated
+      # only at scheduling time and counts every matching pod, so during a
+      # rolling update the OLD revision's pods shape the skew for the new ones.
+      # Both new replicas then legally land on one node, and when the old pods
+      # go away nothing rebalances — Kubernetes never relocates a running pod.
+      # Scoping the calculation to the pod's own revision makes the constraint
+      # mean what it looks like it means. (Observed exactly this failure here.)
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          matchLabelKeys:
+            - pod-template-hash
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: web
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          matchLabelKeys:
+            - pod-template-hash
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: web
       containers:
         - name: web
           image: {{ include "frikkinwave.image" . }}

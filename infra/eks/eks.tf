@@ -12,6 +12,20 @@ resource "aws_eks_cluster" "main" {
   version  = var.kubernetes_version
 
   vpc_config {
+    # NOTE: EKS freezes the cluster's AZ set at creation. Adding a subnet in a
+    # NEW availability zone to an existing cluster is rejected outright:
+    #
+    #   InvalidParameterException: Provided subnets belong to the AZs
+    #   'ap-south-1c,ap-south-1b,ap-south-1a'. But they should belong to the
+    #   exact set of AZs 'ap-south-1b,ap-south-1a' in which subnets were
+    #   provided during cluster creation.
+    #
+    # Changing the control plane's AZs therefore means recreating the cluster.
+    # A fresh apply picks up all three subnets; the ignore_changes below stops
+    # Terraform from attempting an update that the API cannot ever satisfy.
+    #
+    # Node placement does not depend on this — the node group below spans all
+    # three subnets regardless, because only control-plane ENIs live here.
     subnet_ids              = aws_subnet.public[*].id
     endpoint_public_access  = true # kubectl from a laptop
     endpoint_private_access = true # nodes reach the API without leaving the VPC
@@ -30,6 +44,12 @@ resource "aws_eks_cluster" "main" {
 
   depends_on = [aws_iam_role_policy_attachment.cluster]
   tags       = local.tags
+
+  lifecycle {
+    # See the note in vpc_config: the AZ set is immutable after creation, so a
+    # diff here can never converge. Recreate the cluster to change it.
+    ignore_changes = [vpc_config[0].subnet_ids]
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -41,12 +61,16 @@ resource "aws_eks_cluster" "main" {
 # ---------------------------------------------------------------------------
 
 resource "aws_eks_node_group" "main" {
-  cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "${local.name}-ng"
-  node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = aws_subnet.public[*].id
+  cluster_name = aws_eks_cluster.main.name
+  # A PREFIX, not a fixed name. subnet_ids and several other attributes force
+  # replacement when changed, and a fixed name makes create_before_destroy
+  # impossible (the new group would collide with the old one). With a prefix,
+  # Terraform can stand the replacement up before tearing the old one down.
+  node_group_name_prefix = "${local.name}-ng-"
+  node_role_arn          = aws_iam_role.node.arn
+  subnet_ids             = aws_subnet.public[*].id
 
-  instance_types = [var.node_instance_type]
+  instance_types = var.node_instance_types
   ami_type       = "AL2023_ARM_64_STANDARD" # must match the ARM instance type
   capacity_type  = "ON_DEMAND"
   disk_size      = 20
@@ -65,6 +89,12 @@ resource "aws_eks_node_group" "main" {
   tags       = local.tags
 
   lifecycle {
+    # Replacing a node group means every pod on it is evicted. Without this,
+    # Terraform destroys the old group first and the cluster has nowhere to run
+    # anything until the new nodes register — a full outage. Create first, let
+    # pods reschedule, then remove the old.
+    create_before_destroy = true
+
     # The cluster autoscaler / HPA may move this; don't fight it on every apply.
     ignore_changes = [scaling_config[0].desired_size]
   }
@@ -75,6 +105,36 @@ resource "aws_eks_node_group" "main" {
 # Installed after the node group so their pods have somewhere to schedule.
 # ---------------------------------------------------------------------------
 
+locals {
+  # CoreDNS ships with *preferred* anti-affinity, so both replicas can land on
+  # one node — and did. Losing that node then takes out all cluster DNS at once,
+  # which turns a survivable node failure into a total outage: surviving pods
+  # stay up but can no longer resolve the database or each other.
+  #
+  # requiredDuringScheduling makes the spread a hard constraint. Safe here
+  # because the node group always runs >= 2 nodes; with a single node the second
+  # replica would sit Pending by design.
+  addon_config = {
+    coredns = jsonencode({
+      replicaCount = 2
+      affinity = {
+        podAntiAffinity = {
+          requiredDuringSchedulingIgnoredDuringExecution = [{
+            topologyKey = "kubernetes.io/hostname"
+            labelSelector = {
+              matchExpressions = [{
+                key      = "k8s-app"
+                operator = "In"
+                values   = ["kube-dns"]
+              }]
+            }
+          }]
+        }
+      }
+    })
+  }
+}
+
 resource "aws_eks_addon" "this" {
   for_each = toset(["vpc-cni", "coredns", "kube-proxy"])
 
@@ -82,6 +142,7 @@ resource "aws_eks_addon" "this" {
   addon_name                  = each.value
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
+  configuration_values        = lookup(local.addon_config, each.value, null)
 
   depends_on = [aws_eks_node_group.main]
   tags       = local.tags

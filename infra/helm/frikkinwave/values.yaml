@@ -88,3 +88,8 @@ ingress:
   # A stable ALB name keeps the Route 53 alias pointing at the same target
   # across chart upgrades.
   loadBalancerName: frikkinwave-prod
+  # Subnet IDs, injected by app-deploy.sh from the Terraform output. A LIST, not
+  # a comma-joined string: helm's --set splits on commas, so a string value has
+  # to be backslash-escaped at every call site. Empty falls back to tag-based
+  # discovery.
+  subnets: []

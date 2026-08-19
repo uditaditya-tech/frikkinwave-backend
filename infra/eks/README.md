@@ -223,6 +223,74 @@ curl --resolve api.frikkinwave.com:443:<alb-ip> https://api.frikkinwave.com/api/
 
 That keeps real SNI and certificate validation and only bypasses the lookup.
 
+### Making the cluster genuinely multi-AZ (five traps in one change)
+
+The first build looked multi-AZ and was not: both nodes sat in `ap-south-1b`,
+and both CoreDNS replicas sat on one node. Fixing it surfaced five distinct
+failures worth recording.
+
+**1. The AZ was out of capacity — the config was fine.** The ASG had been
+retrying a rebalance into `1a` every four minutes for half an hour:
+
+```
+InsufficientInstanceCapacity — We currently do not have sufficient t4g.small
+capacity in the Availability Zone you requested (ap-south-1a).
+```
+
+Nothing surfaces this in the EKS console; the node group just reports healthy
+with a lopsided distribution. Check it directly:
+
+```bash
+aws autoscaling describe-scaling-activities --auto-scaling-group-name <asg> --region ap-south-1 --max-items 5
+```
+
+The fix is not scheduler configuration. It is **more placement options**: a
+third subnet (`1c`, which AWS explicitly named as having capacity) and
+`node_instance_types` as a *list* so the ASG can fall back to another size.
+A single-type node group is stranded whenever that one type is exhausted.
+
+**2. A cluster's AZ set is immutable.** Adding the `1c` subnet to the existing
+cluster's `vpc_config` is rejected — `InvalidParameterException: ... should
+belong to the exact set of AZs ... in which subnets were provided during cluster
+creation`. Changing control-plane AZs means recreating the cluster. Node groups
+have no such restriction, so nodes span all three subnets while the control
+plane keeps its original two; `ignore_changes` on `vpc_config[0].subnet_ids`
+stops Terraform attempting a diff the API can never satisfy.
+
+**3. `topologySpreadConstraints` needs `matchLabelKeys`.** Spread is evaluated
+only at scheduling time and counts *every* matching pod. During a rolling update
+the old revision's pods shape the skew for the new ones, so both new replicas
+land legally on one node — and when the old pods disappear nothing rebalances,
+because Kubernetes never relocates a running pod. `matchLabelKeys:
+[pod-template-hash]` scopes the calculation to the pod's own revision. Without
+it the constraint quietly means something other than it appears to.
+
+**4. ALB subnet discovery is a one-time snapshot.** The load balancer controller
+picks subnets when it first places the ALB. Add an AZ later and the ALB keeps
+its original span; a pod scheduled into the new zone registers as an **`unused`**
+target — reachable by nothing, while the pod, the Ingress and the Deployment all
+report perfectly healthy. Half the web tier served no traffic and nothing looked
+wrong. The Ingress now names its subnets explicitly
+(`alb.ingress.kubernetes.io/subnets`, fed from the Terraform output) so the set
+is a declared value the controller reconciles.
+
+**5. `helm --set` splits on commas.** `--set ingress.subnets=a,b,c` fails with
+`key "b" has no value`. Passing a list literal (`{a,b,c}`) and joining in the
+template is cleaner than backslash-escaping at every call site.
+
+Also added alongside these: a **PodDisruptionBudget** (`minAvailable: 1`) so a
+node drain cannot evict both web pods at once, and `create_before_destroy` +
+`node_group_name_prefix` on the node group — changing `subnet_ids` forces
+replacement, and the default destroy-then-create would take the whole cluster
+down. With both in place the node group was replaced with **zero downtime**;
+`/api/health/` returned 200 throughout.
+
+Verify the end state:
+
+```bash
+kubectl get nodes -o custom-columns='NODE:.metadata.name,AZ:.metadata.labels.topology\.kubernetes\.io/zone'
+```
+
 ### Snapshot rotation trap
 
 `eks-down.sh` takes a **final snapshot with a fresh random suffix**, but

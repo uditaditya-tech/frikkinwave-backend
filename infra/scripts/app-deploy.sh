@@ -38,6 +38,10 @@ REPO_URL="$(tf ecr_repository_url)"
 CERT_ARN="$(tf acm_certificate_arn)"
 ZONE_ID="$(tf route53_zone_id)"
 API_DOMAIN="$(tf api_domain)"
+# All public subnets, so the ALB spans every AZ the nodes can land in. Rendered
+# as helm's {a,b,c} list literal — a bare comma-joined string would be split by
+# --set into separate keys and rejected.
+SUBNETS="{$(terraform -chdir="${TF_DIR}" output -json public_subnet_ids | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')}"
 REGISTRY="${REPO_URL%/*}"
 LB_NAME="$(awk '/loadBalancerName:/ {print $2; exit}' "${CHART_DIR}/values.yaml")"
 
@@ -75,6 +79,7 @@ helm upgrade --install "${RELEASE}" "${CHART_DIR}" \
   --set image.repository="${REPO_URL}" \
   --set image.tag="${TAG}" \
   --set ingress.certificateArn="${CERT_ARN}" \
+  --set ingress.subnets="${SUBNETS}" \
   --wait \
   --timeout 10m
 

@@ -33,6 +33,17 @@ metadata:
     alb.ingress.kubernetes.io/success-codes: "200"
     # A stable name keeps the Route 53 alias valid across chart upgrades.
     alb.ingress.kubernetes.io/load-balancer-name: {{ .Values.ingress.loadBalancerName | quote }}
+    {{- if .Values.ingress.subnets }}
+    # Subnets stated explicitly rather than left to tag discovery.
+    #
+    # Discovery only runs when the ALB is first placed. Adding a subnet in a new
+    # AZ later leaves the load balancer spanning its original AZs, and any pod
+    # scheduled into the new one registers as an "unused" target — reachable by
+    # nothing, with both the Ingress and the pod looking perfectly healthy.
+    # Hit exactly this when ap-south-1c was added. Naming them makes the set a
+    # declared value the controller reconciles, not a one-time snapshot.
+    alb.ingress.kubernetes.io/subnets: {{ join "," .Values.ingress.subnets | quote }}
+    {{- end }}
     alb.ingress.kubernetes.io/tags: Project=frikkinwave,ManagedBy=helm,Stack=eks
 spec:
   ingressClassName: alb

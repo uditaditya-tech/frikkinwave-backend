@@ -39,14 +39,23 @@ variable "kubernetes_version" {
 # Node group sizing — the main cost lever after the control plane
 # ---------------------------------------------------------------------------
 
-variable "node_instance_type" {
+variable "node_instance_types" {
   description = <<-EOT
-    ARM64/Graviton to match the app image (built linux/arm64), and cheaper than
-    x86. t4g.small = 2 vCPU / 2 GB. Bump to t4g.medium before adding Kafka
-    (Strimzi) or a full Prometheus stack — 2 GB will not hold them.
+    Candidate instance types, in preference order. ARM64/Graviton to match the
+    app image (built linux/arm64) and cheaper than x86.
+
+    A LIST, not a single type, deliberately. A one-type node group is stranded
+    when that type is exhausted in an AZ — which is exactly what happened here:
+    t4g.small was unavailable in ap-south-1a, so the ASG could not balance and
+    silently left every node in one zone. Extra types give it a fallback.
+
+    t4g.small = 2 vCPU / 2 GB. t4g.medium (4 GB) is the fallback and costs
+    roughly double, so it is second: the ASG only reaches for it when small is
+    unavailable. Bump the whole list before adding Kafka (Strimzi) or a full
+    Prometheus stack — 2 GB will not hold them.
   EOT
-  type        = string
-  default     = "t4g.small"
+  type        = list(string)
+  default     = ["t4g.small", "t4g.medium"]
 }
 
 variable "node_desired_size" {
