@@ -568,6 +568,55 @@ class TestObservability:
         topic = re.search(r'resource "aws_sns_topic" "alerts" \{(.*?)\n\}', persistent, re.S)
         assert topic and "count" not in topic.group(1)
 
+    def test_charts_using_operator_crds_wait_for_the_operator(self) -> None:
+        """
+        PodMonitor and PrometheusRule are monitoring.coreos.com kinds owned by
+        the Prometheus Operator. A helm_release creating them before the release
+        that installs those CRDs fails outright:
+
+            no matches for kind "PodMonitor" ... ensure CRDs are installed first
+
+        This hid for a whole phase. Observability was added to a cluster where
+        Kafka was already running, so the CRDs existed by the time the Kafka
+        chart was next reconciled — only a from-scratch apply orders them wrong,
+        and rebuilds are rare. Ordering that holds by accident is not ordering.
+        """
+        tf = _terraform()
+
+        # Every helm_release rendering a LOCAL chart, paired with its body.
+        releases = re.findall(r'resource\s+"helm_release"\s+"(\w+)"\s*\{(.*?)\n\}', tf, re.S)
+        assert releases
+
+        checked = 0
+        for name, body in releases:
+            local = re.search(r'chart\s*=\s*"\$\{path\.module\}/\.\./helm/([\w-]+)"', body)
+            if not local:
+                continue  # remote chart; its CRD needs are its own business
+
+            chart_dir = REPO_ROOT / "infra" / "helm" / local.group(1)
+            templates = "\n".join(t.read_text() for t in chart_dir.glob("templates/*.yaml"))
+            if "monitoring.coreos.com" not in templates:
+                continue
+
+            checked += 1
+
+            # Read the depends_on LIST, not the whole body. The comment above
+            # that dependency necessarily names it, so a substring check over
+            # the body passes on the prose explaining the bug — which is how the
+            # first version of this test passed with the dependency deleted.
+            uncommented = "\n".join(
+                line for line in body.splitlines() if not line.strip().startswith("#")
+            )
+            deps = re.search(r"depends_on\s*=\s*\[(.*?)\]", uncommented, re.S)
+            assert deps, f"helm_release.{name} has no depends_on at all."
+            assert "helm_release.kube_prometheus_stack" in deps.group(1), (
+                f"helm_release.{name} renders monitoring.coreos.com kinds but does "
+                "not depend on the release installing those CRDs. This passes on a "
+                "cluster that already has them and fails every fresh apply."
+            )
+
+        assert checked, "Expected at least one local chart using operator CRDs."
+
     def test_the_broker_monitor_does_not_also_match_the_exporter(self) -> None:
         """
         The exporter pod carries `strimzi.io/kind: Kafka` too, so selecting on

@@ -143,9 +143,11 @@ migrations:
 
 # Outbox lag — the one signal that says the event system stopped working.
 # A stopgap until Prometheus (Phase 3): a failed Job is visible, not paging.
-# Scrape target and alert rules for the relay. Requires the Prometheus Operator
-# (installed by infra/eks/observability.tf); off by default so a bare `helm
-# install` on a cluster without the CRDs still succeeds.
+# Scrape target and alert rules for the relay. Requires the Prometheus Operator's
+# CRDs (installed by infra/eks/observability.tf) — without them helm fails the
+# release with "no matches for kind PodMonitor". Safe on by default because
+# app-deploy.sh always runs after eks-up.sh, which installs the operator. Set
+# false when installing this chart onto a cluster that has no Prometheus.
 monitoring:
   enabled: true
   # Seconds the oldest unpublished event may reach before OutboxNotDraining

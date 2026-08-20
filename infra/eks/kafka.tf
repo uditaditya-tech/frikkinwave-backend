@@ -63,9 +63,20 @@ resource "helm_release" "kafka_cluster" {
 
   # Storage is the hard dependency: without the gp3 class from ebs-csi.tf every
   # broker PVC hangs Pending forever and the cluster never forms.
+  #
+  # kube_prometheus_stack is the SECOND CRD dependency, and it is easy to miss.
+  # This chart's monitoring.yaml creates PodMonitor and PrometheusRule objects,
+  # which are monitoring.coreos.com kinds owned by the Prometheus Operator — so
+  # helm fails the install outright with "no matches for kind PodMonitor ...
+  # ensure CRDs are installed first".
+  #
+  # It stayed hidden until the first rebuild AFTER Phase 3: observability was
+  # added to a cluster where Kafka already ran, so the CRDs existed by the time
+  # this chart was next reconciled. Only a from-scratch apply orders them wrong.
   depends_on = [
     helm_release.strimzi,
     kubernetes_storage_class_v1.gp3,
+    helm_release.kube_prometheus_stack,
   ]
 }
 
