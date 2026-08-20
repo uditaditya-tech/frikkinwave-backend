@@ -1,82 +1,57 @@
+# Runtime dependencies — what ships in the production image.
+#
+# NOTHING here is test or lint tooling. That is the point: the Dockerfile
+# installs this file into the runtime image, so anything listed becomes attack
+# surface in every pod. Development tooling lives in dev.txt.
+#
+# Fully pinned, including transitive dependencies, so an image build is
+# reproducible. Regenerate by resolving the direct dependencies in a clean
+# environment and freezing.
+
 annotated-types==0.7.0
 anyio==4.13.0
 asgiref==3.11.1
 attrs==26.1.0
+certifi==2026.5.20
 # Kafka client — the only event transport (KAFKA.md). librdkafka-backed;
 # ships manylinux_2_28_aarch64 wheels, so the Graviton image needs no source build.
 confluent-kafka==2.15.0
-certifi==2026.5.20
-cfgv==3.5.0
-click==8.4.1
-click-didyoumean==0.3.1
-click-plugins==1.1.1.2
-click-repl==0.3.0
-distlib==0.4.0
 distro==1.9.0
-django==6.0.5
 django-cors-headers==4.9.0
 django-environ==0.13.0
-django-stubs==5.2.9
-django-stubs-ext==6.0.5
-djangorestframework==3.17.1
+django==6.0.5
 djangorestframework-simplejwt==5.5.1
-djangorestframework-stubs==3.16.9
+djangorestframework==3.17.1
 drf-spectacular==0.29.0
-factory-boy==3.3.3
-faker==40.19.1
-filelock==3.29.0
 gunicorn==26.0.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
-identify==2.6.19
 idna==3.17
 inflection==0.5.1
-iniconfig==2.3.0
 jiter==0.15.0
-jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
-librt==0.11.0
-mypy==1.20.2
-mypy-extensions==1.1.0
-nodeenv==1.10.0
+jsonschema==4.26.0
 numpy==2.4.6
 openai==2.40.0
 packaging==26.2
-pathspec==1.1.1
 pgvector==0.4.2
-platformdirs==4.10.0
-pluggy==1.6.0
-pre-commit==4.6.0
 # Metrics for the outbox relay. Only the client library — the relay
 # exposes a /metrics endpoint that Prometheus scrapes via a PodMonitor.
 prometheus-client==0.26.0
-prompt-toolkit==3.0.52
 psycopg2-binary==2.9.12
-pydantic==2.13.4
 pydantic-core==2.46.4
-pygments==2.20.0
+pydantic==2.13.4
 pyjwt==2.13.0
-pytest==9.0.3
-pytest-django==4.12.0
-python-dateutil==2.9.0.post0
-python-discovery==1.4.0
 python-json-logger==4.1.0
 pyyaml==6.0.3
 referencing==0.37.0
 rpds-py==2026.5.1
-ruff==0.15.15
-six==1.17.0
 sniffio==1.3.1
 sqlparse==0.5.5
 tqdm==4.67.3
-types-pyyaml==6.0.12.20260518
 typing-extensions==4.15.0
 typing-inspection==0.4.2
-tzdata==2026.2
-tzlocal==5.3.1
 uritemplate==4.2.0
 uuid6==2025.0.1
-virtualenv==21.4.1
-wcwidth==0.7.0
 whitenoise==6.12.0

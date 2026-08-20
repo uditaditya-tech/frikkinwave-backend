@@ -1,0 +1,37 @@
+# Development dependencies — tests, linting, type checking.
+#
+# NEVER installed into the production image. The Dockerfile reads base.txt only,
+# which is what keeps pytest, mypy, ruff, faker and the type stubs out of every
+# running pod. The size is secondary; the attack surface is the point.
+#
+#     uv pip install -r requirements/dev.txt      # local dev + CI
+#
+# Includes base.txt, so this is the only file a developer or CI needs.
+
+-r base.txt
+
+cfgv==3.5.0
+distlib==0.4.0
+django-stubs-ext==6.0.5
+django-stubs==5.2.9
+djangorestframework-stubs==3.16.9
+factory-boy==3.3.3
+faker==40.19.1
+filelock==3.29.0
+identify==2.6.19
+iniconfig==2.3.0
+librt==0.11.0
+mypy-extensions==1.1.0
+mypy==1.20.2
+nodeenv==1.10.0
+pathspec==1.1.1
+platformdirs==4.10.0
+pluggy==1.6.0
+pre-commit==4.6.0
+pygments==2.20.0
+pytest-django==4.12.0
+pytest==9.0.3
+python-discovery==1.4.0
+ruff==0.15.15
+types-pyyaml==6.0.12.20260518
+virtualenv==21.4.1

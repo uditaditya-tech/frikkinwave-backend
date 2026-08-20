@@ -134,7 +134,7 @@ permission_classes = [AllowAny]
 cd frikkinwave-backend
 uv venv --python 3.13
 source .venv/bin/activate
-uv pip install -r requirements/base.txt
+uv pip install -r requirements/dev.txt   # base.txt + tests/lint/types
 cp .env.example .env        # fill in DJANGO_SECRET_KEY
 docker compose up -d        # starts Postgres + Redis
 python manage.py migrate

@@ -534,11 +534,18 @@ Ordered by consequence, not effort.
   three times. The notifications service is correct; it has simply never
   succeeded. Plumbing is a Terraform variable → SSM → Secret; the SendGrid key
   goes in `terraform.tfvars`.
-- **Dev tooling ships to production.** `requirements/base.txt` is a single file
-  containing pytest, mypy, ruff, pre-commit, faker and the stubs, and the
-  Dockerfile installs it into the runtime image — 47.5 MB of test and lint
-  tooling in every pod. The size is secondary; the attack surface is the point.
-  Split into `base.txt` + `dev.txt` (touches Dockerfile, CI, setup docs).
+- ~~**Dev tooling ships to production.**~~ ✅ Split into `base.txt` (runtime, 43
+  packages) and `dev.txt` (`-r base.txt` + 25 more). Measured in clean venvs:
+  **209 MB → 107 MB** of site-packages. The size is secondary; pytest, mypy,
+  ruff, pre-commit, faker and the type stubs no longer being present in every
+  pod is the point. The Dockerfile already read `base.txt` alone, so it needed
+  no change — the file simply stopped lying about what it was.
+
+  The split also removed ten packages belonging to **neither** closure: Celery's
+  orphaned tree (`click*`, `prompt-toolkit`, `wcwidth`, `tzlocal`,
+  `python-dateutil`, `six`) plus `tzdata`, which survived the Celery removal.
+  `tzdata` was checked rather than assumed — the runtime image resolves
+  `zoneinfo` from the system tz database and `TIME_ZONE` is UTC.
 - ~~**Three redundant RDS snapshots** from June.~~ ✅ Resolved 2026-08-20: seven
   had accumulated (one per teardown, only the newest ever restored). Six were
   deleted, including all four June ones — those predate the rating

@@ -42,9 +42,18 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          # Without this the cache key is computed from a glob that matches
+          # nothing, so it never invalidates and never actually caches — the
+          # action warns about it on every run. Both files matter: dev.txt
+          # includes base.txt, so a change to either must bust the cache.
+          cache-dependency-glob: "requirements/*.txt"
 
       - name: Install dependencies
-        run: uv pip install --system -r requirements/base.txt
+        # dev.txt, which pulls in base.txt. The production image installs
+        # base.txt ALONE — that is what keeps pytest, mypy, ruff and the stubs
+        # out of every running pod.
+        run: uv pip install --system -r requirements/dev.txt
 
       - name: Ruff lint
         run: ruff check .

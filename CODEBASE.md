@@ -250,7 +250,8 @@ frikkinwave-backend/
 │       └── ci.yml                 # Lint + type-check + migrate + pytest on every push
 │
 ├── requirements/
-│   └── base.txt                   # All dependencies pinned (uv pip freeze)
+│   ├── base.txt                   # RUNTIME only — what the production image installs
+│   └── dev.txt                    # -r base.txt + tests, lint, types. Never in the image.
 │
 ├── infra/                         # Terraform owns AWS, Helm owns the app — see infra/README.md
 │   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
@@ -513,7 +514,7 @@ File: `.github/workflows/ci.yml`
 
 Steps:
 1. Checkout + Python 3.13 + uv install
-2. `uv pip install --system -r requirements/base.txt`
+2. `uv pip install --system -r requirements/dev.txt` (pulls in base.txt)
 3. `ruff check .`
 4. `ruff format --check .`
 5. `mypy apps/ config/` (continue-on-error)
@@ -527,7 +528,15 @@ Postgres 16 service container spins up automatically.
 
 ## Dependency management
 
+Two files, and which one a package belongs in is a **production** decision, not
+a convenience one: the Dockerfile installs `base.txt` alone, so anything added
+there becomes attack surface in every running pod.
+
 ```bash
 uv pip install <package>
-uv pip freeze > requirements/base.txt    # always update lockfile after install
 ```
+
+Then add the pin by hand to the right file — `base.txt` if the running app
+imports it, `dev.txt` if only tests, linting or type checking do. Both are
+pinned including transitive dependencies, so `uv pip freeze` over a dev
+environment would wrongly dump the whole toolchain into `base.txt`.
