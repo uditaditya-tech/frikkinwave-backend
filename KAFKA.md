@@ -904,6 +904,121 @@ instead of none.
 
 ---
 
+## NEXT SESSION — closing the two gaps
+
+Written 2026-08-20 as a handoff, in the order that makes each step prove the
+last. Everything below is designed and unstarted.
+
+### Why 1b comes before 1a
+
+**A stalled relay is currently invisible to every alert that exists.** If the
+relay stops, nothing reaches Kafka — so there is nothing to be lagged on, and
+`KafkaConsumerGroupLagHigh` stays silent while the entire pipeline is dead. The
+only thing that sees it is `check_outbox_lag`, a CronJob whose failure nothing
+watches.
+
+So wiring Alertmanager to Slack first would give you a working route pointed at
+alerts that cannot detect the highest-consequence failure. Build the signal, then
+the route.
+
+### 1b — the relay reports its own health (~40 lines)
+
+The relay is already a long-lived loop, so it can expose metrics directly rather
+than needing a sidecar or a CronJob.
+
+```python
+# requirements/base.txt:  prometheus-client==<pin>
+# apps/events/management/commands/relay_outbox.py
+
+from prometheus_client import Gauge, start_http_server
+
+OUTBOX_OLDEST = Gauge(
+    "frikkinwave_outbox_oldest_seconds",
+    "Age of the oldest unpublished outbox event.",
+)
+OUTBOX_PENDING = Gauge("frikkinwave_outbox_pending", "Unpublished outbox events.")
+
+# once, before the loop:
+start_http_server(settings.EVENT_RELAY_METRICS_PORT)   # default 9100
+
+# each pass, alongside the existing heartbeat:
+OUTBOX_OLDEST.set(oldest_age_seconds)
+OUTBOX_PENDING.set(pending_count)
+```
+
+Add a `containerPort: 9100` to the relay Deployment and a `PodMonitor` for it.
+That yields **two alerts nothing can currently express**:
+
+```yaml
+- alert: OutboxRelayDown
+  # The single most consequential failure here. One replica, and if it is down
+  # NOTHING is delivered. Consumer-lag alerts cannot see it.
+  expr: up{job="frikkinwave/relay"} == 0
+  for: 3m
+  labels: { severity: critical }
+
+- alert: OutboxNotDraining
+  # Same signal check_outbox_lag computes, but as a metric — so it is graphable,
+  # alertable, and does not depend on a CronJob nobody watches.
+  expr: frikkinwave_outbox_oldest_seconds > 300
+  for: 5m
+  labels: { severity: critical }
+```
+
+**Then retire the `check_outbox_lag` CronJob** — one mechanism instead of two.
+Keep the management command; it is useful by hand and its tests still hold.
+
+*Drill to prove it:* kill the relay, confirm `OutboxRelayDown` fires within ~3m
+and clears on restart. Then stall it with events pending and confirm
+`OutboxNotDraining` fires without the relay being down — the two must be
+distinguishable, or the alert cannot tell you which thing to fix.
+
+### 1a — give Alertmanager somewhere to send (~20 lines)
+
+Slack is the recommendation for a solo project: it reaches a phone, and threads
+are ack-able. The webhook is a **secret**, so it follows the existing path —
+Terraform variable → Kubernetes Secret → referenced by Alertmanager — and
+**never** the chart's values, because this repo is public.
+
+```hcl
+# infra/eks/variables.tf
+variable "alertmanager_slack_webhook" {
+  type = string, sensitive = true, default = ""
+}
+```
+
+With `default = ""` meaning "no route configured", so a fresh clone still applies.
+
+*Drill to prove it:* stall a consumer group as in the Phase 3 drill and confirm
+the message actually arrives in Slack. An alert that fires into a misconfigured
+receiver looks identical to one that works.
+
+**AWS SNS → email** is the alternative if a third party is unwanted: Alertmanager
+has `sns_configs`, it is fully Terraform-native, and there is no secret to leak.
+The cost is that email alerts are easy to ignore and carry no acknowledgement.
+
+### 2 — load, once the above is in place
+
+Lower urgency: at ~200 lifetime events this measures **capacity, not risk**. But
+the suspected bottleneck is specific and worth confirming before real traffic.
+
+`relay_pending()` performs one DB transaction plus one **synchronous**
+`produce()` + `flush()` **per event** — a network round-trip with `acks=all` each
+time. Estimate 50-200 events/sec. That is a guess, and the lesson of this whole
+session is not to trust guesses of that shape.
+
+*Method:* publish N events, watch drain time on the Grafana event-pipeline
+dashboard, and raise the sustained rate until lag stops returning to zero. Record
+the real number here.
+
+*If the relay is the bottleneck, batch the flush:* produce the whole batch, flush
+once, then mark all of them published. Still correct — nothing is marked
+published before its acknowledgement — and it collapses N round-trips into one.
+Note the trade-off honestly: a batch then fails as a unit, so a single poison
+message delays its whole batch rather than only itself.
+
+---
+
 ## Cost
 
 Prices from the AWS Pricing API, ap-south-1, 2026-08-19.
