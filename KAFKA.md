@@ -1023,14 +1023,16 @@ the link AWS mails, it **accepts publishes and delivers nothing** — identical 
 a working route from every angle Terraform can see. `terraform apply` reports
 success either way.
 
-And the topic lives in **this disposable stack**, so teardown destroys it: every
-rebuild creates a new subscription and needs a new click. `eks-up.sh` now checks
-`PendingConfirmation` after apply and says so loudly, because a once-per-session
-manual step that fails silently will eventually be forgotten.
+The topic therefore lives in the **persistent** stack (`infra/dns/`), not the
+disposable one. Held in the EKS stack, every teardown destroyed the topic and its
+subscription, so every rebuild needed a fresh click — a silent failure gated on a
+manual step that recurs every session, which will eventually be forgotten. Now it
+is confirmed once. `eks-up.sh` still reports `PendingConfirmation` after apply as
+a backstop, and refuses to run if the persistent stack has not been applied.
 
-**The real fix is to move the topic to a persistent stack** — exactly the
-argument for moving the budget alarm out of `infra/eks/`, and worth doing at the
-same time.
+The IAM role stays in the disposable stack: it is bound to that cluster's OIDC
+provider and genuinely dies with it. Only the thing that must outlive a teardown
+moved.
 
 *Drill to prove it:* stall a consumer group as in the Phase 3 drill and confirm
 the mail actually arrives. An alert firing into a misconfigured receiver looks

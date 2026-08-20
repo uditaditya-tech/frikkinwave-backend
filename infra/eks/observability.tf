@@ -85,9 +85,9 @@ resource "helm_release" "kube_prometheus_stack" {
     }
 
     # The receiver, the route and the ServiceAccount binding all come from
-    # alerting.tf, and are omitted entirely when `alert_email` is "" — which
-    # leaves the previous behaviour: Alertmanager deployed, alerts evaluated and
-    # visible, nothing paged.
+    # alerting.tf. Unconditional: the SNS topic is owned by the persistent stack
+    # and always exists, so this stack never has to ask whether alerting is
+    # configured. Whether anything is *subscribed* is that stack's business.
     alertmanager = merge(
       {
         alertmanagerSpec = {

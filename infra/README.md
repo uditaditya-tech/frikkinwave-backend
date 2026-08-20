@@ -38,6 +38,15 @@ Only needed once, or if the zone is ever lost.
 terraform -chdir=infra/dns init && terraform -chdir=infra/dns apply
 ```
 
+This stack is **persistent and applied first**. Besides the zone and the
+certificate it owns the budget alarm and the SNS alert topic — everything that
+has to outlive a teardown of the app stack. `eks-up.sh` refuses to run until it
+has been applied, because the app stack reads all three via data sources.
+
+After the first apply, **check your email and click the SNS confirmation link.**
+An unconfirmed subscription accepts publishes and delivers nothing, which looks
+exactly like a working alert route.
+
 Take the four nameservers it outputs and add them as `NS` records for `api` at
 the parent domain's registrar. Verify the delegation, then the ACM certificate
 validates itself a few minutes later:

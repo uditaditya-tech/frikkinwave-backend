@@ -24,6 +24,31 @@ TF_DIR="${SCRIPT_DIR}/../eks"
 CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text)"
 echo "==> Caller (already cluster-admin via bootstrap): ${CALLER_ARN}"
 
+# ---------------------------------------------------------------------------
+# Preflight: the persistent stack must exist first.
+#
+# This stack discovers three things from infra/dns/ via data sources — the
+# Route 53 zone, the ACM certificate, and (since the alerting move) the SNS
+# topic. A missing data source fails mid-plan with a provider-level error that
+# names neither the stack nor the fix, so check here and say it plainly.
+#
+# Asking that stack's own output rather than probing AWS: its state is local and
+# git-ignored, so "the output resolves" is the precise question — has the
+# persistent stack been applied, from this machine, with the current config.
+# ---------------------------------------------------------------------------
+DNS_DIR="${SCRIPT_DIR}/../dns"
+if ! terraform -chdir="${DNS_DIR}" output -raw alert_topic_arn >/dev/null 2>&1; then
+  echo "==> The persistent stack is not applied (no alert_topic_arn output)."
+  echo "    It owns the Route 53 zone, the ACM cert and the SNS alert topic,"
+  echo "    and this stack reads all three. Run it first — safe and idempotent:"
+  echo
+  echo "        terraform -chdir=${DNS_DIR} init && terraform -chdir=${DNS_DIR} apply"
+  echo
+  echo "    NEVER 'terraform destroy' that stack: the GoDaddy NS delegation"
+  echo "    breaks, and the alert subscription would need re-confirming."
+  exit 1
+fi
+
 echo "==> terraform init"
 terraform -chdir="${TF_DIR}" init -input=false
 

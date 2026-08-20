@@ -520,18 +520,14 @@ Ordered by consequence, not effort.
   untested — and this session's surprises all arrived exactly this way.
 - ~~**No alert on the relay.**~~ ✅ Closed in code (gauges + three alerts); the
   drills that prove it fire still need a live cluster.
-- **The budget alarm AND the SNS alert topic live in this disposable stack.**
-  Two separate costs from one mistake:
-  - The budget alarm is destroyed exactly when it would be most useful, since
-    orphaned resources bill *after* teardown. Credits expire December 2026 and
-    one forgotten month of uptime is ~96% of the budget.
-  - The SNS topic is destroyed with its subscriptions, so **every rebuild needs
-    the confirmation email clicked again**. An unconfirmed subscription accepts
-    publishes and delivers nothing — a silent failure gated on a manual step
-    that recurs every session. `eks-up.sh` reports `PendingConfirmation` after
-    apply to make it visible, but reporting it is not fixing it.
-
-  Both should move to `infra/dns/` or their own tiny persistent stack.
+- ~~**The budget alarm AND the SNS alert topic live in this disposable stack.**~~
+  ✅ Both moved to `infra/dns/` (the persistent stack). The budget alarm now
+  survives teardown, which is exactly when it matters — orphaned resources bill
+  *after* the cluster is gone. And the SNS subscription is confirmed once rather
+  than after every rebuild; an unconfirmed one accepts publishes and delivers
+  nothing, so a per-session manual step would eventually have been forgotten.
+  `eks-up.sh` still reports `PendingConfirmation` as a backstop, and now also
+  refuses to run at all if the persistent stack has not been applied.
 - **Notification emails have never been delivered.** `EMAIL_HOST_USER` /
   `EMAIL_HOST_PASSWORD` are unset everywhere, so every send fails with
   `SMTPSenderRefused(550, 'Unauthenticated senders not allowed')` and retries
@@ -560,10 +556,9 @@ Ordered by consequence, not effort.
 
 ## Known issues
 
-- **The budget alarm lives in this disposable stack**, so it is destroyed by
-  `eks-down.sh` — exactly when it would be most useful, since orphaned resources
-  bill *after* teardown. It should move to `infra/dns/` (persistent) or become
-  its own tiny stack. There is a pre-existing account-level budget as a backstop.
+- ~~**The budget alarm lives in this disposable stack.**~~ ✅ Moved to
+  `infra/dns/`, so it now survives teardown. A pre-existing account-level budget
+  remains as a second backstop.
 - **`.terraform.lock.hcl` is git-ignored for this stack** (`.gitignore` lines
   68-69), which contradicts the comment above it saying lock files are committed
   for reproducible provider versions. The other two stacks commit theirs. Worth

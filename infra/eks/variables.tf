@@ -104,22 +104,6 @@ variable "node_max_size" {
 # Cost guardrail
 # ---------------------------------------------------------------------------
 
-variable "budget_limit_usd" {
-  description = <<-EOT
-    Monthly spend that triggers an alert. AWS credits are consumed silently —
-    there is no invoice to notice — so this alarm is the only early warning
-    that a forgotten cluster is burning them.
-  EOT
-  type        = number
-  default     = 20
-}
-
-variable "budget_alert_email" {
-  description = "Where budget alerts go. Set to \"\" to skip creating the budget."
-  type        = string
-  default     = "udit.aditya.tech@gmail.com"
-}
-
 variable "console_admin_principal_arn" {
   description = <<-EOT
     An ADDITIONAL IAM principal granted cluster-admin, so the AWS console's EKS
@@ -316,23 +300,6 @@ variable "observability_namespace" {
   description = "Namespace for Prometheus, Grafana and Alertmanager."
   type        = string
   default     = "observability"
-}
-
-variable "alert_email" {
-  description = <<-EOT
-    Where Prometheus alerts are emailed, via SNS. Set to "" to deploy
-    Alertmanager with no route at all, which is what this stack did before —
-    alerts evaluate and are visible, and nothing pages.
-
-    NOT a secret, which is the point of choosing SNS over a Slack webhook: this
-    repo is public, and an address already appears here for budget alerts.
-
-    An email subscription requires a confirmation click before it delivers
-    anything. `terraform apply` cannot do that and will report success on an
-    unconfirmed subscription.
-  EOT
-  type        = string
-  default     = "udit.aditya.tech@gmail.com"
 }
 
 variable "kube_prometheus_stack_version" {

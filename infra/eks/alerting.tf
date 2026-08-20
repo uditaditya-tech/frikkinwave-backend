@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Where alerts actually go.
+# Alertmanager's route to SNS.
 #
 # The gap this closes: the Phase 3 observability work gave the cluster real
 # alert rules, and Alertmanager was deployed to evaluate them — routed nowhere.
@@ -7,52 +7,38 @@
 # the difference between "not silent" and "paging", and only the second one is
 # worth anything at 3am.
 #
-# SNS → email rather than Slack: it is fully Terraform-native, there is no
-# third-party webhook to keep out of a public repo, and no secret to leak. The
-# honest cost, recorded rather than glossed: email alerts are easy to ignore and
-# carry no acknowledgement. If this project ever has a second person on it, that
-# trade stops being acceptable.
+# SNS → email rather than Slack: fully Terraform-native, no third-party webhook
+# to keep out of a public repo, no secret to leak. The honest cost, recorded
+# rather than glossed: email alerts are easy to ignore and carry no
+# acknowledgement. With a second person on this project that trade stops being
+# acceptable.
 #
-# Alertmanager authenticates to SNS with IRSA — the same mechanism the load
-# balancer controller uses, for the same reason: granting sns:Publish to the
-# *node* role would hand it to every pod on the cluster.
+# THE TOPIC ITSELF LIVES IN infra/dns/ (the persistent stack), because an email
+# subscription needs a confirmation click and would otherwise need re-confirming
+# after every teardown — an invisible failure gated on a manual step. Only the
+# IAM role is here, because it is bound to *this* cluster's OIDC provider and
+# genuinely is disposable.
 # ---------------------------------------------------------------------------
 
-locals {
-  # "" means no route configured, so a fresh clone still applies cleanly.
-  alerting_enabled = var.alert_email != ""
+# Same pattern as the Route 53 zone and the ACM certificate: this stack already
+# requires the persistent stack to have been applied first, so this adds a
+# dependency in kind, not a new kind of dependency. It also resolves fine during
+# `terraform destroy` — unlike a Strimzi Secret lookup — precisely because the
+# persistent stack is never destroyed.
+data "aws_sns_topic" "alerts" {
+  name = "${local.name}-alerts"
+}
 
+locals {
   alertmanager_sa = "alertmanager"
 }
 
-resource "aws_sns_topic" "alerts" {
-  count = local.alerting_enabled ? 1 : 0
-
-  name = "${local.name}-alerts"
-  tags = local.tags
-}
-
-# NOTE: an email subscription is created in state `PendingConfirmation` and AWS
-# sends a confirmation link that a human must click. Until then it accepts
-# publishes and delivers NOTHING — which looks exactly like a working route.
-# Terraform cannot confirm it and reports the resource as created either way, so
-# `terraform apply` succeeding is not evidence that alerting works. Send a test
-# alert and watch for the mail.
-resource "aws_sns_topic_subscription" "alerts_email" {
-  count = local.alerting_enabled ? 1 : 0
-
-  topic_arn = aws_sns_topic.alerts[0].arn
-  protocol  = "email"
-  endpoint  = var.alert_email
-}
-
 # ---------------------------------------------------------------------------
-# IRSA for Alertmanager.
+# IRSA for Alertmanager. sns:Publish on the NODE role would hand it to every pod
+# on the cluster; this binds it to one ServiceAccount in one namespace.
 # ---------------------------------------------------------------------------
 
 data "aws_iam_policy_document" "alertmanager_assume" {
-  count = local.alerting_enabled ? 1 : 0
-
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -61,8 +47,8 @@ data "aws_iam_policy_document" "alertmanager_assume" {
       identifiers = [aws_iam_openid_connect_provider.cluster.arn]
     }
 
-    # Bound to exactly one ServiceAccount in one namespace — without the :sub
-    # condition any pod on the cluster could assume the role.
+    # Without the :sub condition any pod on the cluster could assume the role,
+    # which would defeat the point of using IRSA over the node role.
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
@@ -80,50 +66,37 @@ data "aws_iam_policy_document" "alertmanager_assume" {
 }
 
 data "aws_iam_policy_document" "alertmanager_publish" {
-  count = local.alerting_enabled ? 1 : 0
-
   statement {
     actions   = ["sns:Publish"]
-    resources = [aws_sns_topic.alerts[0].arn]
+    resources = [data.aws_sns_topic.alerts.arn]
   }
 }
 
 resource "aws_iam_role" "alertmanager" {
-  count = local.alerting_enabled ? 1 : 0
-
   name               = "${local.name}-alertmanager"
-  assume_role_policy = data.aws_iam_policy_document.alertmanager_assume[0].json
+  assume_role_policy = data.aws_iam_policy_document.alertmanager_assume.json
   tags               = local.tags
 }
 
 resource "aws_iam_role_policy" "alertmanager" {
-  count = local.alerting_enabled ? 1 : 0
-
   name   = "publish-alerts"
-  role   = aws_iam_role.alertmanager[0].id
-  policy = data.aws_iam_policy_document.alertmanager_publish[0].json
+  role   = aws_iam_role.alertmanager.id
+  policy = data.aws_iam_policy_document.alertmanager_publish.json
 }
 
 # ---------------------------------------------------------------------------
-# The Alertmanager route, handed to the kube-prometheus-stack release.
-#
-# Kept here rather than inline in observability.tf so the whole "where do alerts
-# go" story is one file: topic, subscription, IAM, route.
+# The route, handed to the kube-prometheus-stack release in observability.tf.
 # ---------------------------------------------------------------------------
 
 locals {
-  # A `cond ? {...} : {}` would be the obvious shape, but Terraform requires both
-  # branches of a ternary to have consistent types and rejects an object against
-  # an empty one. Iterating an empty list and splatting into merge() gives a real
-  # empty map when alerting is off, and never evaluates the SNS references.
-  alertmanager_values = merge([for _ in(local.alerting_enabled ? [true] : []) : {
+  alertmanager_values = {
     serviceAccount = {
       create = true
       # Named explicitly so the IRSA :sub condition above is exact rather than
       # depending on how the chart derives a name from the release.
       name = local.alertmanager_sa
       annotations = {
-        "eks.amazonaws.com/role-arn" = aws_iam_role.alertmanager[0].arn
+        "eks.amazonaws.com/role-arn" = aws_iam_role.alertmanager.arn
       }
     }
 
@@ -164,7 +137,7 @@ locals {
         {
           name = "sns"
           sns_configs = [{
-            topic_arn = aws_sns_topic.alerts[0].arn
+            topic_arn = data.aws_sns_topic.alerts.arn
             # Credentials come from IRSA; only the region is needed here.
             sigv4 = { region = var.region }
             # SNS caps a subject at 100 characters and rejects newlines, so this
@@ -175,5 +148,5 @@ locals {
         },
       ]
     }
-  }]...)
+  }
 }

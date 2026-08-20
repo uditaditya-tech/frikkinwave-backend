@@ -22,6 +22,10 @@ import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 EKS_DIR = REPO_ROOT / "infra" / "eks"
+# The PERSISTENT stack. Named for its first inhabitant, but it now holds
+# everything that must outlive a teardown: the zone, the cert, the budget
+# alarm and the SNS alert topic.
+DNS_DIR = REPO_ROOT / "infra" / "dns"
 KAFKA_CHART = REPO_ROOT / "infra" / "helm" / "kafka"
 KAFKA_VALUES = KAFKA_CHART / "values.yaml"
 KAFKA_TEMPLATE = KAFKA_CHART / "templates" / "kafka.yaml"
@@ -45,6 +49,11 @@ def _values() -> dict:
 def _terraform() -> str:
     """Every .tf file in the EKS stack, concatenated."""
     return "\n".join(p.read_text() for p in sorted(EKS_DIR.glob("*.tf")))
+
+
+def _persistent_terraform() -> str:
+    """Every .tf file in the persistent stack, concatenated."""
+    return "\n".join(p.read_text() for p in sorted(DNS_DIR.glob("*.tf")))
 
 
 def _tf_default(variable: str) -> str:
@@ -497,10 +506,11 @@ class TestObservability:
         reach nobody is the difference between "not silent" and "paging", and
         only the second one is worth anything.
         """
-        tf = _terraform()
-        assert "aws_sns_topic" in tf
-        assert 'protocol  = "email"' in tf or 'protocol = "email"' in tf
-        assert "sns_configs" in tf
+        assert "sns_configs" in _terraform()
+
+        persistent = _persistent_terraform()
+        assert "aws_sns_topic" in persistent
+        assert re.search(r'protocol\s*=\s*"email"', persistent)
 
     def test_the_watchdog_is_not_routed_to_the_inbox(self) -> None:
         """
@@ -525,27 +535,38 @@ class TestObservability:
         # Without it, any pod on the cluster could assume it.
         assert "system:serviceaccount:${var.observability_namespace}:" in tf
 
-    def test_the_alert_route_is_optional(self) -> None:
+    def test_the_alert_subscription_outlives_a_teardown(self) -> None:
+        """
+        The reason the topic is not in the EKS stack. An SNS email subscription
+        delivers NOTHING until a human clicks the confirmation link, so a topic
+        destroyed by every teardown means re-confirming every session — an
+        invisible failure gated on a recurring manual step.
+
+        The IAM role stays in the disposable stack on purpose: it is bound to
+        that cluster's OIDC provider and genuinely dies with it.
+        """
+        assert not (EKS_DIR / "budget.tf").exists()
+        assert (DNS_DIR / "budget.tf").exists()
+
+        eks = _terraform()
+        assert 'resource "aws_sns_topic"' not in eks
+        assert 'data "aws_sns_topic" "alerts"' in eks, (
+            "The EKS stack must discover the topic, not own it."
+        )
+        assert 'resource "aws_iam_role" "alertmanager"' in eks
+
+    def test_the_alert_subscription_is_optional(self) -> None:
         """
         `alert_email = ""` must still apply — a fresh clone should not need an
-        address to stand the stack up. It degrades to the previous behaviour:
-        alerts evaluated and visible, nothing paged.
-
-        Asserts the GATE exists, not the default: every SNS and IAM resource has
-        to be conditional on it, or an empty address produces an invalid
-        subscription instead of no subscription.
+        address. The topic is created regardless (it costs nothing unsubscribed)
+        so the EKS stack never has to ask whether alerting is configured.
         """
-        tf = _terraform()
-        assert 'alerting_enabled = var.alert_email != ""' in tf
-        assert _tf_default("alert_email"), "The variable needs a default to apply unattended."
+        persistent = _persistent_terraform()
+        assert 'count = var.alert_email == "" ? 0 : 1' in persistent
 
-        # Every resource in the alerting file must be gated. A new ungated one
-        # would fail only at apply time, with an empty-endpoint error.
-        alerting = (EKS_DIR / "alerting.tf").read_text()
-        resources = re.findall(r'^resource\s+"[^"]+"\s+"[^"]+"\s*\{(.*?)^\}', alerting, re.M | re.S)
-        assert resources
-        for body in resources:
-            assert "count = local.alerting_enabled" in body
+        # The topic itself must NOT be gated, or the EKS data source breaks.
+        topic = re.search(r'resource "aws_sns_topic" "alerts" \{(.*?)\n\}', persistent, re.S)
+        assert topic and "count" not in topic.group(1)
 
     def test_the_broker_monitor_does_not_also_match_the_exporter(self) -> None:
         """

@@ -12,3 +12,8 @@ output "certificate_arn" {
   description = "ARN of the validated ACM certificate."
   value       = aws_acm_certificate_validation.api.certificate_arn
 }
+
+output "alert_topic_arn" {
+  description = "SNS topic the EKS stack's Alertmanager publishes to."
+  value       = aws_sns_topic.alerts.arn
+}
