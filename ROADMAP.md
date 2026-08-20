@@ -207,10 +207,18 @@ Proved by drill rather than asserted: stalled a consumer group, watched lag reac
 183 and both alerts fire scoped to that group, then the recovered pod consume
 exactly the 200-event backlog and the alerts clear on their own.
 
+The relay now reports its own health too: three gauges on
+`EVENT_RELAY_METRICS_PORT` behind a PodMonitor, with `OutboxRelayDown`,
+`OutboxNotDraining` and `OutboxEventsExhausted`. This is the failure no
+Kafka-side alert can see — a stalled relay means nothing reaches the broker to be
+lagged on. The `check_outbox_lag` CronJob is retired in favour of the gauge.
+
 **Two gaps remain, both recorded in `infra/eks/README.md`:** Alertmanager routes
 nowhere, so alerts evaluate and are visible but nothing pages; and nothing has
 run under load — the relay does one DB transaction plus one synchronous Kafka
-flush per event, so a real backlog drains slower than intuition suggests.
+flush per event, so a real backlog drains slower than intuition suggests. The
+relay alerts are also **code-verified but not yet drilled** — no live cluster has
+existed since they were written.
 
 ### Failure behaviour, verified not assumed
 

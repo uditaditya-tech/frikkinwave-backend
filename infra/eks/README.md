@@ -495,13 +495,14 @@ group and watching both alerts fire, then clear. Detail in `KAFKA.md`.
 - **Alertmanager routes nowhere.** Alerts evaluate and are visible in Prometheus;
   nothing pages. This is the smallest remaining gap and the highest value — a
   receiver and a route.
-- **No alert on the relay itself.** It is a single replica and **if it is down
-  nothing is delivered at all** — Celery's worker pool at least degraded
-  gracefully. `KafkaConsumerGroupLagHigh` will not catch it, because a stalled
-  relay means nothing reaches Kafka to be lagged on; `check_outbox_lag` is what
-  sees it, and that is a CronJob rather than a metric.
-- **No app-level metrics.** Django exposes no `/metrics`, so outbox lag is a
-  CronJob rather than a gauge Prometheus can alert on.
+- ~~**No alert on the relay itself.**~~ ✅ Closed: the relay loop exports three
+  gauges on `EVENT_RELAY_METRICS_PORT`, scraped by a PodMonitor in the app chart,
+  with `OutboxRelayDown` / `OutboxNotDraining` / `OutboxEventsExhausted`. The
+  `check_outbox_lag` CronJob is retired; the command remains for use by hand.
+  **The drills have not been run** — no live cluster has existed since.
+- **Still no app-level metrics from the web pods.** Django exposes no
+  `/metrics`; only the relay does. Request rate, latency and error rate are
+  invisible to Prometheus and live only in the JSON logs.
 - External Secrets (syncing the SSM params Phase 2 writes), HPA, and KEDA scaling
   consumer groups on lag — all still untouched.
 
@@ -515,9 +516,8 @@ Ordered by consequence, not effort.
   hand-published events. Consumer rebalancing during a rollout, backlog drain,
   partition assignment across replicas and relay restart behaviour are all
   untested — and this session's surprises all arrived exactly this way.
-- **No alert on the relay.** It is the highest-consequence pod in the namespace
-  and its failure is silent: events accumulate unpublished in the outbox and
-  nothing reports it.
+- ~~**No alert on the relay.**~~ ✅ Closed in code (gauges + three alerts); the
+  drills that prove it fire still need a live cluster.
 - **The budget alarm lives in this disposable stack**, so `eks-down.sh` destroys
   it exactly when it would be most useful, since orphaned resources bill *after*
   teardown. Should move to `infra/dns/` or its own tiny stack. Matters more than

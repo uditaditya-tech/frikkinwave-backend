@@ -48,6 +48,9 @@ pgvector==0.4.2
 platformdirs==4.10.0
 pluggy==1.6.0
 pre-commit==4.6.0
+# Metrics for the outbox relay. Only the client library — the relay
+# exposes a /metrics endpoint that Prometheus scrapes via a PodMonitor.
+prometheus-client==0.26.0
 prompt-toolkit==3.0.52
 psycopg2-binary==2.9.12
 pydantic==2.13.4

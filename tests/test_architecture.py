@@ -388,6 +388,34 @@ def test_the_relay_heartbeat_path_matches_the_probe() -> None:
     )
 
 
+def test_the_relay_metrics_port_matches_the_scrape_target() -> None:
+    """
+    The loop binds this port; the PodMonitor scrapes it. A mismatch is silent in
+    the worst way — the relay runs, the Deployment is Ready, and Prometheus
+    simply has no series for it. `OutboxRelayDown` then fires permanently (a
+    target that never came up) or not at all, depending on which side is wrong.
+    """
+    import yaml
+    from django.conf import settings
+
+    values = yaml.safe_load(CHART_VALUES.read_text())
+    assert values["relay"]["metricsPort"] == settings.EVENT_RELAY_METRICS_PORT
+
+    template = (
+        APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "templates" / "deployment-relay.yaml"
+    ).read_text()
+    assert ".Values.relay.metricsPort" in template, (
+        "The container port must come from values, not be hardcoded."
+    )
+
+    # The PodMonitor selects by port NAME, so the name is the actual contract.
+    monitor = (
+        APPS_DIR.parent / "infra" / "helm" / "frikkinwave" / "templates" / "monitoring.yaml"
+    ).read_text()
+    assert "port: metrics" in monitor
+    assert "name: metrics" in template
+
+
 def test_the_heartbeat_tolerance_exceeds_the_poll_interval() -> None:
     """
     If the probe's tolerance were tighter than the loop's idle sleep, a relay

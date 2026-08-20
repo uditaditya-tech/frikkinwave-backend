@@ -10,7 +10,10 @@ KAFKA_FLUSH_TIMEOUT to every user-facing request during a broker outage. A
 dedicated process polling the outbox gets sub-second latency with none of that
 in the request path.
 
-The single-pass mode remains for a CronJob backstop and for running it by hand.
+The single-pass mode remains for running it by hand. In `--loop` mode the
+relay also serves Prometheus gauges for its own backlog on
+EVENT_RELAY_METRICS_PORT — a stalled relay is invisible to every Kafka-side
+alert, because nothing reaches the broker to be lagged on.
 """
 
 from __future__ import annotations
@@ -24,10 +27,27 @@ from typing import Any
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from prometheus_client import Gauge, start_http_server
 
-from apps.events.services import DEFAULT_BATCH, relay_pending
+from apps.events.services import DEFAULT_BATCH, outbox_lag_snapshot, relay_pending
 
 logger = logging.getLogger(__name__)
+
+# Module-level by necessity: prometheus_client registers each metric in a global
+# registry, so building these inside handle() would raise Duplicated timeseries
+# on any second call (which the tests do make).
+OUTBOX_OLDEST = Gauge(
+    "frikkinwave_outbox_oldest_seconds",
+    "Age of the oldest unpublished, still-retryable outbox event.",
+)
+OUTBOX_PENDING = Gauge(
+    "frikkinwave_outbox_pending",
+    "Unpublished outbox events, including exhausted ones.",
+)
+OUTBOX_EXHAUSTED = Gauge(
+    "frikkinwave_outbox_exhausted",
+    "Events past MAX_ATTEMPTS. These never retry and need a human.",
+)
 
 
 def _touch_heartbeat() -> None:
@@ -52,6 +72,29 @@ def _touch_heartbeat() -> None:
         pathlib.Path(settings.EVENT_RELAY_HEARTBEAT_FILE).touch()
     except OSError:  # pragma: no cover - defensive
         logger.warning("relay_heartbeat_write_failed")
+
+
+def _publish_metrics() -> None:
+    """
+    Export the outbox lag reading as gauges.
+
+    Same query `check_outbox_lag` runs, via the same service function — but as a
+    metric rather than a Job exit code, so it is graphable, alertable, and does
+    not depend on a CronJob whose failures nobody watches.
+
+    Failures are swallowed for the same reason the heartbeat's are: a relay that
+    cannot measure itself must keep relaying events. Losing the metric costs a
+    stale gauge; raising here would cost delivery.
+    """
+    try:
+        snapshot = outbox_lag_snapshot()
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("relay_metrics_snapshot_failed")
+        return
+
+    OUTBOX_OLDEST.set(snapshot.oldest_age_seconds)
+    OUTBOX_PENDING.set(snapshot.pending)
+    OUTBOX_EXHAUSTED.set(snapshot.exhausted)
 
 
 class Command(BaseCommand):
@@ -91,13 +134,23 @@ class Command(BaseCommand):
         signal.signal(signal.SIGTERM, _stop)
         signal.signal(signal.SIGINT, _stop)
 
-        logger.info("relay_started", extra={"interval": interval})
+        # Loop mode only. The single-pass mode runs by hand and in Jobs, where
+        # binding a port would be a failure for no benefit — and two relays run
+        # on one host would collide on it.
+        port = settings.EVENT_RELAY_METRICS_PORT
+        start_http_server(port)
+
+        logger.info("relay_started", extra={"interval": interval, "metrics_port": port})
         while not stopping["now"]:
             # Touch the heartbeat BEFORE the work, so the file tracks "the loop
             # is turning" rather than "the last pass succeeded" — a relay that
             # is up but failing every produce is a different problem, and the
             # outbox-lag check is what catches that one.
             _touch_heartbeat()
+            # Before the work, like the heartbeat: the gauges then describe the
+            # backlog the pass is about to attack, so a scrape landing mid-pass
+            # never reports a drained outbox that is still draining.
+            _publish_metrics()
             try:
                 relayed = relay_pending(limit=opts["limit"])
             except Exception:

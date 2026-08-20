@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from django.conf import settings
@@ -107,6 +108,47 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
     if published:
         logger.info("outbox_relayed", extra={"published": published})
     return published
+
+
+@dataclass(frozen=True)
+class OutboxLag:
+    """One reading of how far behind the outbox is."""
+
+    #: Unpublished events, including the exhausted ones.
+    pending: int
+    #: Events past MAX_ATTEMPTS. They will never retry, so they do not age
+    #: `oldest_age_seconds` above once everything retryable has drained — which
+    #: is exactly why they are counted separately rather than folded in.
+    exhausted: int
+    #: Age of the oldest *retryable* unpublished event. 0.0 when there is none.
+    oldest_age_seconds: float
+
+
+def outbox_lag_snapshot() -> OutboxLag:
+    """
+    How far behind is the outbox, right now?
+
+    **One number, many failures.** Lag rises whether the relay is down, the relay
+    is wedged, Kafka is unreachable, the client certificate expired, an ACL is
+    missing, or a topic was never created. It does not care which — that is the
+    point.
+
+    Lives here rather than in `check_outbox_lag` because there are now two
+    readers: the command (which exits non-zero) and the relay loop (which
+    exports it as a Prometheus gauge). Two copies of this query would drift, and
+    an alert disagreeing with the command it replaced is worse than either alone.
+
+    What it does NOT cover: consumer-side failures. A message that reached Kafka
+    and was never consumed leaves the outbox clean — that needs consumer-group
+    lag, which Strimzi's exporter provides.
+    """
+    pending = OutboxEvent.objects.filter(published_at__isnull=True)
+    exhausted = pending.filter(attempts__gte=MAX_ATTEMPTS).count()
+
+    oldest = pending.exclude(attempts__gte=MAX_ATTEMPTS).order_by("created_at").first()
+    age = (timezone.now() - oldest.created_at).total_seconds() if oldest else 0.0
+
+    return OutboxLag(pending=pending.count(), exhausted=exhausted, oldest_age_seconds=age)
 
 
 def _dispatch(*, topic: str, payload: dict[str, Any]) -> None:

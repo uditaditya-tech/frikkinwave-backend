@@ -19,7 +19,7 @@ from django.core.management.base import CommandError
 from django.utils import timezone
 
 from apps.events.models import OutboxEvent
-from apps.events.services import MAX_ATTEMPTS
+from apps.events.services import MAX_ATTEMPTS, OutboxLag, outbox_lag_snapshot
 
 
 def _age(event: OutboxEvent, seconds: int) -> None:
@@ -100,3 +100,83 @@ class TestRelayHeartbeat:
 
         settings.EVENT_RELAY_HEARTBEAT_FILE = str(tmp_path / "nope" / "deeper" / "beat")
         _touch_heartbeat()  # must not raise
+
+
+@pytest.mark.django_db
+class TestOutboxLagSnapshot:
+    """
+    The same reading `check_outbox_lag` exits on, exported as a gauge instead.
+    One query, two readers — an alert that disagreed with the command it
+    replaced would be worse than either signal alone.
+    """
+
+    def test_an_empty_outbox_reads_zero(self) -> None:
+        snapshot = outbox_lag_snapshot()
+
+        assert snapshot == OutboxLag(pending=0, exhausted=0, oldest_age_seconds=0.0)
+
+    def test_the_age_tracks_the_oldest_unpublished_event(self) -> None:
+        _age(OutboxEvent.objects.create(topic="follow.created", payload={}), 600)
+        OutboxEvent.objects.create(topic="follow.created", payload={})
+
+        snapshot = outbox_lag_snapshot()
+
+        assert snapshot.pending == 2
+        assert snapshot.oldest_age_seconds == pytest.approx(600, abs=10)
+
+    def test_published_history_does_not_age_the_gauge(self) -> None:
+        """
+        Otherwise the metric would climb forever on a perfectly healthy system,
+        and the alert would be permanently firing — which trains people to
+        silence it.
+        """
+        old = OutboxEvent.objects.create(topic="follow.created", payload={})
+        _age(old, 99999)
+        OutboxEvent.objects.filter(pk=old.pk).update(published_at=timezone.now())
+
+        snapshot = outbox_lag_snapshot()
+
+        assert snapshot.pending == 0
+        assert snapshot.oldest_age_seconds == 0.0
+
+    def test_exhausted_events_are_counted_but_do_not_age_the_gauge(self) -> None:
+        """
+        They will never be retried, so they stop ageing once everything
+        retryable drains — the outbox would read healthy with an event stuck in
+        it forever. That is why they get their own gauge and their own alert.
+        """
+        _age(
+            OutboxEvent.objects.create(
+                topic="follow.created", payload={}, attempts=MAX_ATTEMPTS, last_error="boom"
+            ),
+            99999,
+        )
+
+        snapshot = outbox_lag_snapshot()
+
+        assert snapshot.pending == 1
+        assert snapshot.exhausted == 1
+        assert snapshot.oldest_age_seconds == 0.0
+
+    def test_the_relay_loop_exports_the_snapshot(self) -> None:
+        """
+        The gauges must reflect the database, not stay at their zero defaults —
+        a metric wired to nothing looks identical to a healthy system.
+        """
+        from apps.events.management.commands.relay_outbox import (
+            OUTBOX_EXHAUSTED,
+            OUTBOX_OLDEST,
+            OUTBOX_PENDING,
+            _publish_metrics,
+        )
+
+        _age(OutboxEvent.objects.create(topic="follow.created", payload={}), 600)
+        OutboxEvent.objects.create(
+            topic="follow.created", payload={}, attempts=MAX_ATTEMPTS, last_error="boom"
+        )
+
+        _publish_metrics()
+
+        assert OUTBOX_PENDING._value.get() == 2
+        assert OUTBOX_EXHAUSTED._value.get() == 1
+        assert OUTBOX_OLDEST._value.get() == pytest.approx(600, abs=10)

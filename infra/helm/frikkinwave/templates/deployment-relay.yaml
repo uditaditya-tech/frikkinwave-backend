@@ -50,6 +50,13 @@ spec:
           image: {{ include "frikkinwave.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python", "manage.py", "relay_outbox", "--loop"]
+          # Named, because the PodMonitor selects the port by name rather than
+          # number — a number here and a number there drift silently, and a
+          # PodMonitor pointed at the wrong port is an alert that never fires.
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.relay.metricsPort }}
+              protocol: TCP
           envFrom:
             {{- include "frikkinwave.envFrom" . | nindent 12 }}
           env:

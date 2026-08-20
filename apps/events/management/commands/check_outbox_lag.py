@@ -14,7 +14,12 @@ the rows keep committing, and nothing anywhere reports that they stopped moving.
 
 What it does NOT cover: consumer-side failures. A message that reached Kafka and
 was never consumed leaves the outbox clean. That needs consumer-group lag, which
-belongs with Prometheus (Phase 3).
+Strimzi's exporter provides.
+
+**The relay exports this same reading as a Prometheus gauge**, which is what
+alerts on it now. This command is kept for running by hand — it is the fastest
+way to answer "is the outbox draining?" from a shell, with no port-forward.
+Both read `outbox_lag_snapshot()`, so they cannot disagree.
 """
 
 from __future__ import annotations
@@ -22,10 +27,8 @@ from __future__ import annotations
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
 
-from apps.events.models import OutboxEvent
-from apps.events.services import MAX_ATTEMPTS
+from apps.events.services import MAX_ATTEMPTS, outbox_lag_snapshot
 
 
 class Command(BaseCommand):
@@ -42,17 +45,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **opts: Any) -> None:
-        pending = OutboxEvent.objects.filter(published_at__isnull=True)
+        snapshot = outbox_lag_snapshot()
+        exhausted = snapshot.exhausted
+        lag = snapshot.oldest_age_seconds
 
-        # Exhausted events are a separate failure: they will never be retried
-        # again, so they do not age the lag metric above once the rest drains.
-        # They are the ones that need a human.
-        exhausted = pending.filter(attempts__gte=MAX_ATTEMPTS).count()
-
-        oldest = pending.exclude(attempts__gte=MAX_ATTEMPTS).order_by("created_at").first()
-        lag = (timezone.now() - oldest.created_at).total_seconds() if oldest else 0.0
-
-        self.stdout.write(f"pending={pending.count()} exhausted={exhausted} oldest_lag={lag:.1f}s")
+        self.stdout.write(f"pending={snapshot.pending} exhausted={exhausted} oldest_lag={lag:.1f}s")
 
         problems = []
         if lag > opts["max_seconds"]:

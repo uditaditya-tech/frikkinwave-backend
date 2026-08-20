@@ -1,0 +1,105 @@
+{{- if .Values.monitoring.enabled }}
+{{- /*
+  Scrape target and alert rules for the outbox relay.
+
+  The relay was the one component with no metric of its own. Everything the
+  Phase 3 observability work added watches the far side of the broker — consumer
+  lag, group membership, under-replicated partitions, dead letters — and all of
+  it is blind to the relay, because a stalled relay means NOTHING REACHES KAFKA
+  TO BE LAGGED ON. Every Kafka-side alert stays silent while the entire pipeline
+  is dead.
+
+  These live in the app chart rather than with Prometheus for the same reason the
+  Kafka rules live in the Kafka chart: they describe this release's pods and
+  should be created and destroyed with it.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-relay
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/part-of: frikkinwave-events
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "frikkinwave.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: relay
+  podMetricsEndpoints:
+    - path: /metrics
+      port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-relay
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    app.kubernetes.io/part-of: frikkinwave-events
+spec:
+  groups:
+    - name: frikkinwave-relay
+      rules:
+        # ── The single most consequential failure in this namespace ────────
+        # One replica by design, and if it is down nothing is delivered at all.
+        # Fires on the SCRAPE, not on any gauge value: a relay that is gone
+        # exports nothing, so a threshold on its own metrics could never catch
+        # its absence.
+        #
+        # `job` is what the Prometheus Operator relabels a PodMonitor's targets
+        # to — `<namespace>/<podmonitor name>` — so it is built from the same
+        # names that generate the PodMonitor above rather than matched loosely.
+        #
+        # The `absent()` half is the lesson KafkaConsumerGroupHasNoMembers
+        # already taught: a series at zero and a series that does not exist are
+        # different things. Scale this Deployment to zero and the target vanishes
+        # entirely, so `up == 0` has nothing to evaluate and stays silent — the
+        # exact failure this alert exists for. Cost of covering it: teardown
+        # deletes the relay before Prometheus, so this can fire on the way down.
+        - alert: OutboxRelayDown
+          expr: >-
+            up{job="{{ .Release.Namespace }}/{{ include "frikkinwave.fullname" . }}-relay"} == 0
+            or absent(up{job="{{ .Release.Namespace }}/{{ include "frikkinwave.fullname" . }}-relay"})
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: "The outbox relay is not being scraped"
+            description: >-
+              Nothing is moving events from the outbox to Kafka. Events are not
+              lost — they queue in the outbox and drain on recovery — but no
+              consumer is doing any work, and every Kafka-side alert will stay
+              silent throughout. Check the relay Deployment.
+
+        # ── Up, but not draining ──────────────────────────────────────────
+        # Distinct from the above ON PURPOSE: this is the relay running while
+        # failing every produce — a broker outage, an expired client
+        # certificate, a missing ACL, a topic that was never created. The two
+        # must be distinguishable or the alert cannot tell you what to fix.
+        - alert: OutboxNotDraining
+          expr: frikkinwave_outbox_oldest_seconds > {{ .Values.monitoring.outboxMaxAgeSeconds }}
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "Outbox backlog is {{ `{{ $value | printf \"%.0f\" }}` }}s old"
+            description: >-
+              The relay is up and scraping, so this is not the process being
+              gone — it is publishing failing. Check its logs and `last_error`
+              on OutboxEvent.
+
+        # ── Events that will never retry ──────────────────────────────────
+        # Past MAX_ATTEMPTS an event stops being retried, so it stops ageing the
+        # gauge above once everything retryable drains. Without this, a
+        # permanently failed event is indistinguishable from a healthy outbox.
+        - alert: OutboxEventsExhausted
+          expr: frikkinwave_outbox_exhausted > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ `{{ $value | printf \"%.0f\" }}` }} outbox event(s) will never retry"
+            description: >-
+              These have exhausted their attempts and need a human. Inspect
+              last_error on OutboxEvent; they stay in the table for exactly this.
+{{- end }}

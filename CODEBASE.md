@@ -30,7 +30,8 @@ frikkinwave-backend/
 │   │   │       ├── relay_outbox.py    # `--loop` is the relay Deployment: the ONLY path from
 │   │   │       │                      # the outbox to Kafka. Single pass without it
 │   │   │       ├── check_outbox_lag.py # one number for every failure between publish() and the
-│   │   │       │                      # broker; run by a CronJob
+│   │   │       │                      # broker; the relay exports the same reading as a
+│   │   │       │                      # gauge, so this is the by-hand path now
 │   │   │       └── consume_events.py  # `--group <app>` — one process per consumer group,
 │   │   │                              # replaces `celery worker --queues=<queue>`
 │   │   └── tests/
@@ -264,7 +265,8 @@ frikkinwave-backend/
 │   │   │                          #   syntax would otherwise be executed as a Go template)
 │   │   └── templates/             # web Deployment+Service, deployment-relay (the ONLY path from
 │   │                              #   outbox to Kafka), deployment-consumers (one per group),
-│   │                              #   cronjob-outbox-lag, grafana-dashboard, migrate Job, Ingress, PDB
+│   │                              #   monitoring (relay PodMonitor + 3 alerts), grafana-dashboard,
+│   │                              #   migrate Job, Ingress, PDB
 │   ├── helm/kafka/                # The Kafka cluster itself — Strimzi CRs, NOT a Deployment
 │   │   └── templates/             # kafka.yaml (Kafka + KafkaNodePool), topics.yaml (13 event
 │   │                              #   topics + 13 .dlt), user.yaml (KafkaUser + ACLs),

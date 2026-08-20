@@ -66,6 +66,10 @@ relay:
   # Comfortably above EVENT_RELAY_INTERVAL (1s) so a slow batch is not mistaken
   # for a wedged loop.
   heartbeatMaxAgeSeconds: 60
+  # Must match EVENT_RELAY_METRICS_PORT in settings — the loop binds it, the
+  # PodMonitor scrapes it. A test ties the two together, the same way the
+  # heartbeat file is tied.
+  metricsPort: 9100
   resources:
     requests:
       cpu: 50m
@@ -139,10 +143,14 @@ migrations:
 
 # Outbox lag — the one signal that says the event system stopped working.
 # A stopgap until Prometheus (Phase 3): a failed Job is visible, not paging.
-outboxLagCheck:
+# Scrape target and alert rules for the relay. Requires the Prometheus Operator
+# (installed by infra/eks/observability.tf); off by default so a bare `helm
+# install` on a cluster without the CRDs still succeeds.
+monitoring:
   enabled: true
-  schedule: "*/5 * * * *"
-  maxSeconds: 300
+  # Seconds the oldest unpublished event may reach before OutboxNotDraining
+  # fires. The same threshold check_outbox_lag defaulted to.
+  outboxMaxAgeSeconds: 300
 
 # Grafana dashboard, provisioned by the sidecar from this ConfigMap.
 grafanaDashboard:

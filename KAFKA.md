@@ -781,19 +781,26 @@ is liveness evidence that **must** die with the pod, is read only by that pod's
 own kubelet, and holds no data. A test ties the path in the chart to the setting,
 because a mismatch would restart a perfectly healthy relay forever.
 
-**`manage.py check_outbox_lag`**, on a 5-minute CronJob. One number — the age of
-the oldest unpublished event — covering every failure between `publish()` and the
-broker: relay down, relay wedged, Kafka unreachable, certificate expired, ACL
-missing, topic never created. It does not care which, and that is the point.
+**Outbox lag**, one number — the age of the oldest unpublished event — covering
+every failure between `publish()` and the broker: relay down, relay wedged, Kafka
+unreachable, certificate expired, ACL missing, topic never created. It does not
+care which, and that is the point.
 
-It also fails on events that exhausted their attempts, which otherwise go quiet
+It also counts events that exhausted their attempts, which otherwise go quiet
 *precisely* when they need a human: they stop being retried, so they stop aging
-the lag number once everything else drains.
+the lag number once everything else drains. That is why they are a separate
+gauge with a separate alert.
 
-**A stopgap, not a pager.** A failed Job is visible in `kubectl get jobs`; it
-wakes nobody. And it says nothing about the consumer side — a message that
-reached Kafka and was never consumed leaves this check perfectly clean. Consumer
-lag needs Prometheus (Phase 3).
+Originally a 5-minute CronJob running `manage.py check_outbox_lag` — **a stopgap,
+not a pager**: a failed Job is visible in `kubectl get jobs` and wakes nobody.
+Since 1b it is a **Prometheus gauge exported by the relay itself**, so the same
+number is graphable and alertable, and the CronJob is retired. The command
+survives for running by hand; both read `outbox_lag_snapshot()`, so the alert and
+the command cannot disagree.
+
+It says nothing about the consumer side — a message that reached Kafka and was
+never consumed leaves this check perfectly clean. That is what consumer-group lag
+covers.
 
 ### The drill
 
@@ -904,74 +911,75 @@ instead of none.
 
 ---
 
-## NEXT SESSION — closing the two gaps
+## Closing the two gaps
 
 Written 2026-08-20 as a handoff, in the order that makes each step prove the
-last. Everything below is designed and unstarted.
+last. **1b is done (code); 1a and 2 remain.**
 
 ### Why 1b comes before 1a
 
-**A stalled relay is currently invisible to every alert that exists.** If the
+**A stalled relay was invisible to every alert that existed.** If the
 relay stops, nothing reaches Kafka — so there is nothing to be lagged on, and
 `KafkaConsumerGroupLagHigh` stays silent while the entire pipeline is dead. The
-only thing that sees it is `check_outbox_lag`, a CronJob whose failure nothing
+only thing that saw it was `check_outbox_lag`, a CronJob whose failure nothing
 watches.
 
-So wiring Alertmanager to Slack first would give you a working route pointed at
+So wiring Alertmanager up first would have given a working route pointed at
 alerts that cannot detect the highest-consequence failure. Build the signal, then
 the route.
 
-### 1b — the relay reports its own health (~40 lines)
+### 1b — the relay reports its own health ✅ (code; drills pending)
 
-The relay is already a long-lived loop, so it can expose metrics directly rather
-than needing a sidecar or a CronJob.
+The relay is already a long-lived loop, so it exposes metrics directly rather
+than needing a sidecar or a CronJob. Built as three gauges, not the two planned:
 
-```python
-# requirements/base.txt:  prometheus-client==<pin>
-# apps/events/management/commands/relay_outbox.py
+| gauge | what it catches |
+|---|---|
+| `frikkinwave_outbox_oldest_seconds` | the relay is up but publishing is failing |
+| `frikkinwave_outbox_pending` | backlog depth, for the dashboard |
+| `frikkinwave_outbox_exhausted` | events past `MAX_ATTEMPTS` that will **never** retry |
 
-from prometheus_client import Gauge, start_http_server
+The third was not in the plan and earns its place: an exhausted event stops
+being retried, so it stops ageing `oldest_seconds` once everything retryable
+drains. Without its own gauge, a permanently failed event reads as a healthy
+outbox — the same "goes quiet exactly when it needs a human" trap
+`check_outbox_lag` already guarded against.
 
-OUTBOX_OLDEST = Gauge(
-    "frikkinwave_outbox_oldest_seconds",
-    "Age of the oldest unpublished outbox event.",
-)
-OUTBOX_PENDING = Gauge("frikkinwave_outbox_pending", "Unpublished outbox events.")
+The reading itself moved into `apps/events/services.outbox_lag_snapshot()`, so
+the command and the gauge run one query rather than two copies that drift. The
+server binds in `--loop` mode only: the single-pass mode runs by hand, where
+binding a port is a failure for no benefit.
 
-# once, before the loop:
-start_http_server(settings.EVENT_RELAY_METRICS_PORT)   # default 9100
+`templates/monitoring.yaml` in the **app** chart (not the Kafka chart — rules
+live with the thing they describe) carries the PodMonitor and three alerts:
 
-# each pass, alongside the existing heartbeat:
-OUTBOX_OLDEST.set(oldest_age_seconds)
-OUTBOX_PENDING.set(pending_count)
+```
+OutboxRelayDown       up{job="<ns>/<release>-relay"} == 0 or absent(...)   3m  critical
+OutboxNotDraining     frikkinwave_outbox_oldest_seconds > 300              5m  critical
+OutboxEventsExhausted frikkinwave_outbox_exhausted > 0                     5m  warning
 ```
 
-Add a `containerPort: 9100` to the relay Deployment and a `PodMonitor` for it.
-That yields **two alerts nothing can currently express**:
+**The `absent()` half is not decoration.** `KafkaConsumerGroupHasNoMembers`
+already taught this: a series at zero and a series that does not exist are
+different things. Scale the relay to zero and the target vanishes, so `up == 0`
+has nothing to evaluate and stays silent — the exact failure the alert exists
+for. The cost, recorded honestly: teardown deletes the relay before Prometheus,
+so this can fire on the way down.
 
-```yaml
-- alert: OutboxRelayDown
-  # The single most consequential failure here. One replica, and if it is down
-  # NOTHING is delivered. Consumer-lag alerts cannot see it.
-  expr: up{job="frikkinwave/relay"} == 0
-  for: 3m
-  labels: { severity: critical }
+`job` is built from the Release namespace and fullname, because that is what the
+Prometheus Operator relabels a PodMonitor's targets to (`<namespace>/<name>`).
+A test ties the settings port to the chart value to the PodMonitor's port *name*,
+the same way the heartbeat path is tied.
 
-- alert: OutboxNotDraining
-  # Same signal check_outbox_lag computes, but as a metric — so it is graphable,
-  # alertable, and does not depend on a CronJob nobody watches.
-  expr: frikkinwave_outbox_oldest_seconds > 300
-  for: 5m
-  labels: { severity: critical }
-```
+**The `check_outbox_lag` CronJob is retired** — one mechanism instead of two. The
+management command stays; it is still the fastest way to answer "is the outbox
+draining?" from a shell with no port-forward.
 
-**Then retire the `check_outbox_lag` CronJob** — one mechanism instead of two.
-Keep the management command; it is useful by hand and its tests still hold.
-
-*Drill to prove it:* kill the relay, confirm `OutboxRelayDown` fires within ~3m
-and clears on restart. Then stall it with events pending and confirm
-`OutboxNotDraining` fires without the relay being down — the two must be
-distinguishable, or the alert cannot tell you which thing to fix.
+*Drills still to run, on the next live cluster:* kill the relay, confirm
+`OutboxRelayDown` fires within ~3m and clears on restart. Then stall it with
+events pending and confirm `OutboxNotDraining` fires **without** the relay being
+down — the two must be distinguishable, or the alert cannot tell you which thing
+to fix.
 
 ### 1a — give Alertmanager somewhere to send (~20 lines)
 

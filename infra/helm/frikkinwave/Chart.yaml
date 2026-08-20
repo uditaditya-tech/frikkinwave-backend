@@ -7,7 +7,7 @@ description: |
 type: application
 
 # Chart version — bump when the templates change shape.
-version: 0.1.0
+version: 0.2.0
 
 # The app version is supplied per-deploy as the image tag, so this is only a
 # label. See infra/scripts/app-deploy.sh.

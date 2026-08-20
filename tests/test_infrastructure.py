@@ -25,6 +25,7 @@ EKS_DIR = REPO_ROOT / "infra" / "eks"
 KAFKA_CHART = REPO_ROOT / "infra" / "helm" / "kafka"
 KAFKA_VALUES = KAFKA_CHART / "values.yaml"
 KAFKA_TEMPLATE = KAFKA_CHART / "templates" / "kafka.yaml"
+APP_CHART = REPO_ROOT / "infra" / "helm" / "frikkinwave"
 
 # Provisioners removed from Kubernetes. A StorageClass naming one of these looks
 # perfectly healthy in `kubectl get sc` and provisions nothing, which is exactly
@@ -449,6 +450,46 @@ class TestObservability:
         rules = (KAFKA_CHART / "templates" / "monitoring.yaml").read_text()
         assert "KafkaDeadLetterReceived" in rules
         assert _values()["dltSuffix"] in rules
+
+    def test_the_relay_reports_its_own_health(self) -> None:
+        """
+        The blind spot the Kafka-side alerts structurally cannot cover. A stalled
+        relay means nothing reaches the broker, so there is nothing to be lagged
+        on and `KafkaConsumerGroupLagHigh` stays silent while the entire pipeline
+        is dead. Only a metric from the relay itself sees this.
+        """
+        rules = (APP_CHART / "templates" / "monitoring.yaml").read_text()
+        assert "OutboxRelayDown" in rules
+        assert "OutboxNotDraining" in rules
+
+    def test_relay_absence_is_alerted_on_the_scrape_not_a_gauge(self) -> None:
+        """
+        A relay that is gone exports no gauges at all, so any threshold on its
+        own metrics is unfalsifiable — the series simply stops. `up == 0` is the
+        only expression that can detect the absence.
+        """
+        rules = (APP_CHART / "templates" / "monitoring.yaml").read_text()
+        # `.*` rather than `[^}]+`: the expression is a Go template, so the job
+        # label contains `}}` long before the PromQL selector closes.
+        assert re.search(r"up\{job=.*\} == 0", rules), (
+            "OutboxRelayDown must alert on the scrape failing, not on a gauge value."
+        )
+        assert "absent(up{job=" in rules, (
+            "A relay scaled to zero leaves no `up` series at all, so `up == 0` "
+            "cannot fire. Absence and zero are different failures."
+        )
+
+    def test_the_outbox_lag_cronjob_is_gone(self) -> None:
+        """
+        Retired by the gauge above: same reading, but graphable and alertable
+        instead of a Job whose failures nobody watches. Two mechanisms measuring
+        one thing is how they drift apart. The management command stays — it is
+        still the fastest way to check from a shell.
+        """
+        assert not (APP_CHART / "templates" / "cronjob-outbox-lag.yaml").exists()
+        assert (
+            REPO_ROOT / "apps" / "events" / "management" / "commands" / "check_outbox_lag.py"
+        ).exists()
 
     def test_the_broker_monitor_does_not_also_match_the_exporter(self) -> None:
         """

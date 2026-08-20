@@ -210,6 +210,15 @@ EVENT_RELAY_HEARTBEAT_FILE = env("EVENT_RELAY_HEARTBEAT_FILE", default="/tmp/rel
 #: nudge. A full batch skips the sleep entirely so a backlog drains at speed.
 EVENT_RELAY_INTERVAL = env.float("EVENT_RELAY_INTERVAL", default=1.0)
 
+#: Port the relay serves Prometheus metrics on, in `--loop` mode only.
+#:
+#: The relay is the highest-consequence pod here — one replica, and if it is
+#: down NOTHING is delivered. Consumer-lag alerts cannot see that: a stalled
+#: relay means nothing reaches Kafka to be lagged on, so every Kafka-side alert
+#: stays silent while the whole pipeline is dead. Scraping this endpoint is what
+#: makes the relay's own liveness alertable.
+EVENT_RELAY_METRICS_PORT = env.int("EVENT_RELAY_METRICS_PORT", default=9100)
+
 # The credential and CA come from the
 # Strimzi-generated Secrets (KafkaUser `frikkinwave-app` and the cluster CA),
 # mounted into the worker and the relay CronJob — never baked into the image and
