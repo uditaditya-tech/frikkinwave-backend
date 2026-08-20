@@ -491,6 +491,62 @@ class TestObservability:
             REPO_ROOT / "apps" / "events" / "management" / "commands" / "check_outbox_lag.py"
         ).exists()
 
+    def test_alerts_have_somewhere_to_go(self) -> None:
+        """
+        The whole point of the rules above. Alertmanager evaluating alerts that
+        reach nobody is the difference between "not silent" and "paging", and
+        only the second one is worth anything.
+        """
+        tf = _terraform()
+        assert "aws_sns_topic" in tf
+        assert 'protocol  = "email"' in tf or 'protocol = "email"' in tf
+        assert "sns_configs" in tf
+
+    def test_the_watchdog_is_not_routed_to_the_inbox(self) -> None:
+        """
+        Watchdog fires CONSTANTLY by design — it is a dead-man's switch, so a
+        monitoring system that has silently died is detectable by the absence of
+        its alerts. Supplying an Alertmanager `config` replaces the chart's
+        default wholesale, including its handling of this, so routing everything
+        to SNS would email forever and teach you to ignore the inbox.
+        """
+        tf = _terraform()
+        assert "alertname = Watchdog" in tf
+        assert "black-hole" in tf
+
+    def test_alertmanager_publishes_with_its_own_identity(self) -> None:
+        """
+        IRSA, not the node role. sns:Publish on the node role would hand it to
+        every pod on the cluster — the same reasoning as the LB controller.
+        """
+        tf = _terraform()
+        assert "eks.amazonaws.com/role-arn" in tf
+        # The :sub condition is what binds the role to one ServiceAccount.
+        # Without it, any pod on the cluster could assume it.
+        assert "system:serviceaccount:${var.observability_namespace}:" in tf
+
+    def test_the_alert_route_is_optional(self) -> None:
+        """
+        `alert_email = ""` must still apply — a fresh clone should not need an
+        address to stand the stack up. It degrades to the previous behaviour:
+        alerts evaluated and visible, nothing paged.
+
+        Asserts the GATE exists, not the default: every SNS and IAM resource has
+        to be conditional on it, or an empty address produces an invalid
+        subscription instead of no subscription.
+        """
+        tf = _terraform()
+        assert 'alerting_enabled = var.alert_email != ""' in tf
+        assert _tf_default("alert_email"), "The variable needs a default to apply unattended."
+
+        # Every resource in the alerting file must be gated. A new ungated one
+        # would fail only at apply time, with an empty-endpoint error.
+        alerting = (EKS_DIR / "alerting.tf").read_text()
+        resources = re.findall(r'^resource\s+"[^"]+"\s+"[^"]+"\s*\{(.*?)^\}', alerting, re.M | re.S)
+        assert resources
+        for body in resources:
+            assert "count = local.alerting_enabled" in body
+
     def test_the_broker_monitor_does_not_also_match_the_exporter(self) -> None:
         """
         The exporter pod carries `strimzi.io/kind: Kafka` too, so selecting on

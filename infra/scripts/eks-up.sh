@@ -43,6 +43,32 @@ echo
 kubectl get nodes -o wide
 echo
 kubectl get pods -A
+# ---------------------------------------------------------------------------
+# Is alerting actually going to reach anyone?
+#
+# The SNS topic lives in THIS stack, so teardown destroys it along with its
+# subscriptions. Every rebuild therefore creates a fresh subscription and AWS
+# emails a fresh confirmation link. Until that link is clicked the subscription
+# accepts publishes and delivers NOTHING — indistinguishable from a working
+# route, right up until the first real alert goes nowhere.
+# ---------------------------------------------------------------------------
+ALERT_TOPIC="$(terraform -chdir="${TF_DIR}" output -raw alert_topic_arn 2>/dev/null || true)"
+if [[ -n "${ALERT_TOPIC}" ]]; then
+  PENDING="$(aws sns list-subscriptions-by-topic \
+    --topic-arn "${ALERT_TOPIC}" --region "${REGION}" \
+    --query "length(Subscriptions[?SubscriptionArn=='PendingConfirmation'])" \
+    --output text 2>/dev/null || echo 0)"
+  echo
+  if [[ "${PENDING}" != "0" ]]; then
+    echo "==> ALERTS ARE NOT BEING DELIVERED YET."
+    echo "    ${PENDING} SNS subscription(s) still say PendingConfirmation."
+    echo "    Check your email for 'AWS Notification - Subscription Confirmation'"
+    echo "    and click the link. Alerts fire into the void until you do."
+  else
+    echo "==> Alert email subscription confirmed."
+  fi
+fi
+
 echo
 echo "==> Cluster is up."
 echo "    Console: $(terraform -chdir="${TF_DIR}" output -raw console_url)"

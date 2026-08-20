@@ -492,9 +492,11 @@ group and watching both alerts fire, then clear. Detail in `KAFKA.md`.
 
 **Not done, in the order I would take them:**
 
-- **Alertmanager routes nowhere.** Alerts evaluate and are visible in Prometheus;
-  nothing pages. This is the smallest remaining gap and the highest value — a
-  receiver and a route.
+- ~~**Alertmanager routes nowhere.**~~ ✅ Closed: SNS → email, via IRSA, in
+  `alerting.tf`. Two traps handled on the way — Watchdog black-holed (supplying
+  a `config` replaces the chart's default, and Watchdog fires constantly by
+  design), and grouping by alertname so the SNS subject is never empty.
+  **Not drilled**, and see the confirmation caveat below.
 - ~~**No alert on the relay itself.**~~ ✅ Closed: the relay loop exports three
   gauges on `EVENT_RELAY_METRICS_PORT`, scraped by a PodMonitor in the app chart,
   with `OutboxRelayDown` / `OutboxNotDraining` / `OutboxEventsExhausted`. The
@@ -518,11 +520,18 @@ Ordered by consequence, not effort.
   untested — and this session's surprises all arrived exactly this way.
 - ~~**No alert on the relay.**~~ ✅ Closed in code (gauges + three alerts); the
   drills that prove it fire still need a live cluster.
-- **The budget alarm lives in this disposable stack**, so `eks-down.sh` destroys
-  it exactly when it would be most useful, since orphaned resources bill *after*
-  teardown. Should move to `infra/dns/` or its own tiny stack. Matters more than
-  it looks: credits expire December 2026 and one forgotten month of uptime is
-  ~96% of the budget.
+- **The budget alarm AND the SNS alert topic live in this disposable stack.**
+  Two separate costs from one mistake:
+  - The budget alarm is destroyed exactly when it would be most useful, since
+    orphaned resources bill *after* teardown. Credits expire December 2026 and
+    one forgotten month of uptime is ~96% of the budget.
+  - The SNS topic is destroyed with its subscriptions, so **every rebuild needs
+    the confirmation email clicked again**. An unconfirmed subscription accepts
+    publishes and delivers nothing — a silent failure gated on a manual step
+    that recurs every session. `eks-up.sh` reports `PendingConfirmation` after
+    apply to make it visible, but reporting it is not fixing it.
+
+  Both should move to `infra/dns/` or their own tiny persistent stack.
 - **Notification emails have never been delivered.** `EMAIL_HOST_USER` /
   `EMAIL_HOST_PASSWORD` are unset everywhere, so every send fails with
   `SMTPSenderRefused(550, 'Unauthenticated senders not allowed')` and retries

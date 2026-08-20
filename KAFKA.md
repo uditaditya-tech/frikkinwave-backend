@@ -914,7 +914,7 @@ instead of none.
 ## Closing the two gaps
 
 Written 2026-08-20 as a handoff, in the order that makes each step prove the
-last. **1b is done (code); 1a and 2 remain.**
+last. **1b and 1a are done (code); the drills and 2 remain.**
 
 ### Why 1b comes before 1a
 
@@ -981,29 +981,60 @@ events pending and confirm `OutboxNotDraining` fires **without** the relay being
 down — the two must be distinguishable, or the alert cannot tell you which thing
 to fix.
 
-### 1a — give Alertmanager somewhere to send (~20 lines)
+### 1a — give Alertmanager somewhere to send ✅ (code; drill pending)
 
-Slack is the recommendation for a solo project: it reaches a phone, and threads
-are ack-able. The webhook is a **secret**, so it follows the existing path —
-Terraform variable → Kubernetes Secret → referenced by Alertmanager — and
-**never** the chart's values, because this repo is public.
+**AWS SNS → email**, not Slack. Slack reaches a phone and its threads are
+ack-able, which is the better signal — but SNS is fully Terraform-native, and
+there is no webhook to keep out of a public repo. The honest cost, recorded
+rather than glossed: email alerts are easy to ignore and carry no
+acknowledgement. With a second person on this project, that trade stops being
+acceptable.
 
-```hcl
-# infra/eks/variables.tf
-variable "alertmanager_slack_webhook" {
-  type = string, sensitive = true, default = ""
-}
-```
+`infra/eks/alerting.tf` holds the whole story — topic, subscription, IAM, route:
 
-With `default = ""` meaning "no route configured", so a fresh clone still applies.
+- **IRSA, not the node role.** Alertmanager assumes a role scoped to
+  `sns:Publish` on one topic, bound by a `:sub` condition to one ServiceAccount
+  in one namespace. `sns:Publish` on the node role would hand it to every pod on
+  the cluster — the same reasoning as the load balancer controller.
+- **The ServiceAccount is named explicitly** rather than left to the chart's
+  release-name derivation, so the IAM condition is exact.
+- **`alert_email = ""` disables the whole thing**, degrading to the previous
+  behaviour: alerts evaluated and visible, nothing paged. Every resource is
+  gated on it, and a test enforces that a newly added one is too.
+
+#### The Watchdog trap
+
+Supplying an Alertmanager `config` **replaces the chart's default wholesale**,
+and the default is what handles `Watchdog`. Watchdog fires *constantly*, by
+design: it is a dead-man's switch, so a monitoring stack that has silently died
+is detectable by the **absence** of its alerts. Route everything to SNS and it
+emails forever — the fastest possible way to train yourself to ignore the one
+inbox that matters. It and `InfoInhibitor` go to a black-hole receiver.
+
+Grouping is `[alertname, namespace]` for a second, less obvious reason: the SNS
+subject template reads `.CommonLabels.alertname`, and **SNS rejects a publish
+with an empty subject**. Group by something that does not guarantee a common
+alertname and delivery fails rather than arriving unlabelled.
+
+#### The confirmation trap, which is worse
+
+An SNS email subscription is created `PendingConfirmation`. Until a human clicks
+the link AWS mails, it **accepts publishes and delivers nothing** — identical to
+a working route from every angle Terraform can see. `terraform apply` reports
+success either way.
+
+And the topic lives in **this disposable stack**, so teardown destroys it: every
+rebuild creates a new subscription and needs a new click. `eks-up.sh` now checks
+`PendingConfirmation` after apply and says so loudly, because a once-per-session
+manual step that fails silently will eventually be forgotten.
+
+**The real fix is to move the topic to a persistent stack** — exactly the
+argument for moving the budget alarm out of `infra/eks/`, and worth doing at the
+same time.
 
 *Drill to prove it:* stall a consumer group as in the Phase 3 drill and confirm
-the message actually arrives in Slack. An alert that fires into a misconfigured
-receiver looks identical to one that works.
-
-**AWS SNS → email** is the alternative if a third party is unwanted: Alertmanager
-has `sns_configs`, it is fully Terraform-native, and there is no secret to leak.
-The cost is that email alerts are easy to ignore and carry no acknowledgement.
+the mail actually arrives. An alert firing into a misconfigured receiver looks
+identical to one that works.
 
 ### 2 — load, once the above is in place
 

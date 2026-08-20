@@ -213,12 +213,18 @@ The relay now reports its own health too: three gauges on
 Kafka-side alert can see — a stalled relay means nothing reaches the broker to be
 lagged on. The `check_outbox_lag` CronJob is retired in favour of the gauge.
 
-**Two gaps remain, both recorded in `infra/eks/README.md`:** Alertmanager routes
-nowhere, so alerts evaluate and are visible but nothing pages; and nothing has
-run under load — the relay does one DB transaction plus one synchronous Kafka
-flush per event, so a real backlog drains slower than intuition suggests. The
-relay alerts are also **code-verified but not yet drilled** — no live cluster has
-existed since they were written.
+Alerts now have somewhere to go: **SNS → email**, with Alertmanager publishing
+via IRSA (`infra/eks/alerting.tf`). Watchdog is black-holed — it fires constantly
+by design as a dead-man's switch, and supplying an Alertmanager `config` replaces
+the chart's default handling of it.
+
+**One gap remains, plus a caveat, both recorded in `infra/eks/README.md`:**
+nothing has run under load — the relay does one DB transaction plus one synchronous Kafka
+flush per event, so a real backlog drains slower than intuition suggests. And
+**none of the alerting is drilled** — no live cluster has existed since it was
+written. The SNS email subscription also needs its confirmation link clicked
+after every rebuild, because the topic lives in the disposable stack; until then
+it delivers nothing while looking healthy.
 
 ### Failure behaviour, verified not assumed
 

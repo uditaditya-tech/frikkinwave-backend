@@ -72,3 +72,13 @@ output "acm_certificate_arn" {
 output "route53_zone_id" {
   value = data.aws_route53_zone.api.zone_id
 }
+
+output "alert_topic_arn" {
+  description = <<-EOT
+    SNS topic Alertmanager publishes to. Empty when `alert_email` is "".
+
+    eks-up.sh reads this to check whether the email subscription has been
+    confirmed — an unconfirmed one accepts publishes and delivers nothing.
+  EOT
+  value       = try(aws_sns_topic.alerts[0].arn, "")
+}

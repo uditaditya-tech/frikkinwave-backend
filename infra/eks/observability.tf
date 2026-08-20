@@ -84,17 +84,21 @@ resource "helm_release" "kube_prometheus_stack" {
       service = { type = "ClusterIP" }
     }
 
-    # Alertmanager is deployed but routes nowhere — there is no destination to
-    # send to yet. Alerts are still evaluated and visible in Prometheus, which
-    # is the difference between "silent" and "not paging".
-    alertmanager = {
-      alertmanagerSpec = {
-        resources = {
-          requests = { cpu = "20m", memory = "96Mi" }
-          limits   = { cpu = "100m", memory = "192Mi" }
+    # The receiver, the route and the ServiceAccount binding all come from
+    # alerting.tf, and are omitted entirely when `alert_email` is "" — which
+    # leaves the previous behaviour: Alertmanager deployed, alerts evaluated and
+    # visible, nothing paged.
+    alertmanager = merge(
+      {
+        alertmanagerSpec = {
+          resources = {
+            requests = { cpu = "20m", memory = "96Mi" }
+            limits   = { cpu = "100m", memory = "192Mi" }
+          }
         }
-      }
-    }
+      },
+      local.alertmanager_values,
+    )
 
     # Node-level metrics are useful, but the kubelet/etcd/scheduler scrapes that
     # this chart enables by default do not work on EKS — the control plane is

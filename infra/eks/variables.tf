@@ -318,6 +318,23 @@ variable "observability_namespace" {
   default     = "observability"
 }
 
+variable "alert_email" {
+  description = <<-EOT
+    Where Prometheus alerts are emailed, via SNS. Set to "" to deploy
+    Alertmanager with no route at all, which is what this stack did before —
+    alerts evaluate and are visible, and nothing pages.
+
+    NOT a secret, which is the point of choosing SNS over a Slack webhook: this
+    repo is public, and an address already appears here for budget alerts.
+
+    An email subscription requires a confirmation click before it delivers
+    anything. `terraform apply` cannot do that and will report success on an
+    unconfirmed subscription.
+  EOT
+  type        = string
+  default     = "udit.aditya.tech@gmail.com"
+}
+
 variable "kube_prometheus_stack_version" {
   description = <<-EOT
     Chart version for kube-prometheus-stack.
