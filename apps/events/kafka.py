@@ -48,7 +48,7 @@ def _producer_config() -> dict[str, Any]:
     change — only the keys that are set are sent.
     """
     if not settings.KAFKA_BOOTSTRAP_SERVERS:
-        raise KafkaUnavailableError("EVENT_TRANSPORT=kafka but KAFKA_BOOTSTRAP_SERVERS is empty.")
+        raise KafkaUnavailableError("KAFKA_BOOTSTRAP_SERVERS is empty — no broker configured.")
 
     config: dict[str, Any] = {
         "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,

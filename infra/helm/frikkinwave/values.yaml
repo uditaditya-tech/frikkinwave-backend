@@ -113,12 +113,13 @@ consumers:
     reviews: {}
 
 # ---------------------------------------------------------------------------
-# Kafka client (KAFKA.md stage 3).
+# Kafka client.
 #
-# `enabled` only controls whether the CREDENTIALS are mounted. What the app
-# actually does is decided by config.EVENT_TRANSPORT below — mounting a secret
-# changes no behaviour, so these can be rolled out separately and the transport
-# flipped afterwards with a one-line `helm upgrade --set`.
+# `enabled` only controls whether the CREDENTIALS are mounted; mounting a secret
+# changes no behaviour on its own. That separation is why the migration could
+# roll credentials out ahead of the transport switch.
+#
+# Kafka is now the only transport — there is no flag to flip.
 #
 # Both Secrets are mirrored into this namespace by Terraform (infra/eks/kafka.tf):
 # Strimzi creates them in the `kafka` namespace and Secrets cannot cross one.

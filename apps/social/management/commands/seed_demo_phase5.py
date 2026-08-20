@@ -11,11 +11,11 @@ of every app — no cross-app model writes):
     user posts content (→ feed fan-out) and is reviewed by ~2·neighbours others
     (→ a scrolling reviews list). The frontend can log in as ANY ``demo-*`` user.
 
-  - **Real pipelines, run in-process.** Celery is forced **eager** for this
-    process so feed fan-out, follow-backfill, and profile embeddings all complete
-    before the command exits (verifiable immediately) instead of flooding the
-    prod broker with ~1k async tasks. The prod web/worker tasks are separate
-    processes and are unaffected.
+  - **Real pipelines, run in-process.** The outbox relay is forced **inline** for
+    this process (`EVENT_RELAY_INLINE`) so feed fan-out, follow-backfill, and
+    profile embeddings all complete before the command exits (verifiable
+    immediately) instead of flooding the prod broker with ~1k events. The
+    deployed relay and consumers are separate processes and are unaffected.
 
   - **No real emails.** Engagements are created through their real send → accept →
     complete flow, which emits notification tasks. We swap in the **dummy email

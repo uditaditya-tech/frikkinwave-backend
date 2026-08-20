@@ -78,14 +78,13 @@ class TestTheOutboxGuaranteeSurvives:
     """The reason this transport swap is riskier than its diff suggests."""
 
     def test_a_produce_failure_leaves_the_event_unpublished(
-        self, settings: Any, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """
         If a broker failure marked the event published, the event would be lost
         with the database claiming otherwise — exactly the failure the outbox
         exists to prevent.
         """
-        settings.EVENT_TRANSPORT = "kafka"
         monkeypatch.setattr("apps.events.kafka.produce", FakeProducer(fail=True))
         event = publish(topic=TOPIC, payload=PAYLOAD)
 
@@ -97,7 +96,7 @@ class TestTheOutboxGuaranteeSurvives:
         assert event.attempts == 1
 
     def test_a_failed_event_is_retried_and_can_succeed_later(
-        self, settings: Any, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """
         A broker outage must delay delivery, never cancel it.
@@ -108,7 +107,6 @@ class TestTheOutboxGuaranteeSurvives:
         once it is. That spacing is what stops a broker outage from spending
         MAX_ATTEMPTS in ten seconds and stranding the event for good.
         """
-        settings.EVENT_TRANSPORT = "kafka"
         monkeypatch.setattr("apps.events.kafka.produce", FakeProducer(fail=True))
         event = publish(topic=TOPIC, payload=PAYLOAD)
         relay_pending()
@@ -127,10 +125,7 @@ class TestTheOutboxGuaranteeSurvives:
         assert event.published_at is not None
         assert working.produced == [(TOPIC, PAYLOAD)]
 
-    def test_a_published_event_is_not_produced_twice(
-        self, settings: Any, fake_produce: FakeProducer
-    ) -> None:
-        settings.EVENT_TRANSPORT = "kafka"
+    def test_a_published_event_is_not_produced_twice(self, fake_produce: FakeProducer) -> None:
         publish(topic=TOPIC, payload=PAYLOAD)
         relay_pending()
         relay_pending()

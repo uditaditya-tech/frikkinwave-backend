@@ -16,7 +16,8 @@ frikkinwave-backend/
 │   │   ├── admin.py               # inspect pending / failed events
 │   │   ├── apps.py                # name="apps.events", label="events"
 │   │   ├── migrations/
-│   │   │   └── 0001_initial.py    # OutboxEvent (+ partial index on pending rows)
+│   │   │   ├── 0001_initial.py    # OutboxEvent (+ partial index on pending rows)
+│   │   │   └── 0002_outboxevent_next_attempt_at.py  # retry backoff: ~10s -> ~27min
 │   │   ├── models.py              # OutboxEvent (topic, payload, published_at, attempts, last_error)
 │   │   ├── services.py            # publish() (in-transaction) + relay_pending() + _dispatch().
 │   │   │                          # publish() dispatches NOTHING — the relay Deployment does
@@ -101,8 +102,8 @@ frikkinwave-backend/
 │   │       ├── __init__.py
 │   │       ├── conftest.py        # instrument, genre, profile fixtures
 │   │       ├── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
-│   │       ├── test_embedding.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
-│   │       ├── test_embedding_pipeline.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
+│   │       ├── test_embedding_text.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
+│   │       ├── test_embedding_text.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
 │   │       ├── test_search.py     # 7 tests: ranking, limit, available filter, no-embedding exclusion, 400s, no-key (OpenAI mocked)
 │   │       ├── test_compatibility.py  # 8 tests: generate+cache, reverse-pair cache, self/404/no-profile/401/503 (LLM mocked)
 │   │       ├── test_coach.py      # 5 tests: missing-field suggestions, score 100, no-key null tip, no-profile 400, 401 (LLM mocked)
@@ -254,13 +255,16 @@ frikkinwave-backend/
 │   └── dev.txt                    # -r base.txt + tests, lint, types. Never in the image.
 │
 ├── infra/                         # Terraform owns AWS, Helm owns the app — see infra/README.md
-│   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
+│   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert, budget alarm,
+│   │                              #   SNS alert topic + email subscription (NEVER destroy)
 │   ├── eks/                       # APP stack: VPC, EKS, RDS, ECR, IAM/IRSA, LB controller, secrets
 │   │   ├── ebs-csi.tf             # EBS CSI driver + the DEFAULT gp3 StorageClass. Without this the
 │   │   │                          #   cluster cannot provision a volume at all (KAFKA.md stage 0)
 │   │   ├── kafka.tf               # Strimzi operator + the Kafka cluster chart, and the mirror of
 │   │   │                          #   Strimzi's mTLS Secrets into the app namespace
-│   │   └── observability.tf       # kube-prometheus-stack (Prometheus, Grafana, Alertmanager)
+│   │   ├── observability.tf       # kube-prometheus-stack (Prometheus, Grafana, Alertmanager)
+│   │   └── alerting.tf            # Alertmanager's IRSA role + the SNS route. The TOPIC lives in
+│   │                              #   infra/dns/ so its email confirmation survives teardown
 │   ├── helm/frikkinwave/          # Application chart
 │   │   ├── dashboards/            # Grafana JSON, read with .Files.Get (Grafana's {{ }} legend
 │   │   │                          #   syntax would otherwise be executed as a Go template)
@@ -275,7 +279,8 @@ frikkinwave-backend/
 │   │                              #   metrics-config.yaml (JMX → Prometheus rules)
 │   └── scripts/
 │       ├── eks-up.sh              # terraform apply: cluster, RDS, ECR, LB controller, Kafka,
-│       │                          #   Prometheus (~20 min)
+│       │                          #   Prometheus (~20 min). Refuses to run until infra/dns/ is
+│       │                          #   applied, and reports unconfirmed SNS subscriptions
 │       ├── app-deploy.sh          # build+push image → helm upgrade → Route 53 → verify 200,
 │       │                          #   falling back to a public resolver to tell a stale local
 │       │                          #   DNS cache apart from a real outage

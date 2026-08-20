@@ -15,7 +15,7 @@ CI green, dev stack running, zero feature code. Frontend deferred until backend 
 | 0.3 Custom User model (UUIDv7, email login, username slug) + initial migration | ✅ |
 | 0.4 ruff + mypy strict + pre-commit hooks | ✅ |
 | 0.5 GitHub Actions CI (lint, type-check, migrate, pytest) | ✅ |
-| 0.6 docker-compose (Postgres 16 + Redis 7) | ✅ |
+| 0.6 docker-compose (Postgres 16 + Redis 7) — *Redis since removed with Celery* | ✅ |
 | 0.7 drf-spectacular wired — /api/schema/ returns valid OpenAPI doc | ✅ |
 | 0.8 ~~Frontend~~ — out of scope for this repo | N/A |
 | 0.9 ~~Frontend CI~~ — out of scope for this repo | N/A |
@@ -162,7 +162,7 @@ when we pick it up:
 - **ALB / infra.** WebSocket upgrade support + sticky sessions (or a stateless channel
   layer), a separate Deployment + Service with its own Ingress path, and health checks for
   the WS path. Helm chart changes — see infra/README.
-- **Channel layer.** Reuse the in-cluster Redis (`channels_redis`) vs a dedicated instance.
+- **Channel layer.** `channels_redis` needs a Redis, and **there is no longer one** — it went with Celery in KAFKA.md stage 5. This block would have to stand one back up, which is a real cost to weigh rather than a reuse.
   Note the current broker has no persistence — fine for Celery because the outbox makes
   delivery recoverable, but a channel layer losing state is directly user-visible.
 - **Data model.** `Conversation` + `Message` (gating: who may DM whom — any user, or only
@@ -195,41 +195,42 @@ under the existing event backbone, not any product behaviour.
 **Complete.** Verified live: `publish()` → outbox → relay Deployment → Kafka →
 consumer group → handler, with no Celery and no Redis in the cluster.
 
-### Observability (2026-08-20)
+### Observability — complete (2026-08-20 → 2026-08-21)
 
-Strimzi's `kafkaExporter` feeds `kafka_consumergroup_lag` to a
+**Consumer lag.** Strimzi's `kafkaExporter` feeds `kafka_consumergroup_lag` to a
 kube-prometheus-stack installed by Terraform, with a Grafana event-pipeline
 dashboard and four alerts: consumer lag, a group with **zero members** (not the
 same as lag — with nothing joined there may be no lag series at all),
 under-replicated partitions, and anything landing in a `.dlt` topic.
 
-Proved by drill rather than asserted: stalled a consumer group, watched lag reach
-183 and both alerts fire scoped to that group, then the recovered pod consume
-exactly the 200-event backlog and the alerts clear on their own.
-
-The relay now reports its own health too: three gauges on
+**The relay reports its own health.** Three gauges on
 `EVENT_RELAY_METRICS_PORT` behind a PodMonitor, with `OutboxRelayDown`,
 `OutboxNotDraining` and `OutboxEventsExhausted`. This is the failure no
 Kafka-side alert can see — a stalled relay means nothing reaches the broker to be
-lagged on. The `check_outbox_lag` CronJob is retired in favour of the gauge.
+lagged on, so every lag alert stays silent while the pipeline is dead. The
+`check_outbox_lag` CronJob is retired in favour of the gauge; the command remains
+for use by hand, and both read `outbox_lag_snapshot()` so they cannot disagree.
 
-Alerts now have somewhere to go: **SNS → email**, with Alertmanager publishing
-via IRSA (`infra/eks/alerting.tf`). Watchdog is black-holed — it fires constantly
-by design as a dead-man's switch, and supplying an Alertmanager `config` replaces
-the chart's default handling of it.
+**Alerts reach a human.** SNS → email, with Alertmanager publishing via IRSA
+(`infra/eks/alerting.tf`). The topic and subscription live in the **persistent**
+stack, so the confirmation click happens once instead of after every teardown.
+Watchdog and InfoInhibitor are black-holed — Watchdog fires constantly by design
+as a dead-man's switch, and supplying an Alertmanager `config` replaces the
+chart's default handling of it.
 
-**Both gaps are now closed and drilled (2026-08-21).** What was left:
-nothing had run under load — the relay does one DB transaction plus one synchronous Kafka
-flush per event. **Measured: ~87 events/sec**, ~11.5ms per event, with the relay
-throttled on only 0.6% of CFS periods — so the bottleneck is the `acks=all`
-round-trip, not CPU. Consumer lag peaked at 0, so the ceiling is on the producer
-side. Batching the flush is the available optimisation if that is ever not enough.
+**Everything above is drilled, and one drill found a defect.** `OutboxNotDraining`
+could not fire: unspaced retries burned `MAX_ATTEMPTS` in ~10 seconds, so its
+gauge peaked at 10s against a 300s threshold and fell back to zero. Fixed with
+**retry backoff** (`next_attempt_at`, 2s doubling to a 600s cap, ~27 minutes) and
+re-drilled — it now fires at 10m45s with events still recoverable. That also
+repaired the durability claim: a broker outage longer than ten seconds previously
+stranded every pending event permanently.
 
-The alerting is drilled too, and one drill **found a defect**: `OutboxNotDraining`
-could not fire, because unspaced retries exhausted events in ~10s against a 300s
-threshold. Fixed with retry backoff and re-drilled — it now fires at 10 minutes,
-ahead of exhaustion at 27. The SNS subscription survives teardown since the topic
-moved to the persistent stack.
+**Load, measured at last.** ~**87 events/sec** through the relay, ~11.5ms per
+event, with the relay throttled on only 0.6% of CFS periods — so the bottleneck
+is the `acks=all` round-trip, not CPU. Consumer lag peaked at 0, so the ceiling
+is producer-side. Batching the flush is the available optimisation if that is
+ever not enough.
 
 ### Failure behaviour, verified not assumed
 
@@ -237,8 +238,11 @@ moved to the persistent stack.
 |---|---|
 | Relay force-killed, events published with none running | Restarted by k8s, all drained. No intervention. |
 | One broker killed | Transparent — RF 3 / ISR 2 held. |
-| **Two of three brokers killed** (quorum lost) | Produces failed, events stayed pending, relay survived, `check_outbox_lag` fired, everything drained on recovery. |
+| **Two of three brokers killed** (quorum lost) | Produces failed, events stayed pending, relay survived, outbox lag alerted, everything drained on recovery. |
 | Consumer group scaled to zero | Lag and no-members alerts fired, then cleared once restored. |
+| Relay scaled to zero (2026-08-21) | `OutboxRelayDown` fired after ~4m, cleared 37s after restore, unaided. |
+| Publishing broken, relay healthy (2026-08-21) | `OutboxEventsExhausted` fired; `OutboxNotDraining` did not — the defect that produced the backoff fix. |
+| Alert delivered to email (2026-08-21) | SNS: published 2, delivered 1 — the undelivered one was published while the subscription was unconfirmed. |
 
 A total broker outage degrades to **delayed** delivery, never lost delivery —
 true since retries gained backoff (2026-08-21). Before that, `MAX_ATTEMPTS` was

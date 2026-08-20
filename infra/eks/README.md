@@ -483,28 +483,28 @@ aws elbv2 describe-target-health --region ap-south-1 --target-group-arn <arn>
 
 ---
 
-## Phase 3 — observability ✅ PARTLY DONE
+## Phase 3 — observability ✅ DONE (2026-08-20 → 2026-08-21)
 
-**Done (2026-08-20):** kube-prometheus-stack via `observability.tf`, Strimzi's
-`kafkaExporter` for **consumer lag**, broker JMX metrics, PodMonitors, four alert
-rules and a Grafana event-pipeline dashboard. Verified by stalling a consumer
-group and watching both alerts fire, then clear. Detail in `KAFKA.md`.
+kube-prometheus-stack via `observability.tf`, Strimzi's `kafkaExporter` for
+consumer lag, broker JMX metrics, PodMonitors, a Grafana event-pipeline
+dashboard, **seven** alert rules, and Alertmanager routing to SNS → email via
+IRSA (`alerting.tf`). Full detail and every trap in `KAFKA.md`.
 
-**Not done, in the order I would take them:**
+All of it is drilled, not asserted — relay scaled to zero, publishing broken with
+the relay healthy, a consumer group stalled, and an alert followed all the way to
+an inbox. One drill **found a defect**: `OutboxNotDraining` could not fire,
+because unspaced retries exhausted events in ~10s against a 300s threshold. Fixed
+with retry backoff and re-drilled.
 
-- ~~**Alertmanager routes nowhere.**~~ ✅ Closed: SNS → email, via IRSA, in
-  `alerting.tf`. Two traps handled on the way — Watchdog black-holed (supplying
-  a `config` replaces the chart's default, and Watchdog fires constantly by
-  design), and grouping by alertname so the SNS subject is never empty.
-  **Not drilled**, and see the confirmation caveat below.
-- ~~**No alert on the relay itself.**~~ ✅ Closed: the relay loop exports three
-  gauges on `EVENT_RELAY_METRICS_PORT`, scraped by a PodMonitor in the app chart,
-  with `OutboxRelayDown` / `OutboxNotDraining` / `OutboxEventsExhausted`. The
-  `check_outbox_lag` CronJob is retired; the command remains for use by hand.
-  **The drills have not been run** — no live cluster has existed since.
-- **Still no app-level metrics from the web pods.** Django exposes no
-  `/metrics`; only the relay does. Request rate, latency and error rate are
-  invisible to Prometheus and live only in the JSON logs.
+Load is measured too: **~87 events/sec** through the relay, bottlenecked on the
+`acks=all` round-trip rather than CPU (0.6% CFS throttling), with consumer lag
+peaking at 0.
+
+**Still not done, in the order I would take them:**
+
+- **No app-level metrics from the web pods.** Django exposes no `/metrics`; only
+  the relay does. Request rate, latency and error rate are invisible to
+  Prometheus and live only in the JSON logs.
 - External Secrets (syncing the SSM params Phase 2 writes), HPA, and KEDA scaling
   consumer groups on lag — all still untouched.
 
@@ -521,12 +521,13 @@ Ordered by consequence, not effort.
   ten attempts now span 27 minutes and the alert fires at 10. SNS delivery was
   proved end to end (published 2, delivered 1 — the undelivered one was
   published while the subscription was unconfirmed).
-- **Nothing Kafka-related has run under LOAD.** Every verification was
-  hand-published events. Consumer rebalancing during a rollout, backlog drain,
-  partition assignment across replicas and relay restart behaviour are all
-  untested — and this session's surprises all arrived exactly this way.
-- ~~**No alert on the relay.**~~ ✅ Closed in code (gauges + three alerts); the
-  drills that prove it fire still need a live cluster.
+- ~~**Nothing Kafka-related has run under load.**~~ ✅ Measured 2026-08-21:
+  ~87 events/sec through the relay, bottlenecked on the `acks=all` round-trip
+  (0.6% CFS throttling), consumer lag peaking at 0. **Still untested: consumer
+  rebalancing during a rollout, and partition assignment across replicas.** The
+  load test was a burst through a healthy cluster, not a failure under load —
+  and this project's surprises have all arrived exactly that way.
+- ~~**No alert on the relay.**~~ ✅ Closed and drilled — see the first item.
 - ~~**The budget alarm AND the SNS alert topic live in this disposable stack.**~~
   ✅ Both moved to `infra/dns/` (the persistent stack). The budget alarm now
   survives teardown, which is exactly when it matters — orphaned resources bill

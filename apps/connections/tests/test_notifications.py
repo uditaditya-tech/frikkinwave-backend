@@ -1,11 +1,13 @@
 """
 Contact-request email notification tests (Phase 2.2).
 
-Notifications are Celery tasks emitted via transaction.on_commit, so the tests
+Notifications are events consumed by the notifications service. The outbox row
+is written in the request's transaction and relayed post-commit, so the tests
 wrap the request in django_capture_on_commit_callbacks(execute=True) to fire
 those callbacks (the django fixture's outer transaction never commits on its
-own). Celery runs eager in tests, and pytest-django swaps in the locmem email
-backend, so sends land in the `mailoutbox` fixture.
+own). The relay runs in-process under pytest (`EVENT_RELAY_INLINE`), and
+pytest-django swaps in the locmem email backend, so sends land in the
+`mailoutbox` fixture.
 """
 
 from collections.abc import Callable

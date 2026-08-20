@@ -427,7 +427,7 @@ One domain event, written **in the same transaction** as the state change it des
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7. Doubles as the **idempotency key** consumers dedupe on. |
-| `topic` | CharField(100) | e.g. `review.created`, `activity.recorded`. Mapped to a consumer in `events/registry.py`. |
+| `topic` | CharField(100) | e.g. `review.created`, `activity.recorded`. Consumers subscribe per app in `apps/<app>/consumers.py`; there is no central registry — the producer must not know who listens. |
 | `payload` | JSONField | Passed straight through as the handler task's **kwargs**, so keys must match its signature. |
 | `created_at` | DateTimeField | `auto_now_add`. Relay processes oldest first. |
 | `published_at` | DateTimeField | Null until dispatched. |

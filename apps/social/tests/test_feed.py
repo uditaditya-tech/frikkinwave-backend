@@ -2,10 +2,10 @@
 Tests for the activity feed (fan-out-on-write).
 
 Activities are recorded by producing apps' services and fanned out post-commit
-via Celery (eager under pytest). The db fixture's outer transaction never
-commits, so each producing action runs inside
-`django_capture_on_commit_callbacks(execute=True)` to fire the on_commit
-fan-out — mirroring the CLAUDE.md Celery test pattern.
+by the outbox relay, which runs in-process under pytest (`EVENT_RELAY_INLINE`).
+The db fixture's outer transaction never commits, so each producing action runs
+inside `django_capture_on_commit_callbacks(execute=True)` to fire the on_commit
+relay — the pattern described in CLAUDE.md.
 """
 
 from collections.abc import Callable

@@ -55,11 +55,12 @@ readiness probe 400s, and no pod ever becomes Ready.
 {{- end -}}
 
 {{/*
-Kafka client wiring for EVENT_TRANSPORT=kafka.
+Kafka client wiring.
 
-Only the components that RUN THE RELAY get these — the general worker and the
-relay CronJob. Web pods only write the outbox row and nudge Celery, so giving
-them broker credentials would widen the blast radius for no functionality.
+Only the components that TALK TO THE BROKER get these — the relay and the
+consumer Deployments. Web pods only write the outbox row (`publish()` dispatches
+nothing), so giving them broker credentials would widen the blast radius for no
+functionality.
 
 The Secrets are mirrored into this namespace by Terraform: Kubernetes Secrets
 are namespaced and Strimzi creates these in the `kafka` namespace.
@@ -115,8 +116,9 @@ Checksum of the rendered ConfigMap, stamped on every long-lived pod template.
 Without this, changing `config` and running `helm upgrade` reports success and
 changes NOTHING: envFrom values are injected when a container starts, so a
 running pod keeps the old environment forever, and an unchanged pod template
-produces no new ReplicaSet to restart it. That is how EVENT_TRANSPORT=kafka
-appeared to deploy while every worker stayed on Celery.
+produces no new ReplicaSet to restart it. Found the hard way during the Kafka
+migration: a transport switch appeared to deploy while every worker carried on
+using the old one.
 
 CronJobs do not need it — each run creates a fresh pod that reads the current
 ConfigMap.

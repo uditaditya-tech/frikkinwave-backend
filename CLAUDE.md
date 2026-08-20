@@ -125,7 +125,7 @@ permission_classes = [AllowAny]
 ### Requirements
 
 - Python 3.13
-- Docker Desktop (for Postgres + Redis)
+- Docker Desktop (for Postgres)
 - uv (`brew install uv`)
 
 ### Setup
@@ -136,7 +136,7 @@ uv venv --python 3.13
 source .venv/bin/activate
 uv pip install -r requirements/dev.txt   # base.txt + tests/lint/types
 cp .env.example .env        # fill in DJANGO_SECRET_KEY
-docker compose up -d        # starts Postgres + Redis
+docker compose up -d        # starts Postgres (pgvector). No Redis — see below.
 python manage.py migrate
 python manage.py runserver
 ```
@@ -246,7 +246,7 @@ Manual run: `pre-commit run --all-files`
 ## Infrastructure (AWS) — see `infra/README.md`
 
 - **Two Terraform stacks.** `infra/dns/` is PERSISTENT — **never `terraform destroy` it**. It holds everything that must outlive a teardown: the Route 53 zone + ACM cert (destroying them breaks the GoDaddy NS delegation), the budget alarm (which matters most *after* teardown, when orphaned resources bill), and the SNS alert topic (an email subscription needs a confirmation click, so a topic that died each session would need re-confirming each session). `infra/eks/` is the disposable app stack (VPC, EKS, RDS, ECR, load balancer controller, Alertmanager's IRSA role); destroy/apply freely. It discovers the zone, cert and topic via `data` sources — **apply the persistent stack first**, which `eks-up.sh` now checks before doing anything.
-- **DEPLOYMENT STATE: TORN DOWN as of 2026-08-20 — $0/hr.** Verified: no clusters, no RDS, no volumes, no load balancers. AWS holds exactly three things: the snapshot `frikkinwave-prod-final-002d5da3`, the Route 53 zone and the ACM cert. The database is preserved in that snapshot, which the next `eks-up.sh` restores automatically. Verify before assuming anything: `aws eks list-clusters --region ap-south-1`. Bring it back with `./infra/scripts/eks-up.sh && ./infra/scripts/app-deploy.sh` (~20 min, ~$0.26/hr). *(Update this bullet when the state changes.)*
+- **DEPLOYMENT STATE: UP as of 2026-08-21 — ~$0.26/hr.** Verified live: cluster `frikkinwave-prod`, 3 nodes, image `39e25f1`, web ×2 + relay + 4 consumer Deployments, 26 Kafka topics, `https://api.frikkinwave.com/api/health/` → 200. **This is billing.** Tear down with `./infra/scripts/eks-down.sh` when done; it takes a final RDS snapshot (the newest is `frikkinwave-prod-final-002d5da3`) and the next `eks-up.sh` restores it automatically. The budget alarm and the confirmed SNS alert subscription now live in the PERSISTENT stack, so they survive teardown and need no re-confirming. Verify before assuming anything: `aws eks list-clusters --region ap-south-1`. *(Update this bullet when the state changes — it is the first thing read each session, so a stale value here is worse than no value.)*
   - **On a rebuild, `aws eks update-kubeconfig` FIRST.** The stack gets a new API endpoint every time and the local kubeconfig still names the dead one, so `eks-up.sh` fails partway with `no such host` naming the *previous* cluster. Then a plain `terraform apply` converges.
   - **Two things survive `terraform destroy` and accumulate silently.** RDS keeps a manual snapshot per teardown and only the newest is ever restored (seven had piled up by 2026-08-20; six were deleted). And EKS creates `/aws/eks/<cluster>/cluster` with **no expiry** — the cluster goes, the logs stay, and every rebuild adds to the same group. `eks.tf` now declares that log group with 7-day retention *before* the cluster so EKS reuses it instead of making its own; don't remove that `depends_on`, it is what makes the retention apply.
   - **Any controller that recreates PVCs must be uninstalled BEFORE the PVC sweep in `eks-down.sh`.** True of Strimzi and, since Phase 3, of the Prometheus Operator — it owns Prometheus's PVC through a StatefulSet volumeClaimTemplate, so deleting the PVC while it lives just recreates it and the volume outlives `terraform destroy`. Caught by the script's own orphan check, which is why that check exits non-zero and names the resource.
@@ -267,7 +267,7 @@ Manual run: `pre-commit run --all-files`
   - **Any Terraform reference to a Strimzi-generated Secret needs `try(..., "")`.** `terraform destroy` re-evaluates data sources *after* the script has deleted the Kafka cluster, so the lookup returns null and the whole destroy aborts with "Attempt to index null value" — leaving the EKS control plane and RDS billing while the script reports nothing wrong. Verified end to end 2026-08-19: no orphans, snapshot preserved, $0/hr.
   - **Bump `infra/helm/kafka/Chart.yaml`'s version on every chart change.** Terraform's `helm_release` diffs a *local* chart on its version, not its contents — edit a template without bumping and `terraform apply` reports "0 changed" and deploys nothing.
   - **Anything stateful needs the gp3 class, and the probe needs a consumer pod.** Both storage classes are `WaitForFirstConsumer` (EBS volumes are zonal), so a PVC with no pod sits `Pending` even when storage is perfectly healthy — a bare-PVC probe reports failure after a successful fix.
-  - **Redis is PARKED.** It is broker-only today and nothing caches. It is kept for the read-through cache in MICROSERVICES.md §3, not because it is in use. If that work never happens, delete it.
+  - **Redis is GONE.** Removed with Celery in KAFKA.md stage 5 — no ElastiCache, no compose service, no dependency, no reference anywhere in code or infra. If the read-through cache in MICROSERVICES.md §3 is ever built, it starts from nothing rather than from a parked instance.
   - **The database restores itself.** Teardown takes a final snapshot; the next apply discovers the newest one automatically. **Never hand-edit `db_snapshot_identifier` on a running stack** — it is `ForceNew`, so changing it destroys and recreates the database rather than re-restoring it. `lifecycle.ignore_changes` now blocks that; don't remove it.
   - **Bring it up:** `./infra/scripts/eks-up.sh` (~15 min, Terraform: cluster/RDS/ECR/LB controller) then `./infra/scripts/app-deploy.sh` (~5 min, build + push + `helm upgrade` + Route 53 + verify). Terraform owns AWS; Helm owns the app.
   - **Read `infra/eks/README.md` before touching this.** It records four traps already paid for: the EKS-version 6x extended-support billing trap, the access-entry 409, that a **restored snapshot predating a denormalization needs `backfill_profile_ratings` run by hand** (migrate gives you the schema, never the derived data), and negative DNS caching making a healthy deploy look broken.
