@@ -18,8 +18,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.utils import timezone
 
 from apps.events.kafka import KafkaUnavailableError
+from apps.events.models import OutboxEvent
 from apps.events.services import publish, relay_pending
 
 TOPIC = "follow.created"
@@ -97,7 +99,15 @@ class TestTheOutboxGuaranteeSurvives:
     def test_a_failed_event_is_retried_and_can_succeed_later(
         self, settings: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A broker outage must delay delivery, never cancel it."""
+        """
+        A broker outage must delay delivery, never cancel it.
+
+        This used to pass trivially, because a failed event was retried on the
+        very next poll. It now asserts the delay it always claimed to test: the
+        retry is scheduled into the future, skipped until due, and delivered
+        once it is. That spacing is what stops a broker outage from spending
+        MAX_ATTEMPTS in ten seconds and stranding the event for good.
+        """
         settings.EVENT_TRANSPORT = "kafka"
         monkeypatch.setattr("apps.events.kafka.produce", FakeProducer(fail=True))
         event = publish(topic=TOPIC, payload=PAYLOAD)
@@ -105,6 +115,12 @@ class TestTheOutboxGuaranteeSurvives:
 
         working = FakeProducer()
         monkeypatch.setattr("apps.events.kafka.produce", working)
+
+        # Broker is healthy again, but the event is not due yet.
+        assert relay_pending() == 0
+        assert working.produced == []
+
+        OutboxEvent.objects.filter(pk=event.pk).update(next_attempt_at=timezone.now())
         assert relay_pending() == 1
 
         event.refresh_from_db()

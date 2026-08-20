@@ -422,7 +422,7 @@ touches the reviews tables. Eventually consistent by design; rebuild drift with
 ### `events.OutboxEvent` (platform — transactional outbox)
 
 One domain event, written **in the same transaction** as the state change it describes.
-**App:** `apps/events` | **Migration:** `0001_initial`
+**App:** `apps/events` | **Migration:** `0001_initial`, `0002_outboxevent_next_attempt_at`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -433,8 +433,16 @@ One domain event, written **in the same transaction** as the state change it des
 | `published_at` | DateTimeField | Null until dispatched. |
 | `attempts` | PositiveIntegerField | Dispatch attempts; past `MAX_ATTEMPTS` the event is parked, not retried forever. |
 | `last_error` | TextField | Why the last dispatch failed (incl. "no consumer registered"). |
+| `next_attempt_at` | DateTimeField | Earliest retry time. Defaults to now, so a fresh event is due immediately. Set to `now + min(2 × 2^attempts, 600)s` on failure. |
 
-Partial index on `created_at` where `published_at IS NULL` — the relay's only query.
+Partial index on `(next_attempt_at, created_at)` where `published_at IS NULL` — the
+relay's only query, filter first and sort second.
+
+**Why `next_attempt_at` exists.** Retries used to run at the poll interval — one per
+second, unspaced — so `MAX_ATTEMPTS` was spent in about ten seconds and any broker
+outage longer than that stranded every pending event permanently. Measured, not
+inferred: five denied events went from published to exhausted in under 45 seconds on a
+live cluster. Ten attempts now span **27 minutes**.
 Delivery is **at-least-once**, so consumers must be idempotent. Not a domain model: this
 app owns no business concepts, only the durable record that decouples a write from its
 reaction. See MICROSERVICES.md §5.

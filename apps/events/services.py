@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
@@ -26,6 +27,31 @@ MAX_ATTEMPTS = 10
 
 #: Safety valve so one sweep can't hold a transaction open indefinitely.
 DEFAULT_BATCH = 100
+
+#: Retry backoff. Doubling from RETRY_BASE, capped at RETRY_CAP.
+#:
+#: These exist because the relay polls every second and, without spacing,
+#: retried on every pass — burning all MAX_ATTEMPTS in about ten seconds. Any
+#: broker outage longer than that left every pending event exhausted: never
+#: retried again, needing a human. Measured on a live cluster, not inferred.
+#:
+#: 2s doubling to a 600s ceiling spends 10 attempts over ~27 MINUTES, so an
+#: outage has to outlast that before anything strands. Raise RETRY_CAP or
+#: MAX_ATTEMPTS to widen the window; the trade is that a genuinely poisonous
+#: event sits pending longer before it is declared dead.
+RETRY_BASE_SECONDS = 2.0
+RETRY_CAP_SECONDS = 600.0
+
+
+def _retry_delay(attempts: int) -> timedelta:
+    """
+    How long to wait before attempt number `attempts` + 1.
+
+    No jitter: there is exactly one relay replica by design, so there is no herd
+    to disperse. Add it if the relay is ever scaled out.
+    """
+    seconds = min(RETRY_BASE_SECONDS * (2**attempts), RETRY_CAP_SECONDS)
+    return timedelta(seconds=seconds)
 
 
 def publish(
@@ -69,9 +95,18 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
 
     Delivery is **at-least-once**: we mark published only after a successful
     hand-off, so a crash mid-dispatch redelivers. Consumers must be idempotent.
+
+    Events whose `next_attempt_at` is still in the future are skipped — that is
+    the backoff, and it is what lets the relay keep polling every second without
+    spending an event's whole retry budget in ten of them.
     """
+    now = timezone.now()
     pending_ids = list(
-        OutboxEvent.objects.filter(published_at__isnull=True, attempts__lt=MAX_ATTEMPTS)
+        OutboxEvent.objects.filter(
+            published_at__isnull=True,
+            attempts__lt=MAX_ATTEMPTS,
+            next_attempt_at__lte=now,
+        )
         .order_by("created_at")
         .values_list("id", flat=True)[:limit]
     )
@@ -94,10 +129,21 @@ def relay_pending(*, limit: int = DEFAULT_BATCH) -> int:
             try:
                 _dispatch(topic=event.topic, payload=event.payload)
             except Exception as exc:
+                # Schedule the retry BEFORE incrementing, so the delay reflects
+                # how many attempts have already failed.
+                delay = _retry_delay(event.attempts)
                 event.attempts += 1
                 event.last_error = repr(exc)
-                event.save(update_fields=["attempts", "last_error"])
-                logger.exception("event_dispatch_failed", extra={"event_id": str(event.id)})
+                event.next_attempt_at = timezone.now() + delay
+                event.save(update_fields=["attempts", "last_error", "next_attempt_at"])
+                logger.exception(
+                    "event_dispatch_failed",
+                    extra={
+                        "event_id": str(event.id),
+                        "attempts": event.attempts,
+                        "retry_in_seconds": delay.total_seconds(),
+                    },
+                )
                 continue
 
             event.published_at = timezone.now()

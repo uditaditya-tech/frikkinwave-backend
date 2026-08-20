@@ -815,6 +815,22 @@ every other surprise this session arrived.
 
 Drill 3 is the one worth remembering: a **total** broker outage degraded to
 delayed delivery, never lost delivery, and the new alert reported it accurately.
+
+**That drill passed for a narrower reason than it looked.** Retries ran at the
+poll interval — one per second, unspaced — so `MAX_ATTEMPTS` was spent in about
+**ten seconds**. The brokers came back inside that window, so the events drained.
+An outage lasting longer would have exhausted every pending event: never retried
+again, needing a human. "Degrades to delayed delivery" was true of that drill,
+not of the system.
+
+Measured on a live cluster (2026-08-21): five events denied at the broker went
+from published to fully exhausted in **under 45 seconds**, with
+`frikkinwave_outbox_oldest_seconds` peaking at **10.008s** and then falling back
+to zero, while the relay sat there healthy.
+
+Retries are now spaced — 2s doubling to a 600s ceiling — so ten attempts span
+**27 minutes**. The claim above is true of the system now, not just of a
+fast-recovering drill.
 That is the outbox earning its place — and the first time the durability claim
 has been demonstrated rather than asserted.
 
@@ -975,11 +991,26 @@ the same way the heartbeat path is tied.
 management command stays; it is still the fastest way to answer "is the outbox
 draining?" from a shell with no port-forward.
 
-*Drills still to run, on the next live cluster:* kill the relay, confirm
-`OutboxRelayDown` fires within ~3m and clears on restart. Then stall it with
-events pending and confirm `OutboxNotDraining` fires **without** the relay being
-down — the two must be distinguishable, or the alert cannot tell you which thing
-to fix.
+*Drilled on a live cluster, 2026-08-21:*
+
+| drill | result |
+|---|---|
+| Relay scaled to zero | `OutboxRelayDown` **fired** after ~4m, **cleared** 37s after restore, unaided |
+| Publishing broken, relay healthy | `OutboxNotDraining` **never fired**; `OutboxEventsExhausted` did |
+
+The first confirms the `absent()` clause is load-bearing: with zero replicas the
+target disappears, so `up == 0` had nothing to match and the plan's original
+expression would have stayed silent through the failure it was written for.
+
+The second **found a defect in `OutboxNotDraining`**, and it was the reason for
+the backoff change above. Unspaced retries meant `oldest_seconds` peaked at
+10.008s against a 300s threshold and then fell to zero — the alert was
+unfireable. With backoff it climbs while retries are still pending, so it now
+fires at **10 minutes**, ahead of exhaustion at 27. You are warned while it is
+still recoverable, which is the whole point of the pairing.
+
+`OutboxEventsExhausted` — the third gauge, added beyond the handoff plan — was
+the only thing that saw the failure. That is why it exists.
 
 ### 1a — give Alertmanager somewhere to send ✅ (code; drill pending)
 
@@ -1034,9 +1065,22 @@ The IAM role stays in the disposable stack: it is bound to that cluster's OIDC
 provider and genuinely dies with it. Only the thing that must outlive a teardown
 moved.
 
-*Drill to prove it:* stall a consumer group as in the Phase 3 drill and confirm
-the mail actually arrives. An alert firing into a misconfigured receiver looks
-identical to one that works.
+*Drilled on a live cluster, 2026-08-21 — and it caught the exact failure it was
+written for.* Two alerts fired twenty minutes apart on the same topic:
+
+```
+NumberOfMessagesPublished  2      <- Alertmanager published both (IRSA works)
+NumberOfNotificationsFailed 0     <- nothing errored
+NumberOfNotificationsDelivered 1  <- only ONE reached a human
+```
+
+The first was published while the subscription was still
+`PendingConfirmation`: SNS accepted it, found no confirmed subscriber, and
+dropped it. No error in Alertmanager, no failure metric, no signal anywhere. The
+second, after the link was clicked, was delivered.
+
+Publishing succeeding is not delivery. That is the whole argument for moving the
+topic to the persistent stack, observed rather than asserted.
 
 ### 2 — load, once the above is in place
 

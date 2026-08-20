@@ -235,7 +235,12 @@ it delivers nothing while looking healthy.
 | **Two of three brokers killed** (quorum lost) | Produces failed, events stayed pending, relay survived, `check_outbox_lag` fired, everything drained on recovery. |
 | Consumer group scaled to zero | Lag and no-members alerts fired, then cleared once restored. |
 
-A total broker outage degrades to **delayed** delivery, never lost delivery.
+A total broker outage degrades to **delayed** delivery, never lost delivery —
+true since retries gained backoff (2026-08-21). Before that, `MAX_ATTEMPTS` was
+spent in ~10 seconds, so an outage longer than that stranded every pending event
+permanently. The earlier drill only passed because the brokers returned inside
+that window. Ten attempts now span 27 minutes.
+
 That is the outbox earning its place.
 
 ---

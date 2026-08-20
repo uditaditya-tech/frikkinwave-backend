@@ -10,6 +10,7 @@ import uuid
 
 import uuid6
 from django.db import models
+from django.utils import timezone
 
 
 def _new_uuid() -> uuid.UUID:
@@ -36,12 +37,23 @@ class OutboxEvent(models.Model):
     attempts = models.PositiveIntegerField(default=0)
     last_error = models.TextField(blank=True)
 
+    #: Earliest time the relay may try this event again.
+    #:
+    #: Without it, retries ran at the poll interval — one per second, no
+    #: spacing — so MAX_ATTEMPTS was spent in about ten seconds and any broker
+    #: outage longer than that stranded every pending event permanently. Proved
+    #: by drill, not reasoned about: five events denied at the broker were all
+    #: exhausted within 45 seconds while the relay sat there healthy.
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+
     class Meta:
         ordering = ["created_at"]
         indexes = [
-            # The relay's only query: oldest unpublished first.
+            # The relay's only query: unpublished, due now, oldest first.
+            # next_attempt_at leads because it is the filter; created_at follows
+            # because it is the sort.
             models.Index(
-                fields=["created_at"],
+                fields=["next_attempt_at", "created_at"],
                 condition=models.Q(published_at__isnull=True),
                 name="outbox_pending_idx",
             ),

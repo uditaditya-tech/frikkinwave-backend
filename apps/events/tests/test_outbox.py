@@ -5,17 +5,30 @@ The guarantee under test: a domain event and the state change it describes commi
 together, and delivery is at-least-once with no permanent loss.
 """
 
+import pathlib
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 from django.core.management import call_command
 from django.db import transaction
+from django.utils import timezone
 
 from apps.events.models import OutboxEvent
-from apps.events.services import MAX_ATTEMPTS, publish, relay_pending
+from apps.events.services import (
+    MAX_ATTEMPTS,
+    RETRY_BASE_SECONDS,
+    RETRY_CAP_SECONDS,
+    _retry_delay,
+    publish,
+    relay_pending,
+)
 from apps.social.models import Activity, FeedEntry, Follow
 from apps.users.models import User
+
+CHART_VALUES = (
+    pathlib.Path(__file__).resolve().parents[3] / "infra" / "helm" / "frikkinwave" / "values.yaml"
+)
 
 
 def _make_user(suffix: str) -> User:
@@ -135,3 +148,95 @@ class TestConsumerIdempotency:
 
         assert Activity.objects.count() == 1
         assert FeedEntry.objects.count() == 2  # actor + follower, not doubled
+
+
+@pytest.mark.django_db
+class TestRetryBackoff:
+    """
+    Why retries are spaced out.
+
+    They used to run at the poll interval — one per second, unspaced — so
+    MAX_ATTEMPTS was spent in about ten seconds. Any broker outage longer than
+    that left every pending event exhausted: never retried again, needing a
+    human. That was measured on a live cluster, not inferred: five events denied
+    at the broker were all exhausted within 45 seconds while the relay sat there
+    perfectly healthy.
+    """
+
+    def _failing_dispatch(self, monkeypatch: Any) -> None:
+        def boom(**kwargs: Any) -> None:
+            raise RuntimeError("broker unreachable")
+
+        monkeypatch.setattr("apps.events.services._dispatch", boom)
+
+    def test_a_failure_schedules_the_next_attempt_in_the_future(self, monkeypatch: Any) -> None:
+        self._failing_dispatch(monkeypatch)
+        event = OutboxEvent.objects.create(topic="follow.created", payload={})
+
+        relay_pending()
+
+        event.refresh_from_db()
+        assert event.attempts == 1
+        assert event.next_attempt_at > timezone.now()
+
+    def test_an_event_not_yet_due_is_skipped(self, monkeypatch: Any) -> None:
+        """
+        The backoff itself. Without this the relay would retry on every poll and
+        the spacing would be decorative.
+        """
+        self._failing_dispatch(monkeypatch)
+        event = OutboxEvent.objects.create(topic="follow.created", payload={})
+
+        relay_pending()
+        relay_pending()
+        relay_pending()
+
+        event.refresh_from_db()
+        assert event.attempts == 1, "a not-yet-due event must not be retried"
+
+    def test_a_due_event_is_retried(self, monkeypatch: Any) -> None:
+        self._failing_dispatch(monkeypatch)
+        event = OutboxEvent.objects.create(topic="follow.created", payload={})
+        relay_pending()
+
+        OutboxEvent.objects.filter(pk=event.pk).update(next_attempt_at=timezone.now())
+        relay_pending()
+
+        event.refresh_from_db()
+        assert event.attempts == 2
+
+    def test_the_delay_grows_and_is_capped(self) -> None:
+        delays = [_retry_delay(n).total_seconds() for n in range(MAX_ATTEMPTS)]
+
+        assert delays[0] == RETRY_BASE_SECONDS
+        assert delays == sorted(delays), "backoff must be monotonic"
+        assert max(delays) == RETRY_CAP_SECONDS, "and bounded"
+
+    def test_the_retry_window_outlasts_a_realistic_outage(self) -> None:
+        """
+        The number that matters, pinned so it cannot regress quietly.
+
+        This is the outage an event survives before it exhausts and needs a
+        human. It was TEN SECONDS. If a change drops it back near that, the
+        durability claim in KAFKA.md becomes false again.
+        """
+        window = sum(_retry_delay(n).total_seconds() for n in range(MAX_ATTEMPTS))
+
+        assert window > 20 * 60, f"retry window is only {window / 60:.1f} minutes"
+
+    def test_backoff_warns_before_it_strands(self) -> None:
+        """
+        Ordering property, not a coincidence: OutboxNotDraining fires at 300s
+        (+5m `for`), which must land BEFORE events exhaust — otherwise the alert
+        arrives to tell you about something already unrecoverable.
+        """
+        import yaml
+
+        values = yaml.safe_load(CHART_VALUES.read_text())
+        alert_at = values["monitoring"]["outboxMaxAgeSeconds"] + 5 * 60
+        window = sum(_retry_delay(n).total_seconds() for n in range(MAX_ATTEMPTS))
+
+        assert alert_at < window, (
+            f"alert fires at {alert_at}s but events strand at {window}s — "
+            "you would be told only after it was too late"
+        )

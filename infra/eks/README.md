@@ -514,7 +514,14 @@ group and watching both alerts fire, then clear. Detail in `KAFKA.md`.
 
 Ordered by consequence, not effort.
 
-- **Nothing Kafka-related has run under load or failure.** Every verification was
+- **The alerting is now drilled (2026-08-21), and one drill found a defect.**
+  `OutboxRelayDown` fired and cleared unaided. `OutboxNotDraining` did NOT fire
+  when publishing was broken — unspaced retries exhausted the events in ~10s, so
+  its gauge peaked at 10s against a 300s threshold. Fixed with retry backoff;
+  ten attempts now span 27 minutes and the alert fires at 10. SNS delivery was
+  proved end to end (published 2, delivered 1 — the undelivered one was
+  published while the subscription was unconfirmed).
+- **Nothing Kafka-related has run under LOAD.** Every verification was
   hand-published events. Consumer rebalancing during a rollout, backlog drain,
   partition assignment across replicas and relay restart behaviour are all
   untested — and this session's surprises all arrived exactly this way.
