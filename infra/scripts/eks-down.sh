@@ -83,6 +83,18 @@ if aws eks update-kubeconfig --name "${CLUSTER}" --region "${REGION}" >/dev/null
     done
   fi
 
+  # Same trap as Strimzi above, and it caught us a second time on 2026-08-20.
+  # The Prometheus Operator owns Prometheus's PVC through a StatefulSet
+  # volumeClaimTemplate, so deleting the PVC while the operator lives just
+  # recreates it — the replacement EBS volume then outlives `terraform destroy`
+  # and bills quietly. Remove the operator before the sweep, exactly as with
+  # Strimzi. A 20 GiB gp3 volume is only ~$1.80/month, which is precisely why it
+  # would go unnoticed.
+  if kubectl get crd prometheuses.monitoring.coreos.com >/dev/null 2>&1; then
+    echo "==> Removing the Prometheus stack (its operator recreates PVCs)"
+    helm uninstall kube-prometheus-stack -n observability --wait --timeout 5m 2>/dev/null || true
+  fi
+
   echo "==> Removing PersistentVolumeClaims (they own EBS volumes)"
   kubectl delete pvc --all --all-namespaces --ignore-not-found --timeout=120s || true
   echo "    Waiting for AWS to release them..."

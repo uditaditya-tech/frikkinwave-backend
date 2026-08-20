@@ -866,6 +866,19 @@ curling them at Prometheus and all four passed. Shell quoting meant I tested
 `\\.` while the rule contained `\.` — a different string. The webhook caught what
 my own check had waved through.
 
+### The teardown needed the same fix twice
+
+Adding Prometheus reintroduced a bug already fixed for Strimzi. The Prometheus
+Operator owns Prometheus's PVC through a StatefulSet volumeClaimTemplate, so
+`eks-down.sh` deleting PVCs while the operator was still running simply
+recreated one — and a 20 GiB gp3 volume survived `terraform destroy`, billing
+about $1.80/month. Small enough to never be noticed, which is the point.
+
+The script's orphan check caught it, exited non-zero and named the volume. The
+fix is the same shape as the Strimzi one: uninstall the operator before the
+sweep. The general rule, now recorded in `CLAUDE.md`: **anything that reconciles
+PVCs has to go before the PVC sweep.**
+
 ### What is still not covered
 
 - **Alertmanager routes nowhere.** Alerts evaluate and are visible in Prometheus;
