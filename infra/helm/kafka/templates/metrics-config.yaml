@@ -1,0 +1,48 @@
+{{- if .Values.metrics.enabled }}
+{{- /*
+  JMX -> Prometheus rules for the brokers.
+
+  A deliberately small subset of Strimzi's published example. The full file is
+  several hundred rules and produces a very high-cardinality series set on a
+  three-broker cluster; these are the ones that answer an actual question during
+  an incident.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.clusterName }}-metrics
+  namespace: {{ .Release.Namespace }}
+data:
+  broker.yml: |
+    lowercaseOutputName: true
+    rules:
+      # Under-replicated / offline partitions. The durability guarantee
+      # (RF 3 / min.insync.replicas 2) degrading, before writes start failing.
+      - pattern: kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|UnderMinIsrPartitionCount)><>Value
+        name: kafka_server_replicamanager_$1
+        type: GAUGE
+      - pattern: kafka.controller<type=KafkaController, name=(OfflinePartitionsCount|ActiveControllerCount)><>Value
+        name: kafka_controller_$1
+        type: GAUGE
+      # ISR churn — a broker falling in and out of the in-sync set, which
+      # precedes the counts above going bad.
+      - pattern: kafka.server<type=ReplicaManager, name=IsrShrinksPerSec><>Count
+        name: kafka_server_isr_shrinks_total
+        type: COUNTER
+      - pattern: kafka.server<type=ReplicaManager, name=IsrExpandsPerSec><>Count
+        name: kafka_server_isr_expands_total
+        type: COUNTER
+      # Throughput per topic — what "the backlog is draining" looks like.
+      - pattern: kafka.server<type=BrokerTopicMetrics, name=(BytesInPerSec|BytesOutPerSec|MessagesInPerSec), topic=(.+)><>Count
+        name: kafka_server_brokertopicmetrics_$1_total
+        labels:
+          topic: "$2"
+        type: COUNTER
+      # Request latency, so a slow broker is distinguishable from a stuck one.
+      - pattern: kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer|FetchFollower)><>(\d+)thPercentile
+        name: kafka_network_request_total_time_ms
+        labels:
+          request: "$1"
+          quantile: "0.$2"
+        type: GAUGE
+{{- end }}

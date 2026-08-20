@@ -1,0 +1,240 @@
+{
+  "title": "frikkinwave \u2014 event pipeline",
+  "uid": "frikkinwave-events",
+  "tags": [
+    "frikkinwave",
+    "kafka"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Consumer lag by group",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (consumergroup) (kafka_consumergroup_lag)",
+          "legendFormat": "{{consumergroup}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "THE metric this dashboard exists for. Everything the outbox health checks cover sits between publish() and the broker; this is the other half. A message that arrived and was never consumed leaves the outbox clean, so the producer side reports success while the work never happens."
+    },
+    {
+      "id": 2,
+      "title": "Consumer group members",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "kafka_consumergroup_members",
+          "legendFormat": "{{consumergroup}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Zero members is NOT the same as lag. With nothing joined there may be no lag series at all, so a Deployment can run, consume nothing, and leave the lag panel empty and reassuring."
+    },
+    {
+      "id": 3,
+      "title": "Messages in, by topic",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesinpersec_total{topic!~\".*\\.dlt\"}[5m]))",
+          "legendFormat": "{{topic}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "Produce rate per topic. Dead-letter topics excluded \u2014 they have their own panel."
+    },
+    {
+      "id": 4,
+      "title": "Dead-lettered messages",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (topic) (increase(kafka_server_brokertopicmetrics_messagesinpersec_total{topic=~\".*\\.dlt\"}[15m]))",
+          "legendFormat": "{{topic}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Dead-lettering is DESIGNED to be quiet: the consumer commits and moves on so the partition never stalls. That silence is the point, and it is why this panel is the only thing that tells you it happened."
+    },
+    {
+      "id": 5,
+      "title": "Under-replicated partitions",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum(kafka_server_replicamanager_underreplicatedpartitions)",
+          "legendFormat": "under-replicated",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(kafka_server_replicamanager_underminisrpartitioncount)",
+          "legendFormat": "below min ISR",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "RF 3 / min.insync.replicas 2 is the durability story. Below min ISR, producers start failing \u2014 this goes non-zero first."
+    },
+    {
+      "id": 6,
+      "title": "ISR churn",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(kafka_server_isr_shrinks_total[5m]))",
+          "legendFormat": "shrinks/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(kafka_server_isr_expands_total[5m]))",
+          "legendFormat": "expands/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "A broker flapping in and out of the in-sync set, before the counts above go bad."
+    },
+    {
+      "id": 7,
+      "title": "Event pipeline pods up",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (pod) (up{namespace=~\"frikkinwave|kafka\"})",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "description": "Relay down means NOTHING is delivered \u2014 it is a single replica by design."
+    }
+  ]
+}

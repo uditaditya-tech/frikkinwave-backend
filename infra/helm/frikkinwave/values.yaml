@@ -144,6 +144,10 @@ outboxLagCheck:
   schedule: "*/5 * * * *"
   maxSeconds: 300
 
+# Grafana dashboard, provisioned by the sidecar from this ConfigMap.
+grafanaDashboard:
+  enabled: true
+
 ingress:
   enabled: true
   host: api.frikkinwave.com

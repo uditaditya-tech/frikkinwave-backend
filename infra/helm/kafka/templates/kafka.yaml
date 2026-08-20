@@ -90,6 +90,16 @@ spec:
               matchLabels:
                 kubernetes.io/metadata.name: {{ . }}
 {{- end }}
+{{- if .Values.metrics.enabled }}
+    # Broker JMX metrics. Answers "why is lag climbing" — the exporter below
+    # only answers "it is".
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: {{ .Values.clusterName }}-metrics
+          key: broker.yml
+{{- end }}
     # DENY BY DEFAULT. An authenticated client with no ACLs can do nothing.
     # Strimzi adds its own operators to super.users, so the Topic Operator keeps
     # working — it talks over the internal 9091 listener regardless.
@@ -106,6 +116,15 @@ spec:
       offsets.topic.replication.factor: {{ .Values.durability.replicationFactor }}
       transaction.state.log.replication.factor: {{ .Values.durability.replicationFactor }}
       transaction.state.log.min.isr: {{ .Values.durability.minInsyncReplicas }}
+{{- if .Values.metrics.enabled }}
+  # Consumer lag. Strimzi runs this as its own Deployment and it is the ONLY
+  # source of kafka_consumergroup_lag here.
+  kafkaExporter:
+    groupRegex: {{ .Values.metrics.groupRegex | quote }}
+    topicRegex: {{ .Values.metrics.topicRegex | quote }}
+    resources:
+{{ toYaml .Values.metrics.exporterResources | indent 6 }}
+{{- end }}
 {{- if .Values.entityOperator.enabled }}
   entityOperator:
     topicOperator:

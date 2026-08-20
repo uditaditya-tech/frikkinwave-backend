@@ -411,3 +411,95 @@ class TestTopicsMatchWhatIsPublished:
             assert f"{op}]" not in body and f"{op}," not in body, (
                 f"The app user is granted {op}, which it must not have."
             )
+
+
+class TestObservability:
+    """
+    Phase 3. The gap these close is the one the stage-5 health signals cannot
+    see: everything `check_outbox_lag` covers sits between `publish()` and the
+    broker. A message that arrived and was never consumed leaves the outbox
+    perfectly clean, so the producer side reports success while the work never
+    happens.
+    """
+
+    def test_the_kafka_exporter_is_enabled(self) -> None:
+        """kafka_consumergroup_lag has exactly one source here."""
+        assert _values()["metrics"]["enabled"] is True
+        assert "kafkaExporter:" in KAFKA_TEMPLATE.read_text()
+
+    def test_consumer_lag_is_alerted_on(self) -> None:
+        rules = (KAFKA_CHART / "templates" / "monitoring.yaml").read_text()
+        assert "kafka_consumergroup_lag" in rules
+
+    def test_an_empty_consumer_group_is_alerted_on_separately(self) -> None:
+        """
+        Zero members is NOT low lag. With nothing joined there may be no lag
+        series at all, so the lag alert stays silent while a Deployment runs and
+        consumes nothing — an ACL problem, a bad certificate, a crash loop.
+        """
+        rules = (KAFKA_CHART / "templates" / "monitoring.yaml").read_text()
+        assert "kafka_consumergroup_members == 0" in rules
+
+    def test_dead_lettering_is_alerted_on(self) -> None:
+        """
+        Dead-lettering is designed to be quiet — the consumer commits and moves
+        on so the partition never stalls. Nothing else reports it, which makes
+        this alert the only signal that a message was given up on.
+        """
+        rules = (KAFKA_CHART / "templates" / "monitoring.yaml").read_text()
+        assert "KafkaDeadLetterReceived" in rules
+        assert _values()["dltSuffix"] in rules
+
+    def test_the_broker_monitor_does_not_also_match_the_exporter(self) -> None:
+        """
+        The exporter pod carries `strimzi.io/kind: Kafka` too, so selecting on
+        that scrapes it under BOTH jobs. Every consumer-lag series is then
+        duplicated and `sum by (consumergroup)` returns double the real lag —
+        so the alert fires at half its configured threshold, which looks like a
+        tuning problem rather than a selector bug. Select on component-type.
+        """
+        # Comment lines stripped: the explanation of this bug necessarily
+        # contains the very string being asserted against.
+        rules = "\n".join(
+            line
+            for line in (KAFKA_CHART / "templates" / "monitoring.yaml").read_text().splitlines()
+            if not line.strip().startswith("#")
+        )
+        assert "strimzi.io/kind" not in rules, (
+            "A PodMonitor selecting strimzi.io/kind matches the exporter as well "
+            "as the brokers, duplicating every metric."
+        )
+        assert "strimzi.io/component-type: kafka" in rules
+
+    def test_the_exporter_only_scrapes_our_own_groups(self) -> None:
+        """
+        Left at `.*` the exporter also reports the throwaway console-consumer
+        groups a human creates while debugging, which then age into stale series
+        and dirty the lag alert.
+        """
+        assert _values()["metrics"]["groupRegex"].startswith(_values()["consumerGroupPrefix"])
+
+    def test_prometheus_uses_the_storage_class_that_actually_exists(self) -> None:
+        """
+        Prometheus needs a PVC. Naming a class Terraform does not create leaves
+        it Pending forever — the exact failure stage 0 existed to fix, and one
+        that would land here silently.
+        """
+        tf = _terraform()
+        assert "kubernetes_storage_class_v1.gp3.metadata[0].name" in tf, (
+            "Prometheus must reference the gp3 class Terraform creates, not a literal."
+        )
+
+    def test_the_grafana_dashboard_is_valid_json(self) -> None:
+        """
+        It ships as a ConfigMap read by a sidecar. Malformed JSON is not a
+        deploy failure — Grafana simply skips it and the dashboard is missing,
+        with the error buried in sidecar logs nobody reads.
+        """
+        import json
+
+        path = REPO_ROOT / "infra" / "helm" / "frikkinwave" / "dashboards" / "event-pipeline.json"
+        dashboard = json.loads(path.read_text())
+        assert dashboard["panels"], "dashboard has no panels"
+        exprs = " ".join(t["expr"] for p in dashboard["panels"] for t in p.get("targets", []))
+        assert "kafka_consumergroup_lag" in exprs

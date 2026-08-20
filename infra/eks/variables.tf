@@ -44,23 +44,32 @@ variable "node_instance_types" {
     Candidate instance types, in preference order. ARM64/Graviton to match the
     app image (built linux/arm64) and cheaper than x86.
 
-    A LIST, not a single type, deliberately. A one-type node group is stranded
-    when that type is exhausted in an AZ — which is exactly what happened here:
-    t4g.small was unavailable in ap-south-1a, so the ASG could not balance and
-    silently left every node in one zone. Extra types give it a fallback.
+    A LIST because a single type is stranded when that type is short. But the
+    list only helps if the entries are in DIFFERENT CAPACITY POOLS, and the
+    previous list — ["t4g.small", "t4g.medium"], later ["t4g.medium",
+    "t4g.large"] — was two sizes of one family.
 
-    t4g.medium = 2 vCPU / 4 GB, with t4g.large (8 GB) as the fallback. This was
-    ["t4g.small", "t4g.medium"] until Kafka: three brokers want ~1 GB of heap
-    each plus page cache, and 2 GB nodes already running the web, relay and
-    consumer-group pods have nowhere to put them.
+    That failed on 2026-08-20, when t4g was short across all three ap-south-1
+    AZs: 40 consecutive launch attempts, every one t4g.medium, and the node group
+    sat in CREATING for 20+ minutes with an EKS control plane billing behind it.
+    Adding m7g.large — a different family, not just a different size — brought
+    the cluster up immediately, and it is what the ASG actually chose for two of
+    the three nodes.
 
-    Memory is not the only ceiling. Pods-per-node is capped by ENI capacity, not
-    RAM: t4g.small allows 11, t4g.medium 17. At 8 app pods plus DaemonSets on
-    two nodes we were close enough to 11 that adding brokers would have hit the
-    pod cap even if the memory had fit.
+    Diagnose a stuck node group with the ASG's activity log, which names both the
+    type and the AZ:
+
+        aws autoscaling describe-scaling-activities \
+          --auto-scaling-group-name <asg> --region ap-south-1 \
+          --query 'Activities[].StatusMessage'
+
+    Prices (ap-south-1): t4g.large $0.0448/hr, m7g.large $0.0808/hr,
+    t4g.medium $0.0224/hr. Three large nodes cost roughly $0.13-0.24/hr against
+    $0.067 for three mediums — the large sizes lead because Phase 3's Prometheus
+    wants the headroom, not only for capacity reasons.
   EOT
   type        = list(string)
-  default     = ["t4g.medium", "t4g.large"]
+  default     = ["t4g.large", "m7g.large", "t4g.medium"]
 }
 
 variable "node_desired_size" {
@@ -297,4 +306,26 @@ variable "kafka_app_user" {
   EOT
   type        = string
   default     = "frikkinwave-app"
+}
+
+# ---------------------------------------------------------------------------
+# Observability (Phase 3)
+# ---------------------------------------------------------------------------
+
+variable "observability_namespace" {
+  description = "Namespace for Prometheus, Grafana and Alertmanager."
+  type        = string
+  default     = "observability"
+}
+
+variable "kube_prometheus_stack_version" {
+  description = <<-EOT
+    Chart version for kube-prometheus-stack.
+
+    Note it bundles the Prometheus Operator's CRDs. Upgrading a major version
+    can require applying CRDs by hand first — helm does not upgrade CRDs it
+    installed as part of a chart. Read the chart's release notes before bumping.
+  EOT
+  type        = string
+  default     = "88.5.0"
 }

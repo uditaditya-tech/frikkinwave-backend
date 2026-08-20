@@ -1,0 +1,124 @@
+{{- if .Values.metrics.enabled }}
+{{- /*
+  Scrape targets and alert rules for the event pipeline.
+
+  These live in the Kafka chart rather than with Prometheus deliberately: they
+  describe THIS cluster's topics and groups, and they should be created and
+  destroyed with it. A PodMonitor pointing at a Kafka that no longer exists is a
+  permanently failing target, which is how people learn to ignore red.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ .Values.clusterName }}-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: frikkinwave-events
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/component-type: kafka-exporter
+      strimzi.io/cluster: {{ .Values.clusterName }}
+  podMetricsEndpoints:
+    - path: /metrics
+      port: tcp-prometheus
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ .Values.clusterName }}-brokers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: frikkinwave-events
+spec:
+  selector:
+    matchLabels:
+      # component-type, NOT strimzi.io/kind. The exporter pod also carries
+      # `strimzi.io/kind: Kafka`, so selecting on that scrapes it a second time
+      # under this job — every consumer-lag series duplicated, and
+      # `sum by (consumergroup) (kafka_consumergroup_lag)` returning DOUBLE the
+      # real lag. The alert would then fire at half its configured threshold,
+      # which reads as a tuning problem rather than a selector bug.
+      strimzi.io/component-type: kafka
+  podMetricsEndpoints:
+    - path: /metrics
+      port: tcp-prometheus
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Values.clusterName }}-events
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: frikkinwave-events
+spec:
+  groups:
+    - name: frikkinwave-events
+      rules:
+        # ── THE blind spot ────────────────────────────────────────────────
+        # Everything the stage-5 health checks cover sits between publish() and
+        # the broker. This is the other half: a message that arrived and was
+        # never consumed leaves the outbox clean, so nothing on the producer
+        # side notices the work is not happening.
+        - alert: KafkaConsumerGroupLagHigh
+          expr: sum by (consumergroup, topic) (kafka_consumergroup_lag) > {{ .Values.alerts.lagThreshold }}
+          for: {{ .Values.alerts.lagFor }}
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ `{{ $labels.consumergroup }}` }} is behind on {{ `{{ $labels.topic }}` }}"
+            description: >-
+              {{ `{{ $value | printf "%.0f" }}` }} messages unconsumed. The producer
+              side is healthy by definition here — check the consumer Deployment's
+              logs for handler failures, and its dead-letter topic.
+
+        # A group with no members is NOT the same as lag: with nothing joined
+        # there may be no lag series at all, so the alert above can stay silent
+        # while a Deployment is running and consuming nothing.
+        - alert: KafkaConsumerGroupHasNoMembers
+          expr: kafka_consumergroup_members == 0
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ `{{ $labels.consumergroup }}` }} has no members"
+            description: >-
+              The Deployment may be running while failing to join — an ACL on the
+              group prefix, a certificate problem, or a crash loop. Lag alone
+              will not show this.
+
+        # ── Durability degrading, before writes start failing ─────────────
+        - alert: KafkaUnderReplicatedPartitions
+          expr: sum(kafka_server_replicamanager_underreplicatedpartitions) > 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "Under-replicated partitions on {{ .Values.clusterName }}"
+            description: >-
+              RF {{ .Values.durability.replicationFactor }} /
+              min.insync.replicas {{ .Values.durability.minInsyncReplicas }} is the
+              whole durability story. Below min ISR, producers start failing —
+              this fires first.
+
+        # ── Dead-lettering is designed to be quiet ────────────────────────
+        # The consumer commits and moves on so the partition never stalls, which
+        # means nothing reports it. This is the only thing that does.
+        # NOTE the DOUBLE backslash below. PromQL double-quoted strings process
+        # Go escape sequences, so a single `\.` is not "escaped dot" — it is an
+        # invalid escape, and the whole rule is rejected:
+        #   parse error: unknown escape sequence U+002E '.'
+        # `\\.` yields the string `\.`, which is the regex for a literal dot.
+        # The Prometheus Operator's admission webhook catches this at apply time;
+        # a rule file loaded some other way would simply fail to load.
+        - alert: KafkaDeadLetterReceived
+          expr: |
+            sum by (topic) (
+              increase(kafka_server_brokertopicmetrics_messagesinpersec_total{topic=~".*\\{{ .Values.dltSuffix }}"}[15m])
+            ) > 0
+          for: 1m
+          labels: { severity: warning }
+          annotations:
+            summary: "Messages dead-lettered to {{ `{{ $labels.topic }}` }}"
+            description: >-
+              A consumer gave up on a message and committed past it. Read the
+              topic — each record carries the original topic, consumer group,
+              error and raw payload.
+{{- end }}

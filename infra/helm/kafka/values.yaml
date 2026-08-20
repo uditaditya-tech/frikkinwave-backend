@@ -166,6 +166,46 @@ topology:
   # degrades to running rather than not running when it cannot.
   zoneSpread: ScheduleAnyway
 
+# ---------------------------------------------------------------------------
+# Metrics (Phase 3).
+#
+# Two different things, and the distinction matters:
+#
+#   kafkaExporter  — CONSUMER LAG. Reads consumer group offsets and compares
+#                    them to log end offsets. This is the blind spot the health
+#                    signals added in stage 5 cannot see: a message that reached
+#                    Kafka and was never consumed leaves the outbox perfectly
+#                    clean, so nothing on the producer side notices.
+#
+#   brokerMetrics  — JMX from the brokers themselves: under-replicated
+#                    partitions, ISR churn, request rates. Does not show lag,
+#                    but tells you WHY lag is climbing.
+# ---------------------------------------------------------------------------
+metrics:
+  enabled: true
+  # Scrape only our own groups. The exporter reports every group on the
+  # cluster otherwise, including the throwaway console-consumer groups a human
+  # creates while debugging — which then age into stale series.
+  groupRegex: "frikkinwave.*"
+  topicRegex: ".*"
+  # Alert thresholds. Deliberately generous: the relay polls every second and
+  # consumers commit per message, so steady-state lag is single digits. These
+  # numbers mean "something is wrong", not "we are busy".
+  exporterResources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+alerts:
+  # Messages behind before it counts as a problem.
+  lagThreshold: 100
+  # ...sustained for this long. Short enough to catch a stuck consumer, long
+  # enough that a burst of traffic does not page anyone.
+  lagFor: 10m
+
 # The Topic Operator reconciles KafkaTopic resources into real topics, so a
 # topic is a manifest under review rather than a shell command someone ran once.
 # Stage 4 declares its topics this way.

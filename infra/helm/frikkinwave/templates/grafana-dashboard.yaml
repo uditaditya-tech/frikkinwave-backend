@@ -1,0 +1,27 @@
+{{- if .Values.grafanaDashboard.enabled }}
+{{- /*
+  The event-pipeline dashboard, shipped as a ConfigMap.
+
+  Read with .Files.Get rather than inlined, for a specific reason: Grafana's
+  legend syntax is {{ "{{field}}" }}, which Helm would try to execute as a Go
+  template and fail on. .Files.Get does not template its content. It also keeps
+  dashboards/event-pipeline.json valid, editable JSON that can be imported into
+  Grafana directly.
+
+  Lives in the app chart, next to the thing it describes, rather than inside the
+  Prometheus release — Grafana's sidecar picks up any ConfigMap carrying the
+  grafana_dashboard label from any namespace. That also keeps Grafana stateless:
+  no PVC, nothing to back up, losing the pod loses nothing.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-event-pipeline-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  event-pipeline.json: |
+{{ .Files.Get "dashboards/event-pipeline.json" | indent 4 }}
+{{- end }}

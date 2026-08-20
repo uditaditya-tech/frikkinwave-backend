@@ -817,6 +817,80 @@ completely untested, though it remains unexercised under load.
 
 ---
 
+## Phase 3 — consumer lag ✅ DONE (2026-08-20)
+
+The blind spot the stage-5 signals could not see. `check_outbox_lag` covers
+everything between `publish()` and the broker; **a message that arrived and was
+never consumed leaves the outbox perfectly clean**, so the producer side reports
+success while the work never happens.
+
+Closed with Strimzi's `kafkaExporter` (one block on the Kafka CR — the only
+source of `kafka_consumergroup_lag`), broker JMX metrics, and
+kube-prometheus-stack installed by Terraform.
+
+### The drill
+
+| step | result |
+|---|---|
+| Scaled `consume-social` to 0, published **200** events | `kafka_consumergroup_lag{consumergroup="frikkinwave.social"}` climbed to 183; `members` went to 0 while the other three stayed at 1 |
+| Waited out `for: 10m` | **`KafkaConsumerGroupLagHigh` and `KafkaConsumerGroupHasNoMembers` both fired**, scoped to exactly the stalled group |
+| Scaled back to 1 | Lag drained to 0; the recovered pod consumed **exactly 200** — the full backlog, nothing lost |
+| Waited | Both alerts **cleared on their own**. An alert that never clears is as useless as one that never fires. |
+
+### Two bugs the deployment found
+
+Neither would have been caught by review, and one was caught by a machine rather
+than by me.
+
+**A PodMonitor selecting `strimzi.io/kind: Kafka` also matches the exporter.**
+The exporter pod carries that label too, so every consumer-lag series was
+scraped under *both* jobs — `sum by (consumergroup) (kafka_consumergroup_lag)`
+returned **double** the real lag, and the alert would have fired at half its
+configured threshold. That reads as a tuning problem, not a selector bug. Select
+on `strimzi.io/component-type` instead.
+
+**PromQL rejects `\.` inside a double-quoted string.** The dead-letter rule used
+`topic=~".*\.dlt"`, and Go-style escape processing makes that an *invalid escape*
+rather than an escaped dot:
+
+```
+parse error: unknown escape sequence U+002E '.'
+```
+
+The Prometheus Operator's **admission webhook refused the whole PrometheusRule**
+at apply time, which is the good outcome — a rule file loaded any other way would
+simply have failed to load, silently. It needs `\\.`.
+
+Worth recording how I nearly missed it: I "validated" the four expressions by
+curling them at Prometheus and all four passed. Shell quoting meant I tested
+`\\.` while the rule contained `\.` — a different string. The webhook caught what
+my own check had waved through.
+
+### What is still not covered
+
+- **Alertmanager routes nowhere.** Alerts evaluate and are visible in Prometheus;
+  nothing pages. That is the difference between "silent" and "not paging", and it
+  is a deliberate stopping point — there is no destination configured yet.
+- **No app-level metrics.** Outbox lag is still a CronJob rather than a gauge, and
+  Django exposes no `/metrics`. A separate increment.
+- **Still nothing under load.** 200 events is a drill, not a load test.
+
+### Reaching it
+
+```bash
+kubectl port-forward -n observability svc/kube-prometheus-stack-grafana 3000:80
+# admin / kubectl get secret kube-prometheus-stack-grafana -n observability \
+#           -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+Dashboard **"frikkinwave — event pipeline"** (7 panels) is provisioned from a
+ConfigMap in the app chart, so Grafana keeps no state and needs no PVC.
+ClusterIP only — Grafana ships with a default admin password and this repo is
+public; an Ingress here would be the AKHQ mistake again with a login screen
+instead of none.
+
+---
+
 ## Cost
 
 Prices from the AWS Pricing API, ap-south-1, 2026-08-19.
