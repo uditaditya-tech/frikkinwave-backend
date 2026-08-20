@@ -483,19 +483,27 @@ aws elbv2 describe-target-health --region ap-south-1 --target-group-arn <arn>
 
 ---
 
-## Phase 3 — next
+## Phase 3 — observability ✅ PARTLY DONE
 
-IRSA + External Secrets (syncs the SSM params written in Phase 2) + HPA →
-Helm/ArgoCD → Prometheus/Grafana + KEDA scaling the consumer groups on **consumer
-lag** (the meaningful signal now — queue depth is gone with Celery).
+**Done (2026-08-20):** kube-prometheus-stack via `observability.tf`, Strimzi's
+`kafkaExporter` for **consumer lag**, broker JMX metrics, PodMonitors, four alert
+rules and a Grafana event-pipeline dashboard. Verified by stalling a consumer
+group and watching both alerts fire, then clear. Detail in `KAFKA.md`.
 
-Two things the migration left that observability should cover first:
+**Not done, in the order I would take them:**
 
-- **The relay is a single point of failure.** One replica, and if it is down
-  *nothing* is delivered — Celery's worker pool at least degraded gracefully.
-  Alert on it before anything else.
-- **Consumer lag is unmonitored.** A group that is running but stuck looks
-  identical to a healthy one from `kubectl`.
+- **Alertmanager routes nowhere.** Alerts evaluate and are visible in Prometheus;
+  nothing pages. This is the smallest remaining gap and the highest value — a
+  receiver and a route.
+- **No alert on the relay itself.** It is a single replica and **if it is down
+  nothing is delivered at all** — Celery's worker pool at least degraded
+  gracefully. `KafkaConsumerGroupLagHigh` will not catch it, because a stalled
+  relay means nothing reaches Kafka to be lagged on; `check_outbox_lag` is what
+  sees it, and that is a CronJob rather than a metric.
+- **No app-level metrics.** Django exposes no `/metrics`, so outbox lag is a
+  CronJob rather than a gauge Prometheus can alert on.
+- External Secrets (syncing the SSM params Phase 2 writes), HPA, and KEDA scaling
+  consumer groups on lag — all still untouched.
 
 ---
 

@@ -182,7 +182,7 @@ under the existing event backbone, not any product behaviour.
 | Stage | Status |
 |---|---|
 | 0 EBS CSI driver + default gp3 StorageClass (the cluster could not provision storage at all) | ✅ |
-| 1 Node capacity — 3 × t4g.medium/large across three AZs | ✅ |
+| 1 Node capacity — 3 nodes across three AZs. **Instance-type list must span FAMILIES, not just sizes** — a t4g-wide capacity shortage stalled a rebuild for 20 min | ✅ |
 | 2 Strimzi 1.1.0 + Kafka 4.2.1, KRaft, 3 brokers, RF 3 / ISR 2 | ✅ |
 | — Security baseline: TLS + mTLS client certs + deny-by-default ACLs + NetworkPolicy enforcement | ✅ |
 | 3 `_dispatch()` produces to Kafka behind `EVENT_TRANSPORT` (default `celery`) | ✅ |
@@ -190,8 +190,39 @@ under the existing event backbone, not any product behaviour.
 | 4b A Deployment per consumer group, DLT topics + ACLs, live verification | ✅ |
 | 5 Remove Celery — modules, settings, workers, the dependency, the `EVENT_TRANSPORT` flag, and Redis. Replaced by a relay Deployment (`relay_outbox --loop`) | ✅ |
 
+| 6 Observability — consumer lag, alerts, dashboard (see below) | ✅ |
+
 **Complete.** Verified live: `publish()` → outbox → relay Deployment → Kafka →
 consumer group → handler, with no Celery and no Redis in the cluster.
+
+### Observability (2026-08-20)
+
+Strimzi's `kafkaExporter` feeds `kafka_consumergroup_lag` to a
+kube-prometheus-stack installed by Terraform, with a Grafana event-pipeline
+dashboard and four alerts: consumer lag, a group with **zero members** (not the
+same as lag — with nothing joined there may be no lag series at all),
+under-replicated partitions, and anything landing in a `.dlt` topic.
+
+Proved by drill rather than asserted: stalled a consumer group, watched lag reach
+183 and both alerts fire scoped to that group, then the recovered pod consume
+exactly the 200-event backlog and the alerts clear on their own.
+
+**Two gaps remain, both recorded in `infra/eks/README.md`:** Alertmanager routes
+nowhere, so alerts evaluate and are visible but nothing pages; and nothing has
+run under load — the relay does one DB transaction plus one synchronous Kafka
+flush per event, so a real backlog drains slower than intuition suggests.
+
+### Failure behaviour, verified not assumed
+
+| drill | result |
+|---|---|
+| Relay force-killed, events published with none running | Restarted by k8s, all drained. No intervention. |
+| One broker killed | Transparent — RF 3 / ISR 2 held. |
+| **Two of three brokers killed** (quorum lost) | Produces failed, events stayed pending, relay survived, `check_outbox_lag` fired, everything drained on recovery. |
+| Consumer group scaled to zero | Lag and no-members alerts fired, then cleared once restored. |
+
+A total broker outage degrades to **delayed** delivery, never lost delivery.
+That is the outbox earning its place.
 
 ---
 

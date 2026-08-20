@@ -29,6 +29,8 @@ frikkinwave-backend/
 │   │   │   └── commands/
 │   │   │       ├── relay_outbox.py    # `--loop` is the relay Deployment: the ONLY path from
 │   │   │       │                      # the outbox to Kafka. Single pass without it
+│   │   │       ├── check_outbox_lag.py # one number for every failure between publish() and the
+│   │   │       │                      # broker; run by a CronJob
 │   │   │       └── consume_events.py  # `--group <app>` — one process per consumer group,
 │   │   │                              # replaces `celery worker --queues=<queue>`
 │   │   └── tests/
@@ -252,13 +254,30 @@ frikkinwave-backend/
 ├── infra/                         # Terraform owns AWS, Helm owns the app — see infra/README.md
 │   ├── dns/                       # PERSISTENT stack: Route 53 zone + ACM cert (never destroy)
 │   ├── eks/                       # APP stack: VPC, EKS, RDS, ECR, IAM/IRSA, LB controller, secrets
+│   │   ├── ebs-csi.tf             # EBS CSI driver + the DEFAULT gp3 StorageClass. Without this the
+│   │   │                          #   cluster cannot provision a volume at all (KAFKA.md stage 0)
+│   │   ├── kafka.tf               # Strimzi operator + the Kafka cluster chart, and the mirror of
+│   │   │                          #   Strimzi's mTLS Secrets into the app namespace
+│   │   └── observability.tf       # kube-prometheus-stack (Prometheus, Grafana, Alertmanager)
 │   ├── helm/frikkinwave/          # Application chart
-│   │   └── templates/             # web Deployment+Service, relay, consumers (map-driven),
-│   │                              #   migrate Job (pre-upgrade hook), relay CronJob, Ingress, PDB
+│   │   ├── dashboards/            # Grafana JSON, read with .Files.Get (Grafana's {{ }} legend
+│   │   │                          #   syntax would otherwise be executed as a Go template)
+│   │   └── templates/             # web Deployment+Service, deployment-relay (the ONLY path from
+│   │                              #   outbox to Kafka), deployment-consumers (one per group),
+│   │                              #   cronjob-outbox-lag, grafana-dashboard, migrate Job, Ingress, PDB
+│   ├── helm/kafka/                # The Kafka cluster itself — Strimzi CRs, NOT a Deployment
+│   │   └── templates/             # kafka.yaml (Kafka + KafkaNodePool), topics.yaml (13 event
+│   │                              #   topics + 13 .dlt), user.yaml (KafkaUser + ACLs),
+│   │                              #   monitoring.yaml (PodMonitors + 4 alerts),
+│   │                              #   metrics-config.yaml (JMX → Prometheus rules)
 │   └── scripts/
-│       ├── eks-up.sh              # terraform apply: cluster, RDS, ECR, LB controller (~15 min)
-│       ├── app-deploy.sh          # build+push image → helm upgrade → Route 53 → verify 200
-│       └── eks-down.sh            # deletes K8s objects that own AWS resources, THEN destroys
+│       ├── eks-up.sh              # terraform apply: cluster, RDS, ECR, LB controller, Kafka,
+│       │                          #   Prometheus (~20 min)
+│       ├── app-deploy.sh          # build+push image → helm upgrade → Route 53 → verify 200,
+│       │                          #   falling back to a public resolver to tell a stale local
+│       │                          #   DNS cache apart from a real outage
+│       └── eks-down.sh            # ORDER MATTERS: topics/users, then Kafka + operators that
+│                                  #   recreate PVCs, THEN the PVC sweep, THEN destroy
 │
 ├── conftest.py                    # Root pytest fixtures: api_client, user
 ├── tests/                         # Project-level tests not tied to one app
