@@ -927,10 +927,10 @@ instead of none.
 
 ---
 
-## Closing the two gaps
+## Closing the two gaps ✅
 
 Written 2026-08-20 as a handoff, in the order that makes each step prove the
-last. **1b and 1a are done (code); the drills and 2 remain.**
+last. **All three are done and drilled (2026-08-21).**
 
 ### Why 1b comes before 1a
 
@@ -1082,25 +1082,55 @@ second, after the link was clicked, was delivered.
 Publishing succeeding is not delivery. That is the whole argument for moving the
 topic to the persistent stack, observed rather than asserted.
 
-### 2 — load, once the above is in place
-
-Lower urgency: at ~200 lifetime events this measures **capacity, not risk**. But
-the suspected bottleneck is specific and worth confirming before real traffic.
+### 2 — load ✅ measured 2026-08-21
 
 `relay_pending()` performs one DB transaction plus one **synchronous**
 `produce()` + `flush()` **per event** — a network round-trip with `acks=all` each
-time. Estimate 50-200 events/sec. That is a guess, and the lesson of this whole
-session is not to trust guesses of that shape.
+time. The estimate was 50-200 events/sec, flagged at the time as a guess.
 
-*Method:* publish N events, watch drain time on the Grafana event-pipeline
-dashboard, and raise the sustained rate until lag stops returning to zero. Record
-the real number here.
+**Measured: ~87 events/sec.** Roughly **11.5 ms per event**, on 3 ARM64 nodes
+with RF 3 / ISR 2.
 
-*If the relay is the bottleneck, batch the flush:* produce the whole batch, flush
-once, then mark all of them published. Still correct — nothing is marked
-published before its acknowledgement — and it collapses N round-trips into one.
-Note the trade-off honestly: a batch then fails as a unit, so a single poison
-message delays its whole batch rather than only itself.
+| burst | drain span | rate |
+|---|---|---|
+| 500 events | 6.56s | 76.2/sec |
+| 2,000 events | 22.99s | 87.0/sec |
+
+The larger burst is the truer figure; the smaller one still carries the first
+poll's startup in its span.
+
+**The bottleneck is confirmed to be the flush, not CPU.** During the 2,000-event
+burst the relay was throttled on **0.6%** of its CFS periods — essentially not at
+all — so it was waiting on the broker round-trip, not starved of scheduler time.
+Worth checking, because "it is slow" and "it is throttled" call for opposite
+fixes and look identical from the outside.
+
+**Consumers were never the constraint.** Peak `kafka_consumergroup_lag` for
+`frikkinwave.social` over the whole window was **0** — the consumer kept pace
+with the relay's full output. Whatever the ceiling is, it is on the producer
+side.
+
+*Method, for repeating it:* publish N events to `follow.removed` in one
+transaction and measure first-to-last `published_at`. That topic is the safe
+choice on a live system — its handler `prune_feed` is a `DELETE` filtered on two
+UUIDs, so random ids match nothing and it writes nothing, it is **not** in the
+notifications topic list (no failing emails, no dead letters), and it makes no
+OpenAI calls. `profile.updated` would bill you per event.
+
+Note the load generator ran inside a web pod via `kubectl exec`, and *that* pod
+throttled at 27%. It does not affect the number — every row was committed before
+the relay began draining, and the span measures only the drain — but it is why
+`CPUThrottlingHigh` fires during this drill.
+
+**~87/sec is also the sustained ceiling**, since anything published above it
+grows the backlog without bound. That is the number to design against.
+
+*If that is not enough, batch the flush:* produce the whole batch, flush once,
+then mark all of them published. Still correct — nothing is marked published
+before its acknowledgement — and it collapses N round-trips into one. At 11.5 ms
+per event dominated by `acks=all`, the win should be large. The trade-off,
+honestly: a batch then fails as a unit, so one poison message delays its whole
+batch rather than only itself.
 
 ---
 

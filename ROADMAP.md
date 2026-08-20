@@ -218,13 +218,18 @@ via IRSA (`infra/eks/alerting.tf`). Watchdog is black-holed — it fires constan
 by design as a dead-man's switch, and supplying an Alertmanager `config` replaces
 the chart's default handling of it.
 
-**One gap remains, plus a caveat, both recorded in `infra/eks/README.md`:**
-nothing has run under load — the relay does one DB transaction plus one synchronous Kafka
-flush per event, so a real backlog drains slower than intuition suggests. And
-**none of the alerting is drilled** — no live cluster has existed since it was
-written. The SNS email subscription also needs its confirmation link clicked
-after every rebuild, because the topic lives in the disposable stack; until then
-it delivers nothing while looking healthy.
+**Both gaps are now closed and drilled (2026-08-21).** What was left:
+nothing had run under load — the relay does one DB transaction plus one synchronous Kafka
+flush per event. **Measured: ~87 events/sec**, ~11.5ms per event, with the relay
+throttled on only 0.6% of CFS periods — so the bottleneck is the `acks=all`
+round-trip, not CPU. Consumer lag peaked at 0, so the ceiling is on the producer
+side. Batching the flush is the available optimisation if that is ever not enough.
+
+The alerting is drilled too, and one drill **found a defect**: `OutboxNotDraining`
+could not fire, because unspaced retries exhausted events in ~10s against a 300s
+threshold. Fixed with retry backoff and re-drilled — it now fires at 10 minutes,
+ahead of exhaustion at 27. The SNS subscription survives teardown since the topic
+moved to the persistent stack.
 
 ### Failure behaviour, verified not assumed
 
