@@ -6,6 +6,27 @@
 # which is why eks-down.sh exists and why the budget alarm is not optional.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Control-plane log group, declared explicitly so it has a RETENTION.
+#
+# EKS creates /aws/eks/<cluster>/cluster on its own when logging is enabled, and
+# the group it creates NEVER EXPIRES. It also outlives `terraform destroy` — the
+# cluster goes, the logs stay — so every rebuild adds to the same group forever.
+# Found at 109 MB across a handful of sessions; nothing warns about it because
+# the cost is a few cents.
+#
+# Declaring it here first means EKS reuses this group instead of making its own,
+# so the retention actually applies. The cluster below depends on it to force
+# that ordering — created after, the group would already exist without expiry.
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "eks_cluster" {
+  name = "/aws/eks/${local.name}/cluster"
+  # 7 days. These are api/audit/authenticator logs for a cluster that is torn
+  # down between sessions; a week is longer than anything here has ever lived.
+  retention_in_days = 7
+  tags              = local.tags
+}
+
 resource "aws_eks_cluster" "main" {
   name     = local.name
   role_arn = aws_iam_role.cluster.arn
@@ -42,8 +63,13 @@ resource "aws_eks_cluster" "main" {
   # you *why* a principal was denied — worth having before you need it.
   enabled_cluster_log_types = ["api", "audit", "authenticator"]
 
-  depends_on = [aws_iam_role_policy_attachment.cluster]
-  tags       = local.tags
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster,
+    # So EKS reuses our log group (with retention) rather than creating its own
+    # with none. Ordering is the whole point of this dependency.
+    aws_cloudwatch_log_group.eks_cluster,
+  ]
+  tags = local.tags
 
   lifecycle {
     # See the note in vpc_config: the AZ set is immutable after creation, so a

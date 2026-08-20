@@ -526,9 +526,11 @@ Ordered by consequence, not effort.
   Dockerfile installs it into the runtime image — 47.5 MB of test and lint
   tooling in every pod. The size is secondary; the attack surface is the point.
   Split into `base.txt` + `dev.txt` (touches Dockerfile, CI, setup docs).
-- **Three redundant RDS snapshots** from June. Nothing references a specific id
-  any more (restore is discovered), so they are safe to delete — but deletion is
-  irreversible and has never been explicitly approved.
+- ~~**Three redundant RDS snapshots** from June.~~ ✅ Resolved 2026-08-20: seven
+  had accumulated (one per teardown, only the newest ever restored). Six were
+  deleted, including all four June ones — those predate the rating
+  denormalization, so they were never a usable fallback. `eks-down.sh` now warns
+  when more than two exist.
 - **AWS credit balance and coverage are unverified.** No API exposes them, and
   Cost Explorer reports $0.00 for every month including June when ECS ran, which
   is not credible. Check Billing → Credits by hand.

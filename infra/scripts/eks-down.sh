@@ -159,6 +159,17 @@ if [ -n "${LATEST_SNAP}" ] && [ "${LATEST_SNAP}" != "None" ]; then
   echo
   echo "==> Data preserved in snapshot: ${LATEST_SNAP}"
   echo "    The next eks-up.sh restores from it automatically."
+  # Every teardown leaves one behind and nothing ever removes them — seven had
+  # accumulated by 2026-08-20, four of them predating a denormalization and so
+  # useless as a fallback anyway. Only the NEWEST is ever restored.
+  SNAP_COUNT="$(aws rds describe-db-snapshots --region "${REGION}" --snapshot-type manual \
+    --db-instance-identifier "${CLUSTER}-db" --query 'length(DBSnapshots)' --output text 2>/dev/null || echo 1)"
+  if [ "${SNAP_COUNT}" -gt 2 ] 2>/dev/null; then
+    echo
+    echo "    NOTE: ${SNAP_COUNT} manual snapshots now exist and only the newest is used."
+    echo "    Review and prune:  aws rds describe-db-snapshots --region ${REGION} \\"
+    echo "                         --snapshot-type manual --output table"
+  fi
 fi
 
 echo "==> Destroyed. Back to \$0/hr."
