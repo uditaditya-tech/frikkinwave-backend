@@ -8,7 +8,7 @@ measured on the live `frikkinwave-prod` cluster the same day. Numbers here are
 
 ## 1. Where the suite stands
 
-**377 tests in 33 files, green in 4.13s.**
+**387 tests in 35 files, green in ~4.5s.**
 
 The speed is not an accident: `EVENT_RELAY_INLINE=True` under pytest delivers events
 to in-process subscribers instead of a broker, so the whole event pipeline is
@@ -40,9 +40,18 @@ Ordered by what would actually bite first.
 
 ### Gap A — N+1 protection is correct but unguarded
 
-29 `select_related` calls, **one** query-count assertion in the whole suite
-(`apps/musicians/tests/test_profile_rating.py:61`). Delete any `select_related`
-and nothing fails; the endpoint just gets slower in production.
+**CLOSED** — `tests/test_query_counts.py` asserts, for five list endpoints, that
+the query count does not grow with the number of rows returned (2 rows vs 12).
+
+**It found a real N+1 on its first run.** `/api/reviews/<username>/` issued 4
+queries for 2 reviews and 14 for 12 — `list_reviews_for` selected `author` but
+`ReviewReadSerializer` also renders `subject.username`. Every row in that
+queryset has the *same* subject, which is exactly why selecting it looks
+redundant and is not. Fixed alongside the test.
+
+Worth noting how it was missed: an audit grep reported this endpoint as "OK"
+because a 22-line window after the function caught a *neighbouring* function's
+`select_related`. The test found in one run what reading had gotten wrong.
 
 | # | test case | type |
 |---|---|---|
@@ -56,10 +65,15 @@ The point is not the exact number; it is that the number does not grow with rows
 
 ### Gap B — no concurrency tests anywhere
 
-`relay_pending` claims rows with `select_for_update(skip_locked=True)`, which is
-correct and is what makes >1 relay replica safe. **Nothing tests it.** The relay
-runs at 1 replica today, so the day someone scales it is the day this is first
-exercised — in production.
+**B1–B3 CLOSED** — `tests/test_concurrency.py`, using `django_db(transaction=True)`
+because the default fixture's uncommitted transaction would make every one of
+these pass without exercising anything.
+
+Each guard was verified to *fail* when the thing it protects is removed —
+deleting the `select_for_update(skip_locked=True)` claim makes B1 fail, which is
+the only evidence that a concurrency test is not passing trivially.
+
+B4 (concurrent follow/unfollow convergence) is still open.
 
 | # | test case | type |
 |---|---|---|
@@ -68,8 +82,9 @@ exercised — in production.
 | B3 | concurrent `POST /api/reviews/` for the same (author, context) hits the unique constraint, not a double row | integration |
 | B4 | concurrent follow/unfollow of the same pair converges to one consistent state | integration |
 
-B1 is the important one and needs real threads against a real connection —
-`pytest-django`'s `TransactionTestCase` semantics, not the default `db` fixture.
+B1 is the important one: without the row claim, two relays both dispatch every
+row, and the outbox looks perfectly clean while every consumer sees each event
+N times.
 
 ### Gap C — consumer rebalancing is untested
 
@@ -86,14 +101,14 @@ C3 belongs in a runbook drill like the Kafka failure drill, not the unit suite.
 
 ### Gap D — no load or performance regression tests
 
-Until this session there were none. Section 3 records the baselines; nothing
-enforces them. A CONN_MAX_AGE regression or a lost index would not be caught.
+Section 3 records the baselines. D1 and D2 now guard the two regressions that
+would be invisible in review; a lost index still would not be caught.
 
 | # | test case | type |
 |---|---|---|
-| D1 | assert `CONN_MAX_AGE` is set in production settings (guards the fix in §4) | unit, settings |
-| D2 | assert every list endpoint declares a cursor paginator | architecture test |
-| D3 | smoke: `/api/health/` p95 under 50ms at c=10 in-cluster | drill |
+| D1 | ~~assert `CONN_MAX_AGE` is set~~ — **done**, `tests/test_architecture.py` | unit, settings |
+| D2 | ~~assert every list endpoint paginates~~ — **done**; four deliberate exemptions are named with reasons | architecture test |
+| D3 | smoke: `/api/health/` p95 under 50ms at c=10 in-cluster | drill, still open |
 
 ### Gap E — no rate limiting exists to test
 
@@ -225,7 +240,10 @@ so a long run is not comparable to a short one unless placement is held fixed.
    throughput, 3x lower latency, verified by re-measurement.
 2. **Raise or remove the web CPU limit** — keep the request, since throttling
    at 89% while below the limit is pure waste.
-3. **Add the query-count tests (A1–A4).** Cheap, and they guard work already done.
-4. **Add throttling (E1–E3)** — the only protection against a single abusive client.
-5. **Add an HPA** on CPU, once limits are sane.
-6. **Test relay concurrency (B1)** before anyone scales the relay past 1 replica.
+3. ~~**Add the query-count tests (A1–A4).**~~ **Done** — and they found a real
+   N+1 in the reviews list on the first run.
+4. ~~**Test relay concurrency (B1).**~~ **Done**, and verified to fail without
+   the row claim.
+5. **Add throttling (E1–E3)** — still the only protection against a single
+   abusive client, and the largest remaining gap. Needs the feature, not just tests.
+6. **Add an HPA** on CPU, once limits are sane.

@@ -449,3 +449,48 @@ def test_database_connections_are_reused_across_requests() -> None:
     assert default.get("CONN_HEALTH_CHECKS") is True, (
         "Reusing connections without health checks trades latency for flakiness."
     )
+
+
+# A GET that fetches a collection but never paginates it returns the whole table
+# once the table is big. These four do it deliberately; everything else must not.
+UNPAGINATED_BY_DESIGN = {
+    ("musicians", "InstrumentListView"): "reference data - a fixed, small vocabulary",
+    ("musicians", "GenreListView"): "reference data - a fixed, small vocabulary",
+    ("musicians", "ProfileSearchView"): "bounded by its own ?limit= (see _parse_limit)",
+    ("bands", "BandDetailView"): "members nested in a detail response, bounded by band size",
+}
+
+
+def test_every_list_endpoint_paginates() -> None:
+    """
+    A view that fetches a collection must hand it to a paginator.
+
+    Cursor pagination is already used consistently (page_size 20, no client
+    override), but nothing enforced it: a new endpoint returning a bare queryset
+    looks identical in review and only misbehaves once the table grows. Add a
+    genuine exception to UNPAGINATED_BY_DESIGN with a reason rather than
+    weakening this.
+    """
+    offenders = []
+    for path in sorted((APPS_DIR).glob("*/views.py")):
+        app = path.parent.name
+        for cls in [
+            n for n in ast.walk(ast.parse(path.read_text())) if isinstance(n, ast.ClassDef)
+        ]:
+            for fn in [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "get"]:
+                calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+                fetches_list = any(
+                    isinstance(c.func, ast.Name)
+                    and (c.func.id.startswith("list_") or c.func.id.startswith("search_"))
+                    for c in calls
+                )
+                paginates = any(
+                    isinstance(c.func, ast.Attribute) and c.func.attr == "paginate_queryset"
+                    for c in calls
+                )
+                if fetches_list and not paginates and (app, cls.name) not in UNPAGINATED_BY_DESIGN:
+                    offenders.append(f"{app}.{cls.name}.get")
+
+    assert not offenders, (
+        "These GET handlers fetch a collection without paginating it: " + ", ".join(offenders)
+    )
