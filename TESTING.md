@@ -53,6 +53,9 @@ Worth noting how it was missed: an audit grep reported this endpoint as "OK"
 because a 22-line window after the function caught a *neighbouring* function's
 `select_related`. The test found in one run what reading had gotten wrong.
 
+Cost of the bug, measured under load: **~3x throughput on that endpoint** — see
+§3. The test found it; the load test priced it.
+
 | # | test case | type |
 |---|---|---|
 | A1 | `GET /api/listings/` with 100 listings issues a constant number of queries regardless of row count | integration, `django_assert_num_queries` |
@@ -158,6 +161,24 @@ Measured twice: before the `CONN_MAX_AGE` fix, and after it (commit `dee3465`).
 **~2.3x throughput and ~3x lower latency, from one setting.** `/api/health/`
 re-measured at 657 rps against a 631 rps baseline — unchanged, as expected for a
 path that never touches the database.
+
+### `/api/reviews/<username>/` — the N+1, measured
+
+The guard in `tests/test_query_counts.py` proved the N+1 existed; this is what it
+cost. Same cluster, same generator placement, 24 reviews on the subject so a page
+returns the full 20 rows — meaning ~20 extra queries per request before the fix.
+
+| concurrency | rps before → after | p50 before → after | p99 before → after |
+|---|---|---|---|
+| 1 | 25 → **74** | 45.9ms → **13.1ms** | 120ms → **22ms** |
+| 10 | 39 → **127** | 384ms → **44ms** | 532ms → **210ms** |
+| 50 | 41 → **130** | 697ms → **196ms** | 2400ms → **800ms** |
+| 100 | 40 → **122** | 1344ms → **525ms** | 4933ms → **1669ms** |
+
+**~3x throughput and ~3.5x lower latency from one `select_related` argument.**
+Before the fix this endpoint ran at a third of `/api/listings/` (40 vs 154 rps);
+after it, the two are comparable. A test caught it, but only a load test says
+what it was worth.
 
 ### Event pipeline
 
