@@ -106,6 +106,22 @@ DATABASES = {
     "default": env.db("DATABASE_URL"),
 }
 
+# Persistent connections. Django's default is CONN_MAX_AGE=0 — a fresh connection
+# per request — and on RDS that handshake was **measured at 16.9ms while the query
+# it exists to run took 0.58ms**, so ~29x the request's real work was spent getting
+# a socket. It is most of the 36ms floor on every DB-backed endpoint.
+#
+# Safe here without a pooler: peak concurrent connections under a c=800 load test
+# was 6 — one per gunicorn worker (2 pods x 3) — against a db.t4g.micro ceiling of
+# roughly 112. The pooler question only arrives when pods x workers approaches
+# max_connections; that is PgBouncer's job, not this setting's.
+#
+# CONN_HEALTH_CHECKS is what makes reuse safe: a connection idle across requests
+# can be closed by the server (RDS failover, idle timeout) and would otherwise
+# surface as an OperationalError on the next query instead of a reconnect.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DJANGO_CONN_MAX_AGE", default=60)
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+
 # ---------------------------------------------------------------------------
 # Password validation
 # ---------------------------------------------------------------------------

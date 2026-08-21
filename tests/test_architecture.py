@@ -426,3 +426,26 @@ def test_the_heartbeat_tolerance_exceeds_the_poll_interval() -> None:
 
     values = yaml.safe_load(CHART_VALUES.read_text())
     assert values["relay"]["heartbeatMaxAgeSeconds"] > settings.EVENT_RELAY_INTERVAL * 5
+
+
+def test_database_connections_are_reused_across_requests() -> None:
+    """
+    CONN_MAX_AGE=0 (Django's default) opens a fresh connection per request.
+
+    Measured on RDS: the handshake costs 16.9ms while the query it exists to run
+    costs 0.58ms, so reverting this silently spends ~29x the request's real work
+    on getting a socket. That is invisible in review and invisible in tests —
+    only a load test shows it — so it is asserted here.
+
+    CONN_HEALTH_CHECKS is half the fix: without it a connection the server closed
+    while idle resurfaces as an OperationalError instead of a reconnect.
+    """
+    from django.conf import settings
+
+    default = settings.DATABASES["default"]
+    assert default.get("CONN_MAX_AGE", 0) > 0, (
+        "Persistent DB connections are load-bearing — see TESTING.md section 4.1."
+    )
+    assert default.get("CONN_HEALTH_CHECKS") is True, (
+        "Reusing connections without health checks trades latency for flakiness."
+    )
