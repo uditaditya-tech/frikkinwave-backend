@@ -104,7 +104,11 @@ def create_review(
 
 def list_reviews_for(*, user_id: str) -> QuerySet[Review]:
     """Return the reviews a user has received, newest first. Keyed by id, not model."""
-    return Review.objects.select_related("author").filter(subject_id=uuid.UUID(user_id))
+    # Both FKs, not just author: ReviewReadSerializer renders `subject.username`
+    # too, so selecting only `author` left one query per row. Every row here has
+    # the same subject, which is exactly why the N+1 was easy to miss — it looks
+    # redundant and is not.
+    return Review.objects.select_related("author", "subject").filter(subject_id=uuid.UUID(user_id))
 
 
 def rating_summary(*, user_id: str) -> dict[str, object]:
