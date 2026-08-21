@@ -1,8 +1,8 @@
 # TESTING.md — coverage audit, gaps, and measured capacity
 
-Written 2026-08-21 against commit `9f0ac79`, with the load numbers measured on the
-live `frikkinwave-prod` cluster the same day. Numbers here are **measured, not
-estimated** — anything inferred says so.
+Written 2026-08-21 against commits `9f0ac79`..`dee3465`, with every load number
+measured on the live `frikkinwave-prod` cluster the same day. Numbers here are
+**measured, not estimated** — anything inferred says so.
 
 ---
 
@@ -130,12 +130,19 @@ workers, `db.t4g.micro`.
 
 ### `/api/listings/` — cursor-paginated DB read
 
-| concurrency | rps | p50 | p95 | p99 | errors |
-|---|---|---|---|---|---|
-| 1 | 28 | 36ms | 41ms | 75ms | 0 |
-| 10 | **66** | 166ms | 299ms | 309ms | 0 |
-| 100 | 64 | 1158ms | 2933ms | 2963ms | 0 |
-| 400 | 77 | 4030ms | 7450ms | 7858ms | 0 |
+Measured twice: before the `CONN_MAX_AGE` fix, and after it (commit `dee3465`).
+
+| concurrency | rps before → after | p50 before → after | p99 before → after |
+|---|---|---|---|
+| 1 | 28 → **82** | 36.3ms → **12.1ms** | 75ms → **39ms** |
+| 10 | 66 → **154** | 166ms → **22ms** | 309ms → **180ms** |
+| 50 | 68 → **154** | 492ms → **128ms** | 1542ms → **707ms** |
+| 100 | 64 → **147** | 1158ms → **468ms** | 2963ms → **1376ms** |
+| 400 | 77 | 4030ms | 7858ms | *(before only)* |
+
+**~2.3x throughput and ~3x lower latency, from one setting.** `/api/health/`
+re-measured at 657 rps against a 631 rps baseline — unchanged, as expected for a
+path that never touches the database.
 
 ### Event pipeline
 
@@ -167,9 +174,14 @@ Measured from a web pod:
 | open a new Postgres connection | **16.9ms** |
 | the query itself, on a reused connection | **0.58ms** |
 
-`CONN_MAX_AGE` is unset, so Django's default of `0` closes the connection after
-every request and pays that 16.9ms again on the next one. This is most of the
+`CONN_MAX_AGE` was unset, so Django's default of `0` closed the connection after
+every request and paid that 16.9ms again on the next one. That was most of the
 36ms floor on every DB-backed request.
+
+**Fixed in `dee3465`** (`CONN_MAX_AGE=60` + `CONN_HEALTH_CHECKS`), and the gain
+was verified by re-running the same load: see the before/after table in §3. A
+test in `tests/test_architecture.py` guards it, because a revert is invisible in
+review and invisible to the unit suite — only a load test shows it.
 
 Peak concurrent connections during the whole test was **6** — one per gunicorn
 worker, against a `t4g.micro` ceiling of roughly 112. So persistent connections
@@ -189,12 +201,28 @@ path). There is no rate limiting, no explicit gunicorn `--timeout`, and **no HPA
 (web is pinned at 2 replicas). A p99 of 7.9s is an outage the error rate cannot
 see, and the system cannot scale out of it on its own.
 
----
+### 4.4 Two traps that corrupt these measurements
+
+Both were hit while producing the numbers above, and both make a result look
+like a code regression when it is an artefact of where things ran.
+
+**Co-locating the generator with the thing it measures.** The first "after" run
+put the loadgen pod on the same node as a web pod. `/api/health/` appeared to
+drop from 631 to 369 rps — a 40% regression from a change that does not touch the
+database. Pinning the generator to a node running no web pods restored 657 rps.
+Pin it explicitly (`nodeName`) rather than trusting the scheduler.
+
+**The node pool is deliberately mixed.** Two `m7g.large` plus one `t4g.large` —
+different capacity pools on purpose, after t4g went short across all three AZs on
+2026-08-20 and stranded the node group. The performance consequence is that an
+identical pod gets non-burstable CPU on `m7g` and *burstable, credit-limited* CPU
+on `t4g`. Sustained load on the t4g node drains credits and slows down over time,
+so a long run is not comparable to a short one unless placement is held fixed.
 
 ## 5. Recommended order
 
-1. **Set `CONN_MAX_AGE`** (+ test D1). One setting, removes ~17ms from every
-   DB request, safe at this connection count.
+1. ~~**Set `CONN_MAX_AGE`** (+ test D1).~~ **Done in `dee3465`** — 2.3x
+   throughput, 3x lower latency, verified by re-measurement.
 2. **Raise or remove the web CPU limit** — keep the request, since throttling
    at 89% while below the limit is pure waste.
 3. **Add the query-count tests (A1–A4).** Cheap, and they guard work already done.
