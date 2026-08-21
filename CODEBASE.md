@@ -294,9 +294,13 @@ frikkinwave-backend/
 │   │                              # every declared consumer group backed by a Deployment,
 │   │                              # every published topic subscribed, and nothing dispatching
 │   │                              # from the request path
-│   └── test_infrastructure.py     # Terraform + Helm guardrails: storage class exists and is not
-│                                  # a dead in-tree provisioner, Kafka durability (RF 3 / ISR 2),
-│                                  # broker/node fit, TLS+auth+ACLs on, nothing exposed publicly
+│   ├── test_infrastructure.py     # Terraform + Helm guardrails: storage class exists and is not
+│   │                              # a dead in-tree provisioner, Kafka durability (RF 3 / ISR 2),
+│   │                              # broker/node fit, TLS+auth+ACLs on, nothing exposed publicly
+│   └── load/
+│       └── loadgen.py             # NOT a pytest test — an operational tool. Run in-cluster against
+│                                  # the ClusterIP Service; from a laptop you measure the WAN.
+│                                  # Baselines + analysis in TESTING.md
 ├── .env                           # Git-ignored. Copy from .env.example.
 ├── .env.example                   # Committed template for all env vars.
 ├── .gitignore
@@ -312,6 +316,8 @@ frikkinwave-backend/
 ├── CLAUDE.md                      # Working rules, conventions, all known gotchas
 ├── DATAMODEL.md                   # All models — current and planned
 ├── ROADMAP.md                     # Phase plan and sub-step status
+├── TESTING.md                     # Coverage audit, the gaps + test cases that close them,
+│                                  # and measured capacity limits from a live load test
 └── CODEBASE.md                    # This file
 ```
 
