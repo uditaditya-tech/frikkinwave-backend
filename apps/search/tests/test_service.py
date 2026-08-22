@@ -196,3 +196,58 @@ class TestSearchDegradesGracefully:
         monkeypatch.setattr(services, "get_search_client", lambda: Failing())
 
         assert services.search(query="anything") == []
+
+
+class TestTimeoutsAreSplitByPath:
+    """
+    Reads and writes have opposite constraints, so they must not share a timeout.
+
+    A read is in the request path: a generous timeout there turns a slow cluster
+    into worker exhaustion, so it degrades fast instead. A write is in a Kafka
+    consumer with three attempts total: a timeout there burns one of them, and
+    running out dead-letters the event and leaves a profile stale in search.
+
+    Measured in production 2026-08-23 — a cold TLS connection exceeded the 3s
+    read timeout twice in a row and indexed on attempt 3 of 3.
+    """
+
+    def test_the_write_timeout_is_longer_than_the_read_timeout(
+        self, settings: SettingsWrapper
+    ) -> None:
+        assert settings.OPENSEARCH_WRITE_TIMEOUT > settings.OPENSEARCH_TIMEOUT
+
+    def test_the_write_budget_survives_a_full_round_of_consumer_retries(
+        self, settings: SettingsWrapper
+    ) -> None:
+        """
+        The real question is not "is it bigger" but "is one attempt enough".
+        A cold connection has to fit inside a SINGLE attempt, because burning
+        two of three on a routine cold start leaves nothing for a real blip.
+        """
+        assert settings.OPENSEARCH_WRITE_TIMEOUT >= 15.0, (
+            "A cold DNS+TCP+TLS connection to a VPC OpenSearch endpoint was "
+            "measured taking over 3 seconds. Leave real headroom in one attempt."
+        )
+
+    def test_writes_use_the_write_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The seam must actually pass it, not merely define it."""
+        from apps.search.client import SearchClient
+
+        calls: list[float | None] = []
+
+        class RecordingIndices:
+            def exists(self, **kw: object) -> bool:
+                calls.append(kw.get("request_timeout"))  # type: ignore[arg-type]
+                return True
+
+        class RecordingRaw:
+            indices = RecordingIndices()
+
+            def index(self, **kw: object) -> None:
+                calls.append(kw.get("request_timeout"))  # type: ignore[arg-type]
+
+        client = SearchClient(RecordingRaw(), "idx", write_timeout=20.0)  # type: ignore[arg-type]
+        client.ensure_index(body={})
+        client.index_document(doc_id="x", document={})
+
+        assert calls == [20.0, 20.0]

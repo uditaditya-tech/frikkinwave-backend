@@ -194,9 +194,25 @@ OPENSEARCH_URL = env("OPENSEARCH_URL", default="")
 # sitting in the same local cluster.
 OPENSEARCH_INDEX = env("OPENSEARCH_INDEX", default="profiles")
 
-# Seconds before a cluster call is abandoned. See the comment on the client:
-# this bounds how long a request thread can be held by a slow cluster.
+# Seconds before a READ is abandoned. See the comment on the client: this bounds
+# how long a request thread can be held by a slow cluster, so it is deliberately
+# short — search degrades to [] rather than exhausting the worker pool.
 OPENSEARCH_TIMEOUT = env.float("OPENSEARCH_TIMEOUT", default=3.0)
+
+# Seconds before a WRITE is abandoned — indexing, pruning, the rebuild.
+#
+# Much longer, because the constraint is the opposite one. Writes run in a Kafka
+# consumer and in a deploy Job, where nothing is waiting on the other end and a
+# timeout is not free: it burns one of KAFKA_CONSUMER_MAX_ATTEMPTS (3), and
+# running out sends the event to the dead-letter topic, leaving that profile
+# silently stale in search until the next rebuild.
+#
+# Measured in production 2026-08-23: a COLD connection to the VPC endpoint —
+# DNS, TCP, TLS handshake — did not complete inside 3s, twice in a row, and the
+# event was indexed on attempt 3 of 3. The same call took 0.128s once the pool
+# was warm. Sharing the read timeout meant a routine cold start consumed the
+# entire retry budget and left nothing for an actual transient.
+OPENSEARCH_WRITE_TIMEOUT = env.float("OPENSEARCH_WRITE_TIMEOUT", default=20.0)
 
 # ---------------------------------------------------------------------------
 # Events (KAFKA.md)

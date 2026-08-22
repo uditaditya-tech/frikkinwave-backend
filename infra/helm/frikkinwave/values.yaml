@@ -35,6 +35,12 @@ config:
   # timeout stops being a search problem and becomes a worker-exhaustion one —
   # the pod stops serving every other endpoint too.
   OPENSEARCH_TIMEOUT: "3.0"
+  # Writes get much longer. They run in a consumer and a deploy Job, where a
+  # timeout is not free: it burns one of three consumer attempts, and running
+  # out dead-letters the event and leaves that profile stale in search.
+  # Measured 2026-08-23: a cold TLS connection to the VPC endpoint exceeded 3s
+  # twice running and indexed on the last attempt; warm, the same call is 0.13s.
+  OPENSEARCH_WRITE_TIMEOUT: "20.0"
   KAFKA_BOOTSTRAP_SERVERS: frikkinwave-kafka-bootstrap.kafka.svc.cluster.local:9093
   # mTLS: SSL, not SASL_SSL. There is no SASL mechanism, no username and no
   # password — the client certificate below IS the identity, and Kafka authorizes

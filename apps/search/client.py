@@ -74,9 +74,12 @@ class SearchClient:
     cost access to every OpenSearch feature the builder had not yet grown.
     """
 
-    def __init__(self, client: OpenSearch, index: str) -> None:
+    def __init__(self, client: OpenSearch, index: str, write_timeout: float) -> None:
         self._client = client
         self._index = index
+        # Per-call override for the write path. The client's own timeout is the
+        # short read one; writes pass this instead. See the settings comment.
+        self._write_timeout = write_timeout
 
     @property
     def index(self) -> str:
@@ -95,12 +98,14 @@ class SearchClient:
         from opensearchpy.exceptions import RequestError
 
         with _translated("index exists check"):
-            if self._client.indices.exists(index=self._index):
+            if self._client.indices.exists(index=self._index, request_timeout=self._write_timeout):
                 return False
 
         try:
             with _translated("index create"):
-                self._client.indices.create(index=self._index, body=body)
+                self._client.indices.create(
+                    index=self._index, body=body, request_timeout=self._write_timeout
+                )
         except SearchUnavailableError as exc:
             cause = exc.__cause__
             if (
@@ -125,7 +130,7 @@ class SearchClient:
 
         try:
             with _translated("index delete"):
-                self._client.indices.delete(index=self._index)
+                self._client.indices.delete(index=self._index, request_timeout=self._write_timeout)
         except SearchUnavailableError as exc:
             if isinstance(exc.__cause__, NotFoundError):
                 return False
@@ -143,7 +148,9 @@ class SearchClient:
         redelivery into a duplicate search result.
         """
         with _translated("index document"):
-            self._client.index(index=self._index, id=doc_id, body=document)
+            self._client.index(
+                index=self._index, id=doc_id, body=document, request_timeout=self._write_timeout
+            )
 
     def delete_document(self, *, doc_id: str) -> bool:
         """
@@ -156,7 +163,9 @@ class SearchClient:
 
         try:
             with _translated("delete document"):
-                self._client.delete(index=self._index, id=doc_id)
+                self._client.delete(
+                    index=self._index, id=doc_id, request_timeout=self._write_timeout
+                )
         except SearchUnavailableError as exc:
             if isinstance(exc.__cause__, NotFoundError):
                 return False
@@ -185,7 +194,11 @@ class SearchClient:
         """
         with _translated("delete by query"):
             response = self._client.delete_by_query(
-                index=self._index, body=body, conflicts=conflicts, refresh=True
+                index=self._index,
+                body=body,
+                conflicts=conflicts,
+                refresh=True,
+                request_timeout=self._write_timeout,
             )
         deleted = int(response.get("deleted", 0))
         logger.info("search_deleted_by_query", extra={"index": self._index, "deleted": deleted})
@@ -213,7 +226,7 @@ class SearchClient:
         and by the reindex command, never by the request path.
         """
         with _translated("refresh"):
-            self._client.indices.refresh(index=self._index)
+            self._client.indices.refresh(index=self._index, request_timeout=self._write_timeout)
 
 
 @lru_cache(maxsize=1)
@@ -242,4 +255,4 @@ def get_search_client() -> SearchClient:
         max_retries=1,
         retry_on_timeout=False,
     )
-    return SearchClient(client, settings.OPENSEARCH_INDEX)
+    return SearchClient(client, settings.OPENSEARCH_INDEX, settings.OPENSEARCH_WRITE_TIMEOUT)
