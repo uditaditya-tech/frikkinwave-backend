@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
@@ -30,6 +31,7 @@ from apps.connections.services import (
     list_contact_requests,
     send_contact_request,
 )
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 
 if TYPE_CHECKING:
     # Type-only: `request.user` is supplied by the auth middleware, so the
@@ -54,6 +56,10 @@ class ContactRequestListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id="connections_requests_list",
+        responses={200: cursor_paginated(ContactRequestReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         box = request.query_params.get("box", "incoming")
         if box not in ("incoming", "outgoing"):
@@ -64,6 +70,15 @@ class ContactRequestListCreateView(APIView):
         data = ContactRequestReadSerializer(page, many=True, context={"request": request}).data
         return paginator.get_paginated_response(data)
 
+    @extend_schema(
+        request=ContactRequestCreateSerializer,
+        responses={
+            201: ContactRequestReadSerializer,
+            400: DetailSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = ContactRequestCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -100,6 +115,7 @@ class ContactRequestDetailView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: ContactRequestReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, request_id: str, *args: Any, **kwargs: Any) -> Response:
         contact_request = get_contact_request(
             user=cast("User", request.user), request_id=request_id
@@ -119,6 +135,10 @@ class ContactRequestAcceptView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={200: ContactRequestReadSerializer, 404: DetailSerializer, 409: DetailSerializer},
+    )
     def post(self, request: Request, request_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_view(request, request_id, accept_contact_request)
 
@@ -129,6 +149,10 @@ class ContactRequestDeclineView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={200: ContactRequestReadSerializer, 404: DetailSerializer, 409: DetailSerializer},
+    )
     def post(self, request: Request, request_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_view(request, request_id, decline_contact_request)
 

@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
@@ -31,6 +32,7 @@ from apps.engagements.services import (
     list_engagement_requests,
     send_engagement_request,
 )
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 
 if TYPE_CHECKING:
     # Type-only: `request.user` is supplied by the auth middleware, so the
@@ -55,6 +57,10 @@ class EngagementListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id="engagements_list",
+        responses={200: cursor_paginated(EngagementRequestReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         box = request.query_params.get("box", "incoming")
         if box not in ("incoming", "outgoing"):
@@ -65,6 +71,14 @@ class EngagementListCreateView(APIView):
         data = EngagementRequestReadSerializer(page, many=True, context={"request": request}).data
         return paginator.get_paginated_response(data)
 
+    @extend_schema(
+        request=EngagementRequestCreateSerializer,
+        responses={
+            201: EngagementRequestReadSerializer,
+            400: DetailSerializer,
+            404: DetailSerializer,
+        },
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = EngagementRequestCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -98,6 +112,7 @@ class EngagementDetailView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: EngagementRequestReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, engagement_id: str, *args: Any, **kwargs: Any) -> Response:
         engagement = get_engagement_request(
             user=cast("User", request.user), engagement_id=engagement_id
@@ -117,6 +132,14 @@ class EngagementAcceptView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: EngagementRequestReadSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, engagement_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_view(request, engagement_id, accept_engagement_request)
 
@@ -127,6 +150,14 @@ class EngagementDeclineView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: EngagementRequestReadSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, engagement_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_view(request, engagement_id, decline_engagement_request)
 
@@ -137,6 +168,14 @@ class EngagementCompleteView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: EngagementRequestReadSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, engagement_id: str, *args: Any, **kwargs: Any) -> Response:
         try:
             engagement = complete_engagement_request(

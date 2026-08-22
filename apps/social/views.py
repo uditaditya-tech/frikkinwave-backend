@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -15,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 from apps.social.serializers import (
     FeedEntryReadSerializer,
     FollowerReadSerializer,
@@ -60,6 +62,14 @@ class FollowView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: FollowingReadSerializer,
+            201: FollowingReadSerializer,
+            400: DetailSerializer,
+        },
+    )
     def post(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
             follow, created = follow_user(follower=cast("User", request.user), username=username)
@@ -73,6 +83,7 @@ class FollowView(APIView):
         code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(FollowingReadSerializer(follow).data, status=code)
 
+    @extend_schema(responses={204: None, 404: DetailSerializer})
     def delete(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
             unfollow_user(follower=cast("User", request.user), username=username)
@@ -88,6 +99,7 @@ class FeedView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: cursor_paginated(FeedEntryReadSerializer)})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = get_feed(user=cast("User", request.user))
         paginator = SocialCursorPagination()
@@ -101,6 +113,10 @@ class FollowingListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id="social_following_list",
+        responses={200: cursor_paginated(FollowingReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = list_following(user_id=str(cast("User", request.user).pk))
         paginator = SocialCursorPagination()
@@ -114,6 +130,10 @@ class FollowersListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id="social_followers_list",
+        responses={200: cursor_paginated(FollowerReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = list_followers(user_id=str(cast("User", request.user).pk))
         paginator = SocialCursorPagination()
@@ -127,6 +147,10 @@ class PublicFollowingView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        operation_id="social_user_following_retrieve",
+        responses={200: cursor_paginated(FollowingReadSerializer), 404: DetailSerializer},
+    )
     def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
             target = get_user_or_raise(username=username)
@@ -144,6 +168,10 @@ class PublicFollowersView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        operation_id="social_user_followers_retrieve",
+        responses={200: cursor_paginated(FollowerReadSerializer), 404: DetailSerializer},
+    )
     def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
             target = get_user_or_raise(username=username)

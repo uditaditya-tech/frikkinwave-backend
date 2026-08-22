@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -15,7 +16,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from apps.reviews.serializers import ReviewCreateSerializer, ReviewReadSerializer
+from apps.reviews.serializers import (
+    RatingSummarySerializer,
+    ReviewCreateSerializer,
+    ReviewReadSerializer,
+)
 from apps.reviews.services import (
     DuplicateReviewError,
     NotEligibleError,
@@ -25,6 +30,7 @@ from apps.reviews.services import (
     list_reviews_for,
     rating_summary,
 )
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 
 if TYPE_CHECKING:
     # Type-only: `request.user` is supplied by the auth middleware, so the
@@ -52,6 +58,15 @@ class ReviewCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=ReviewCreateSerializer,
+        responses={
+            201: ReviewReadSerializer,
+            400: DetailSerializer,
+            403: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = ReviewCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -84,6 +99,7 @@ class ReviewListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={200: cursor_paginated(ReviewReadSerializer)})
     def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
             subject = get_user_or_raise(username=username)
@@ -101,6 +117,7 @@ class ReviewSummaryView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={200: RatingSummarySerializer, 404: DetailSerializer})
     def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         try:
             subject = get_user_or_raise(username=username)

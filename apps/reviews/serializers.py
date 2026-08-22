@@ -35,3 +35,19 @@ class ReviewReadSerializer(serializers.ModelSerializer[Review]):
             "context_id",
             "created_at",
         ]
+
+
+class RatingSummarySerializer(serializers.Serializer[Any]):
+    """
+    The denormalized rating rollup for one subject: `rating_summary()`'s output.
+
+    Declared for the schema only. `average_rating` is nullable and that is not an
+    edge case — it is null for everyone who has never been reviewed, which is
+    most users, so a client that assumes a number will break on ordinary data.
+    """
+
+    average_rating = serializers.FloatField(
+        allow_null=True,
+        help_text="Mean rating 1-5, or null when the subject has no reviews yet.",
+    )
+    count = serializers.IntegerField(help_text="Number of reviews counted.")

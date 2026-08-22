@@ -47,3 +47,16 @@ class RegisterSerializer(serializers.Serializer[Any]):
             raise serializers.ValidationError({"password": list(exc.messages)}) from exc
         attrs.pop("password_confirm")
         return attrs
+
+
+class TokenPairSerializer(serializers.Serializer[Any]):
+    """
+    What registration returns: a fresh JWT pair, not the created user.
+
+    Declared for the schema only — the view builds this dict itself. Worth
+    documenting precisely because the shape is surprising: a client expecting
+    the new user object back gets tokens instead.
+    """
+
+    access = serializers.CharField(help_text="Short-lived access token (15 minutes).")
+    refresh = serializers.CharField(help_text="Refresh token (7 days, rotated on use).")

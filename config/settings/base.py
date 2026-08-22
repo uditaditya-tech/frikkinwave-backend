@@ -304,6 +304,22 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Global musician network — jam, gig, connect.",
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # Four models define a `Status` choices class, and drf-spectacular names enum
+    # components after the FIELD — so all four collided and it resolved the clash
+    # with a hash, `Status7baEnum`: a valid schema and a terrible name to meet in
+    # generated client code.
+    #
+    # There are only TWO distinct sets, which is the interesting part.
+    # BandMembership, ContactRequest and ListingApplication have byte-identical
+    # choices, so they are one component and naming them separately is an error
+    # ("multiple names for the same choice set"). EngagementRequest adds
+    # `completed`, which makes it genuinely different.
+    "ENUM_NAME_OVERRIDES": {
+        # pending / accepted / declined — the shared invite-and-respond lifecycle.
+        "RequestStatusEnum": "apps.connections.models.ContactRequest.Status",
+        # The same, plus `completed`: an engagement outlives its acceptance.
+        "EngagementStatusEnum": "apps.engagements.models.EngagementRequest.Status",
+    },
 }
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -15,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 from apps.venues.serializers import (
     VenueCreateSerializer,
     VenueReadSerializer,
@@ -58,6 +60,9 @@ class VenueListCreateView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    @extend_schema(
+        operation_id="venues_list", responses={200: cursor_paginated(VenueReadSerializer)}
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = list_venues(
             city=request.query_params.get("city"),
@@ -68,6 +73,9 @@ class VenueListCreateView(APIView):
         data = VenueReadSerializer(page, many=True).data
         return paginator.get_paginated_response(data)
 
+    @extend_schema(
+        request=VenueCreateSerializer, responses={201: VenueReadSerializer, 400: DetailSerializer}
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = VenueCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -90,12 +98,17 @@ class VenueDetailView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    @extend_schema(responses={200: VenueReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         venue = get_venue(slug=slug)
         if venue is None:
             return Response({"detail": "Venue not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(VenueReadSerializer(venue).data)
 
+    @extend_schema(
+        request=VenueUpdateSerializer,
+        responses={200: VenueReadSerializer, 403: DetailSerializer, 404: DetailSerializer},
+    )
     def patch(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         serializer = VenueUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -112,6 +125,7 @@ class VenueDetailView(APIView):
             )
         return Response(VenueReadSerializer(venue).data)
 
+    @extend_schema(responses={204: None, 403: DetailSerializer, 404: DetailSerializer})
     def delete(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         try:
             deactivate_venue(owner=cast("User", request.user), slug=slug)

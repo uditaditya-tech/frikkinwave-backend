@@ -171,3 +171,29 @@ class MusicianProfileWriteSerializer(serializers.Serializer[Any]):
         if len(ids) != len(set(ids)):
             raise serializers.ValidationError("Duplicate instruments are not allowed.")
         return value
+
+
+class ProfileCoachSuggestionSerializer(serializers.Serializer[Any]):
+    """One actionable gap in a profile."""
+
+    field = serializers.CharField(help_text="The profile field the suggestion is about.")
+    message = serializers.CharField(help_text="What to do about it.")
+
+
+class ProfileCoachResponseSerializer(serializers.Serializer[Any]):
+    """
+    What the profile coach returns: a deterministic score and structured gaps.
+
+    Declared for the schema only — the service builds this dict. There is no
+    `tip` field: an LLM-written one used to sit alongside these and was removed
+    with the rest of the AI work. The rules below were always the half doing the
+    work, and unlike the tip they are identical for identical input.
+    """
+
+    completeness = serializers.IntegerField(
+        help_text="Weighted completeness score, 0-100.",
+    )
+    suggestions = ProfileCoachSuggestionSerializer(
+        many=True,
+        help_text="One entry per incomplete field. Empty when the profile scores 100.",
+    )

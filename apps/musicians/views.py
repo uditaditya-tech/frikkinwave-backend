@@ -24,6 +24,7 @@ from apps.musicians.serializers import (
     MusicianProfileDetailSerializer,
     MusicianProfileReadSerializer,
     MusicianProfileWriteSerializer,
+    ProfileCoachResponseSerializer,
     ProfileSearchResponseSerializer,
     ProfileSearchResultSerializer,
 )
@@ -38,6 +39,7 @@ from apps.musicians.services import (
     search_profiles,
     update_profile,
 )
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 
 if TYPE_CHECKING:
     # Type-only: `request.user` is supplied by the auth middleware, so the
@@ -63,6 +65,7 @@ class InstrumentListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={200: InstrumentSerializer(many=True)})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         return Response(InstrumentSerializer(list_instruments(), many=True).data)
 
@@ -78,6 +81,7 @@ class GenreListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={200: GenreSerializer(many=True)})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         return Response(GenreSerializer(list_genres(), many=True).data)
 
@@ -100,6 +104,14 @@ class ProfileCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=MusicianProfileWriteSerializer,
+        responses={
+            201: MusicianProfileDetailSerializer,
+            400: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = MusicianProfileWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -130,6 +142,10 @@ class ProfileListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        operation_id="musicians_profiles_list",
+        responses={200: cursor_paginated(MusicianProfileReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         params = request.query_params
         filters: dict[str, Any] = {}
@@ -246,6 +262,7 @@ class ProfilePublicView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={200: MusicianProfileDetailSerializer, 404: DetailSerializer})
     def get(self, request: Request, username: str, *args: Any, **kwargs: Any) -> Response:
         profile = get_public_profile(username=username)
         if profile is None:
@@ -266,6 +283,7 @@ class ProfileCoachView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: ProfileCoachResponseSerializer, 400: DetailSerializer})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         profile = (
             MusicianProfile.objects.prefetch_related("musician_instruments__instrument", "genres")
@@ -300,12 +318,21 @@ class ProfileMeView(APIView):
             .first()
         )
 
+    @extend_schema(responses={200: MusicianProfileDetailSerializer, 404: DetailSerializer})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         profile = self._get_profile(request)
         if profile is None:
             return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(MusicianProfileDetailSerializer(profile).data)
 
+    @extend_schema(
+        request=MusicianProfileWriteSerializer,
+        responses={
+            200: MusicianProfileDetailSerializer,
+            400: DetailSerializer,
+            404: DetailSerializer,
+        },
+    )
     def patch(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         profile = self._get_profile(request)
         if profile is None:

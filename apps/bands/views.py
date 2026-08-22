@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -41,6 +42,7 @@ from apps.bands.services import (
     list_memberships,
     update_band,
 )
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 
 if TYPE_CHECKING:
     # Type-only: `request.user` is supplied by the auth middleware, so the
@@ -70,6 +72,7 @@ class BandListCreateView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    @extend_schema(operation_id="bands_list", responses={200: cursor_paginated(BandReadSerializer)})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = list_bands(
             city=request.query_params.get("city"),
@@ -80,6 +83,9 @@ class BandListCreateView(APIView):
         data = BandReadSerializer(page, many=True).data
         return paginator.get_paginated_response(data)
 
+    @extend_schema(
+        request=BandCreateSerializer, responses={201: BandReadSerializer, 400: DetailSerializer}
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = BandCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -102,6 +108,7 @@ class BandDetailView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    @extend_schema(responses={200: BandReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         band = get_band(slug=slug)
         if band is None:
@@ -109,6 +116,10 @@ class BandDetailView(APIView):
         band.accepted_members = list(list_band_members(band=band))  # type: ignore[attr-defined]
         return Response(BandReadSerializer(band).data)
 
+    @extend_schema(
+        request=BandUpdateSerializer,
+        responses={200: BandReadSerializer, 403: DetailSerializer, 404: DetailSerializer},
+    )
     def patch(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         serializer = BandUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -125,6 +136,7 @@ class BandDetailView(APIView):
             )
         return Response(BandReadSerializer(band).data)
 
+    @extend_schema(responses={204: None, 403: DetailSerializer, 404: DetailSerializer})
     def delete(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         try:
             deactivate_band(owner=cast("User", request.user), slug=slug)
@@ -144,6 +156,16 @@ class BandInviteView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=BandInviteSerializer,
+        responses={
+            201: BandMembershipReadSerializer,
+            400: DetailSerializer,
+            403: DetailSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, slug: str, *args: Any, **kwargs: Any) -> Response:
         serializer = BandInviteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -188,6 +210,10 @@ class BandMembershipListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id="bands_memberships_list",
+        responses={200: cursor_paginated(BandMembershipReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = list_memberships(user=cast("User", request.user))
         paginator = BandCursorPagination()
@@ -202,6 +228,7 @@ class BandMembershipDetailView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: BandMembershipReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, membership_id: str, *args: Any, **kwargs: Any) -> Response:
         membership = get_membership(user=cast("User", request.user), membership_id=membership_id)
         if membership is None:
@@ -215,6 +242,10 @@ class BandMembershipAcceptView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={200: BandMembershipReadSerializer, 404: DetailSerializer, 409: DetailSerializer},
+    )
     def post(self, request: Request, membership_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_membership_view(request, membership_id, accept_membership)
 
@@ -225,6 +256,10 @@ class BandMembershipDeclineView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={200: BandMembershipReadSerializer, 404: DetailSerializer, 409: DetailSerializer},
+    )
     def post(self, request: Request, membership_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_membership_view(request, membership_id, decline_membership)
 

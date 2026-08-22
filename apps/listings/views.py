@@ -7,6 +7,7 @@ HTTP shell only: parse request → call service → return Response.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -39,6 +40,7 @@ from apps.listings.services import (
     list_listings,
     update_listing,
 )
+from apps.schema.serializers import DetailSerializer, cursor_paginated
 
 if TYPE_CHECKING:
     # Type-only: `request.user` is supplied by the auth middleware, so the
@@ -69,6 +71,9 @@ class ListingListCreateView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    @extend_schema(
+        operation_id="listings_list", responses={200: cursor_paginated(ListingReadSerializer)}
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         queryset = list_listings(
             listing_type=request.query_params.get("type"),
@@ -80,6 +85,10 @@ class ListingListCreateView(APIView):
         data = ListingReadSerializer(page, many=True).data
         return paginator.get_paginated_response(data)
 
+    @extend_schema(
+        request=ListingCreateSerializer,
+        responses={201: ListingReadSerializer, 400: DetailSerializer},
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = ListingCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -105,12 +114,17 @@ class ListingDetailView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    @extend_schema(responses={200: ListingReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, listing_id: str, *args: Any, **kwargs: Any) -> Response:
         listing = get_listing(listing_id=listing_id)
         if listing is None:
             return Response({"detail": "Listing not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(ListingReadSerializer(listing).data)
 
+    @extend_schema(
+        request=ListingUpdateSerializer,
+        responses={200: ListingReadSerializer, 403: DetailSerializer, 404: DetailSerializer},
+    )
     def patch(self, request: Request, listing_id: str, *args: Any, **kwargs: Any) -> Response:
         serializer = ListingUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -129,6 +143,7 @@ class ListingDetailView(APIView):
             )
         return Response(ListingReadSerializer(listing).data)
 
+    @extend_schema(responses={204: None, 403: DetailSerializer, 404: DetailSerializer})
     def delete(self, request: Request, listing_id: str, *args: Any, **kwargs: Any) -> Response:
         try:
             deactivate_listing(author=cast("User", request.user), listing_id=listing_id)
@@ -148,6 +163,10 @@ class ListingApplicationListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id="listings_applications_list",
+        responses={200: cursor_paginated(ListingApplicationReadSerializer)},
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         box = request.query_params.get("box", "incoming")
         if box not in ("incoming", "outgoing"):
@@ -165,6 +184,7 @@ class ListingApplicationDetailView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: ListingApplicationReadSerializer, 404: DetailSerializer})
     def get(self, request: Request, application_id: str, *args: Any, **kwargs: Any) -> Response:
         application = get_application(
             user=cast("User", request.user), application_id=application_id
@@ -182,6 +202,15 @@ class ListingApplyView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=ListingApplicationCreateSerializer,
+        responses={
+            201: ListingApplicationReadSerializer,
+            400: DetailSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, listing_id: str, *args: Any, **kwargs: Any) -> Response:
         serializer = ListingApplicationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -215,6 +244,14 @@ class ListingApplicationAcceptView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: ListingApplicationReadSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, application_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_application_view(request, application_id, accept_application)
 
@@ -225,6 +262,14 @@ class ListingApplicationDeclineView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: ListingApplicationReadSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+        },
+    )
     def post(self, request: Request, application_id: str, *args: Any, **kwargs: Any) -> Response:
         return _resolve_application_view(request, application_id, decline_application)
 

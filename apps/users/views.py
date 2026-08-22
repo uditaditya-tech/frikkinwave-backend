@@ -8,6 +8,7 @@ No business logic here.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
@@ -17,7 +18,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.users.serializers import RegisterSerializer, UserReadSerializer
+from apps.schema.serializers import DetailSerializer
+from apps.users.serializers import RegisterSerializer, TokenPairSerializer, UserReadSerializer
 from apps.users.services import register_user
 
 if TYPE_CHECKING:
@@ -40,6 +42,7 @@ class MeView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses={200: UserReadSerializer})
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         return Response(UserReadSerializer(cast("User", request.user)).data)
 
@@ -56,6 +59,9 @@ class RegisterView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        request=RegisterSerializer, responses={201: TokenPairSerializer, 400: DetailSerializer}
+    )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -86,6 +92,7 @@ class LogoutView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses={204: None, 400: DetailSerializer})
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         refresh_token: Any = request.data.get("refresh")
         if not refresh_token:
