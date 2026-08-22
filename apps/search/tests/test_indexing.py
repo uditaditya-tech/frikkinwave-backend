@@ -23,7 +23,7 @@ from rest_framework.test import APIClient
 
 from apps.musicians.models import Genre, Instrument, MusicianProfile
 from apps.search import consumers
-from apps.search.tests.conftest import FakeSearchClient
+from apps.search.testing import FakeSearchClient
 from apps.users.models import User
 
 PASSWORD = "StrongPass123!"

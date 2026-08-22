@@ -351,15 +351,27 @@ def _enqueue_index(profile: MusicianProfile) -> None:
     """
     from apps.events.services import publish
 
-    publish(
-        topic="profile.updated",
-        payload={
-            "profile_id": str(profile.id),
-            "bio": profile.bio,
-            "instruments": [mi.instrument.name for mi in profile.musician_instruments.all()],
-            "genres": [genre.name for genre in profile.genres.all()],
-            "city": profile.city,
-            "country": profile.country,
-            "is_available": profile.is_available,
-        },
-    )
+    publish(topic="profile.updated", payload=build_search_payload(profile))
+
+
+def build_search_payload(profile: MusicianProfile) -> dict[str, Any]:
+    """
+    The facts the search service needs about a profile.
+
+    Shared by the event path and by `reindex_profiles`, deliberately. They are
+    two routes to the same index, and if each composed its own payload they
+    could disagree — a rebuild would silently "fix" profiles into a different
+    shape than live updates produce, and the difference would only show up as
+    search results that change depending on how a profile was last touched.
+
+    Reads prefetched relations; callers that loop should prefetch both.
+    """
+    return {
+        "profile_id": str(profile.id),
+        "bio": profile.bio,
+        "instruments": [mi.instrument.name for mi in profile.musician_instruments.all()],
+        "genres": [genre.name for genre in profile.genres.all()],
+        "city": profile.city,
+        "country": profile.country,
+        "is_available": profile.is_available,
+    }

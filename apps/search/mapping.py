@@ -17,6 +17,7 @@ scored against the instrument field instead of drowning in prose.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 #: Fields the free-text query is matched against, with their boosts.
@@ -74,6 +75,13 @@ INDEX_BODY: dict[str, Any] = {
             # query: filtering afterwards would silently shrink a caller's
             # requested limit (ask for 20, drop half, return 9).
             "is_available": {"type": "boolean"},
+            # When this document was last written. Not searchable content — it
+            # is the watermark a full rebuild prunes against: reindex everything
+            # with a fresh timestamp, then delete whatever still carries an old
+            # one. That is how a profile deleted straight from the database
+            # (admin, a cascade, the demo seeder's --reset) eventually leaves the
+            # index, in a system that has no delete endpoint to fire an event.
+            "indexed_at": {"type": "date"},
         },
     },
 }
@@ -87,6 +95,7 @@ def build_document(
     city: str,
     country: str,
     is_available: bool,
+    indexed_at: datetime,
 ) -> dict[str, Any]:
     """
     Assemble the indexed document from the facts the producer published.
@@ -103,6 +112,7 @@ def build_document(
         "city": city,
         "country": country,
         "is_available": is_available,
+        "indexed_at": indexed_at.isoformat(),
     }
 
 
@@ -142,3 +152,15 @@ def build_query(*, query: str, limit: int, available_only: bool) -> dict[str, An
         body["query"]["bool"]["filter"] = [{"term": {"is_available": True}}]
 
     return body
+
+
+def build_stale_query(*, older_than: datetime) -> dict[str, Any]:
+    """
+    Match documents last written before `older_than`.
+
+    Used by a full rebuild to remove what it did not touch. Expressed as a range
+    on the watermark rather than as a list of ids to keep: shipping every known
+    profile id to the cluster to diff against would be the one part of a rebuild
+    that got worse as the site grew.
+    """
+    return {"query": {"range": {"indexed_at": {"lt": older_than.isoformat()}}}}

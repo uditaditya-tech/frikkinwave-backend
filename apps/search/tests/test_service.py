@@ -19,7 +19,7 @@ from pytest_django.fixtures import SettingsWrapper
 
 from apps.search import services
 from apps.search.client import SearchUnavailableError
-from apps.search.tests.conftest import FakeSearchClient
+from apps.search.testing import FakeSearchClient
 
 
 def _doc(profile_id: str, **overrides: object) -> dict[str, object]:
@@ -57,7 +57,12 @@ class TestIndexProfile:
         pid = str(uuid.uuid4())
         services.index_profile(**_doc(pid))  # type: ignore[arg-type]
 
-        assert fake_search.indexed[pid] == {
+        document = fake_search.indexed[pid]
+        # indexed_at is the writer's clock, not payload content — asserted
+        # present rather than equal, because a rebuild prunes against it and a
+        # document written without it would be deleted by the next sweep.
+        assert document.pop("indexed_at")
+        assert document == {
             "bio": "I play lead guitar.",
             "instruments": ["Electric Guitar"],
             "genres": ["Jazz"],

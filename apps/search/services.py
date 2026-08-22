@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 
 from django.conf import settings
+from django.utils import timezone
 
 from apps.search.client import SearchUnavailableError, get_search_client
-from apps.search.mapping import INDEX_BODY, build_document, build_query
+from apps.search.mapping import INDEX_BODY, build_document, build_query, build_stale_query
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,10 @@ def index_profile(
             city=city,
             country=country,
             is_available=is_available,
+            # Stamped here rather than taken from the payload: it records when
+            # this document was written, not when the profile changed. A rebuild
+            # prunes against it, so it has to come from the writer's clock.
+            indexed_at=timezone.now(),
         ),
     )
     logger.info("profile_indexed", extra={"profile_id": profile_id})
@@ -142,3 +148,38 @@ def remove_profile(*, profile_id: str) -> None:
 
     existed = get_search_client().delete_document(doc_id=profile_id)
     logger.info("profile_removed", extra={"profile_id": profile_id, "existed": existed})
+
+
+def prune_stale(*, older_than: datetime) -> int:
+    """
+    Delete documents last written before `older_than`. Returns the count.
+
+    This is the reconciliation half of the system, and it exists because the
+    event half cannot cover everything. A profile removed straight from the
+    database — Django admin, a cascade from a deleted user, the demo seeder's
+    --reset — emits nothing, and with the index in a separate store there is no
+    foreign key to cascade through either. Without a sweep those documents would
+    keep surfacing profiles that no longer exist, forever.
+
+    Only ever called after a *complete* successful rebuild. Run it after a
+    partial one and it deletes every profile the rebuild had not reached yet,
+    which is why the management command puts it behind an explicit flag rather
+    than doing it by default.
+    """
+    if not settings.OPENSEARCH_URL:
+        logger.info("prune_skipped_no_cluster")
+        return 0
+
+    client = get_search_client()
+
+    # Make the writes that just happened visible before searching for what did
+    # NOT happen. Without this the sweep's own search can read a pre-rebuild
+    # segment and match documents the rebuild has already refreshed — they
+    # survive on the version check, but the reported count becomes fiction.
+    client.refresh()
+
+    deleted = client.delete_by_query(
+        body=build_stale_query(older_than=older_than), conflicts="proceed"
+    )
+    logger.info("profiles_pruned", extra={"deleted": deleted, "older_than": older_than.isoformat()})
+    return deleted

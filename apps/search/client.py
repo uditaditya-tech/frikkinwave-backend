@@ -163,6 +163,34 @@ class SearchClient:
             raise
         return True
 
+    def delete_by_query(self, *, body: dict[str, Any], conflicts: str = "proceed") -> int:
+        """
+        Delete every document matching `body`, and return how many went.
+
+        `conflicts="proceed"` rather than the default "abort", and the default
+        here is the safe one because getting it wrong takes down a deploy.
+        delete_by_query searches first, then deletes each hit by the version it
+        saw; anything rewritten in between comes back as a version conflict. A
+        rebuild rewrites every profile immediately before sweeping, so conflicts
+        are the normal case, not the exceptional one — and aborting on them
+        fails the whole command after having already deleted part of the batch.
+
+        Skipping is also the semantically correct answer: a document whose
+        version moved is one that was just written, which is precisely the
+        document a stale-document sweep must not delete.
+
+        `refresh=True` so the deletions are visible immediately — the caller
+        reports what it removed, and a count nobody can verify for another
+        second is worse than a slightly slower command.
+        """
+        with _translated("delete by query"):
+            response = self._client.delete_by_query(
+                index=self._index, body=body, conflicts=conflicts, refresh=True
+            )
+        deleted = int(response.get("deleted", 0))
+        logger.info("search_deleted_by_query", extra={"index": self._index, "deleted": deleted})
+        return deleted
+
     def search(self, *, body: dict[str, Any]) -> list[dict[str, Any]]:
         """
         Run a query and return the raw hit dicts (`_id`, `_score`, `_source`).
