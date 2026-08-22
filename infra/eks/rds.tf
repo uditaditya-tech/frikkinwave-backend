@@ -1,10 +1,15 @@
 # ---------------------------------------------------------------------------
 # Postgres — restored from a snapshot, not created empty.
 #
-# The snapshot carries the pgvector extension, the reference data, the real
-# profiles and the whole demo-* Phase 5 dataset, so every list endpoint has
-# enough rows to paginate against a frontend. A fresh DB would need migrate +
-# seed + re-embedding (which costs OpenAI calls) to get back to the same place.
+# The snapshot carries the reference data, the real profiles and the whole
+# demo-* Phase 5 dataset, so every list endpoint has enough rows to paginate
+# against a frontend. A fresh DB would need migrate + seed to get back to the
+# same place.
+#
+# (It also still carries the pgvector extension, if it predates search/0003 —
+# that migration drops both the extension and the embedding table on restore.
+# There is nothing to re-embed any more; the search index rebuilds from these
+# rows instead, via `reindex_profiles`.)
 #
 # It lives in the public subnets because this VPC has no private ones (a NAT
 # gateway is ~$32/mo and the whole point of this stack is being cheap). It is

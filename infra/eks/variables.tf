@@ -241,11 +241,32 @@ variable "django_secret_key" {
   sensitive   = true
 }
 
-variable "openai_api_key" {
-  description = "OPENAI_API_KEY for embeddings/blurbs/coach. Empty disables AI calls (features degrade, nothing 500s)."
+# ---------------------------------------------------------------------------
+# OpenSearch (the search index)
+# ---------------------------------------------------------------------------
+
+variable "opensearch_engine_version" {
+  description = "Managed engine version. Keep the major aligned with opensearch-py in requirements/base.txt."
   type        = string
-  sensitive   = true
-  default     = ""
+  default     = "OpenSearch_3.7"
+}
+
+variable "opensearch_instance_type" {
+  description = "Domain instance type. t3.small.search is the cheapest that supports encryption at rest, which fine-grained access control requires."
+  type        = string
+  default     = "t3.small.search"
+}
+
+variable "opensearch_volume_size" {
+  description = "EBS volume size (GiB) per node. The index is a few hundred small documents; 10 is already generous."
+  type        = number
+  default     = 10
+}
+
+variable "opensearch_username" {
+  description = "Fine-grained access control master user. The password is generated and never leaves Terraform state into git."
+  type        = string
+  default     = "frikkinwave"
 }
 
 # ---------------------------------------------------------------------------

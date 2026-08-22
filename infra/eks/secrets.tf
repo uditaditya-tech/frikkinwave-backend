@@ -16,6 +16,16 @@
 
 locals {
   database_url = "postgres://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:5432/${var.db_name}"
+
+  # Same shape and the same reasoning as database_url: credentials embedded, so
+  # the generated password never leaves Terraform's state boundary into Helm
+  # values or a shell history.
+  #
+  # `.endpoint` is a bare hostname — no scheme — so the https:// is ours to add.
+  # It matters: the app passes this straight to opensearch-py as a host, and a
+  # scheme-less value would be treated as plain HTTP against a domain that
+  # enforces TLS.
+  opensearch_url = "https://${var.opensearch_username}:${random_password.opensearch.result}@${aws_opensearch_domain.main.endpoint}:443"
 }
 
 resource "aws_ssm_parameter" "django_secret_key" {
@@ -32,13 +42,11 @@ resource "aws_ssm_parameter" "database_url" {
   tags  = merge(local.tags, { Name = "${local.name}-database-url" })
 }
 
-# Empty is allowed — the app treats "no key" and "API down" identically and
-# degrades (search -> [], compatibility -> 503, coach -> null tip).
-resource "aws_ssm_parameter" "openai_api_key" {
-  name  = "/${local.name}/OPENAI_API_KEY"
+resource "aws_ssm_parameter" "opensearch_url" {
+  name  = "/${local.name}/OPENSEARCH_URL"
   type  = "SecureString"
-  value = var.openai_api_key
-  tags  = merge(local.tags, { Name = "${local.name}-openai-api-key" })
+  value = local.opensearch_url
+  tags  = merge(local.tags, { Name = "${local.name}-opensearch-url" })
 }
 
 # ---------------------------------------------------------------------------
@@ -69,7 +77,7 @@ resource "kubernetes_secret" "app" {
   data = {
     DJANGO_SECRET_KEY = var.django_secret_key
     DATABASE_URL      = local.database_url
-    OPENAI_API_KEY    = var.openai_api_key
+    OPENSEARCH_URL    = local.opensearch_url
   }
 
   type = "Opaque"

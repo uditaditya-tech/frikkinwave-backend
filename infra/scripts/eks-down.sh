@@ -121,6 +121,9 @@ print(json.dumps({"Changes": [{"Action": "DELETE", "ResourceRecordSet": rrs}]}))
 fi
 
 echo "==> terraform destroy"
+# Slower than it used to be: deleting an OpenSearch domain takes 15-20 minutes
+# on its own, and it is the long pole here. Nothing is wrong if this appears to
+# hang on aws_opensearch_domain.
 terraform -chdir="${TF_DIR}" destroy -auto-approve
 
 # Orphan check — the whole reason this script exists.
@@ -131,10 +134,17 @@ if [ -n "${VPC_ID}" ]; then
   ORPHAN_VOL="$(aws ec2 describe-volumes --region "${REGION}" \
     --filters "Name=tag:kubernetes.io/cluster/${CLUSTER},Values=owned" \
     --query 'Volumes[].VolumeId' --output text 2>/dev/null || echo '')"
-  if [ -n "${ORPHAN_LB}${ORPHAN_VOL}" ]; then
+  # A VPC domain holds ENIs in the subnets, so one left behind blocks the VPC
+  # delete as well as billing. Checked by name rather than by VPC because a
+  # half-deleted domain may no longer report its VPC.
+  ORPHAN_SEARCH="$(aws opensearch list-domain-names --region "${REGION}" \
+    --query "DomainNames[?starts_with(DomainName, '${CLUSTER}')].DomainName" \
+    --output text 2>/dev/null || echo '')"
+  if [ -n "${ORPHAN_LB}${ORPHAN_VOL}${ORPHAN_SEARCH}" ]; then
     echo "    !! STILL BILLING — delete these manually:"
-    [ -n "${ORPHAN_LB}" ]  && echo "       load balancers: ${ORPHAN_LB}"
-    [ -n "${ORPHAN_VOL}" ] && echo "       ebs volumes:    ${ORPHAN_VOL}"
+    [ -n "${ORPHAN_LB}" ]     && echo "       load balancers:     ${ORPHAN_LB}"
+    [ -n "${ORPHAN_VOL}" ]    && echo "       ebs volumes:        ${ORPHAN_VOL}"
+    [ -n "${ORPHAN_SEARCH}" ] && echo "       opensearch domains: ${ORPHAN_SEARCH}"
     exit 1
   fi
   echo "    None found."

@@ -51,6 +51,11 @@ output "db_endpoint" {
   value       = aws_db_instance.main.address
 }
 
+output "opensearch_endpoint" {
+  description = "Search domain endpoint. VPC-only — not reachable from outside the cluster."
+  value       = aws_opensearch_domain.main.endpoint
+}
+
 output "app_namespace" {
   value = var.app_namespace
 }

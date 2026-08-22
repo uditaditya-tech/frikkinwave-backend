@@ -670,3 +670,119 @@ class TestObservability:
         assert dashboard["panels"], "dashboard has no panels"
         exprs = " ".join(t["expr"] for p in dashboard["panels"] for t in p.get("targets", []))
         assert "kafka_consumergroup_lag" in exprs
+
+
+class TestOpenSearchDomain:
+    """
+    The search domain's invariants.
+
+    It holds no source of truth — every document is rebuilt from Postgres by
+    `reindex_profiles` — so nothing here is about durability. It is about the
+    domain being reachable by the cluster and by nothing else, and about the
+    engine not drifting away from the client that talks to it.
+    """
+
+    def test_the_domain_lives_in_the_vpc(self) -> None:
+        """
+        A domain without vpc_options gets a public endpoint on the internet,
+        guarded only by its access policy — and this one's access policy is
+        deliberately permissive, because fine-grained access control is doing
+        the authorization. Lose the VPC and that pairing becomes an open door.
+        """
+        tf = _terraform()
+        domain = re.search(r'resource\s+"aws_opensearch_domain"(.*?)\n\}', tf, re.DOTALL)
+        assert domain, "No aws_opensearch_domain in the EKS stack."
+        assert "vpc_options" in domain.group(1), (
+            "The OpenSearch domain declares no vpc_options, so AWS gives it a "
+            "PUBLIC endpoint. Its access policy allows es:* from any principal "
+            "on the assumption that only the VPC can reach it."
+        )
+
+    def test_only_the_cluster_may_reach_the_domain(self) -> None:
+        tf = _terraform()
+        sg = re.search(r'resource\s+"aws_security_group"\s+"opensearch"(.*?)\n\}\n', tf, re.DOTALL)
+        assert sg, "No security group for the OpenSearch domain."
+        body = sg.group(1)
+        assert "cluster_security_group_id" in body, (
+            "The OpenSearch security group does not source from the EKS cluster "
+            "security group, so it is not restricted to cluster workloads."
+        )
+        assert "cidr_blocks" not in body.split("egress")[0], (
+            "The OpenSearch ingress rule admits a CIDR range rather than only "
+            "the cluster security group."
+        )
+
+    def test_fine_grained_access_control_has_its_prerequisites(self) -> None:
+        """
+        FGAC requires encryption at rest, node-to-node encryption and enforced
+        HTTPS. Miss one and the domain create fails at apply — twenty minutes
+        into a rebuild, which is a slow way to learn it.
+        """
+        tf = _terraform()
+        domain = re.search(r'resource\s+"aws_opensearch_domain"(.*?)\n\}\n\Z', tf, re.DOTALL)
+        body = domain.group(1) if domain else _terraform()
+
+        assert "advanced_security_options" in body
+        for required in ("encrypt_at_rest", "node_to_node_encryption", "enforce_https"):
+            assert required in body, (
+                f"Fine-grained access control is enabled but {required} is not "
+                "configured. AWS rejects that combination at create time."
+            )
+
+    def test_the_engine_major_matches_the_client_major(self) -> None:
+        """
+        The pinned opensearch-py major and the managed engine major have to
+        agree. They are declared in two files that are never edited together —
+        requirements/base.txt and variables.tf — so nothing but this notices
+        when one moves.
+        """
+        engine = _tf_default("opensearch_engine_version").strip('"')
+        engine_major = engine.removeprefix("OpenSearch_").split(".")[0]
+
+        requirements = (REPO_ROOT / "requirements" / "base.txt").read_text()
+        client = re.search(r"^opensearch-py==(\d+)\.", requirements, re.MULTILINE)
+        assert client, "opensearch-py is not pinned in requirements/base.txt."
+
+        assert engine_major == client.group(1), (
+            f"The managed engine is OpenSearch {engine_major}.x but opensearch-py "
+            f"is pinned to {client.group(1)}.x. Keep the majors aligned."
+        )
+
+    def test_the_search_url_is_built_in_terraform_not_helm(self) -> None:
+        """
+        Same rule DATABASE_URL follows: the generated password is assembled into
+        a URL inside Terraform and handed to the pods through the Kubernetes
+        Secret. Routing it through `helm upgrade --set` would put it in the
+        release's stored manifest and in shell history.
+        """
+        tf = _terraform()
+        assert "opensearch_url" in tf, "No opensearch_url local in the EKS stack."
+        assert "OPENSEARCH_URL" in tf, (
+            "Terraform builds an OpenSearch URL but never puts it in the app Secret."
+        )
+
+        chart_values = (REPO_ROOT / "infra" / "helm" / "frikkinwave" / "values.yaml").read_text()
+        assert "opensearch" not in chart_values.lower() or "password" not in chart_values.lower(), (
+            "The chart values mention an OpenSearch password. Credentials belong "
+            "in the Terraform-owned Secret, not in Helm values."
+        )
+
+    def test_no_openai_plumbing_survives(self) -> None:
+        """
+        The AI work is gone from the application; the secret that fed it must not
+        outlive it. A provisioned credential nothing reads is a credential nobody
+        thinks to rotate.
+        """
+        tf = _terraform()
+        # Identifiers, not prose. Comments explaining why the embeddings are
+        # gone are history worth keeping; a variable or a parameter is plumbing.
+        plumbing = [
+            "OPENAI_API_KEY",
+            "var.openai",
+            'variable "openai',
+            '"openai_api_key"',
+        ]
+        found = [token for token in plumbing if token in tf]
+        assert not found, (
+            "The EKS stack still provisions OpenAI plumbing that no code reads: " + ", ".join(found)
+        )
