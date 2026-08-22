@@ -1,7 +1,6 @@
 from django.contrib import admin
 
 from apps.musicians.models import (
-    CompatibilityBlurb,
     Genre,
     Instrument,
     MusicianInstrument,
@@ -34,9 +33,3 @@ class MusicianProfileAdmin(admin.ModelAdmin):
 class MusicianInstrumentAdmin(admin.ModelAdmin):
     list_display = ["profile", "instrument", "proficiency"]
     list_filter = ["proficiency"]
-
-
-@admin.register(CompatibilityBlurb)
-class CompatibilityBlurbAdmin(admin.ModelAdmin):
-    list_display = ["profile_a", "profile_b", "generated_at"]
-    readonly_fields = ["profile_a", "profile_b", "blurb", "generated_at"]

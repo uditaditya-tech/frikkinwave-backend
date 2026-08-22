@@ -1,7 +1,7 @@
 """
 Kafka producer for the outbox relay (KAFKA.md stage 3).
 
-Mirrors `apps/ai/client.py`: the SDK is imported in exactly one module, and its
+Mirrors `apps/search/client.py`: the SDK is imported in exactly one module, and its
 exception types are converted into a domain error so nothing else has to know
 what library is underneath. The relay catches that error, parks the event with
 `last_error`, and retries on the next sweep.
@@ -35,7 +35,7 @@ class KafkaUnavailableError(RuntimeError):
     The broker could not be reached, or refused the message.
 
     A domain error, not the SDK's: callers degrade without importing
-    `confluent_kafka`, exactly as services degrade around `OpenAIUnavailableError`.
+    `confluent_kafka`, exactly as search degrades around `SearchUnavailableError`.
     """
 
 

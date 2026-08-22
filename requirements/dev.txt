@@ -34,4 +34,8 @@ pytest==9.0.3
 python-discovery==1.4.0
 ruff==0.15.15
 types-pyyaml==6.0.12.20260518
+# Was reaching us transitively through openai -> pydantic. mypy and
+# django-stubs both need it, and neither ships in the runtime image, so it
+# belongs here rather than in base.txt.
+typing-extensions==4.15.0
 virtualenv==21.4.1

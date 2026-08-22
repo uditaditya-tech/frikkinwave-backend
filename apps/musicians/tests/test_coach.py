@@ -1,15 +1,21 @@
 """
-Profile coach tests (Phase 2.7).
+Profile coach tests.
 
-Hybrid coach: deterministic completeness score + structured suggestions (always
-present), plus an LLM `tip` (mocked here; null without a key). No network.
+The coach is now purely rule-based: a weighted completeness score and structured
+per-field suggestions. There used to be an LLM `tip` alongside them; it is gone,
+and so is the mocking that surrounded it — these tests need no fake client, no
+key and no network, because there is no longer anything to fake.
+
+`tip` is asserted *absent* rather than simply not mentioned. Dropping a response
+key is a breaking change for a client, so it is worth a test that fails if the
+key quietly comes back.
 """
 
+from __future__ import annotations
+
 import pytest
-from pytest_django.fixtures import SettingsWrapper
 from rest_framework.test import APIClient
 
-from apps.musicians import services
 from apps.musicians.models import Genre, Instrument, MusicianProfile
 from apps.users.models import User
 
@@ -23,23 +29,6 @@ def _auth(api_client: APIClient, user: User) -> APIClient:
     return api_client
 
 
-class FakeOpenAIClient:
-    def __init__(self) -> None:
-        self.complete_calls: list[str] = []
-
-    def complete(self, prompt: str) -> str:
-        self.complete_calls.append(prompt)
-        return "Add a line about the projects you want to join."
-
-
-@pytest.fixture
-def fake_openai(monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper) -> FakeOpenAIClient:
-    settings.OPENAI_API_KEY = "test-key"
-    client = FakeOpenAIClient()
-    monkeypatch.setattr(services, "get_openai_client", lambda: client)
-    return client
-
-
 def _make_user(suffix: str) -> User:
     return User.objects.create_user(
         email=f"{suffix}@example.com", username=f"user-{suffix}", password=PASSWORD
@@ -48,11 +37,9 @@ def _make_user(suffix: str) -> User:
 
 @pytest.mark.django_db
 class TestCoach:
-    def test_incomplete_profile_lists_missing_fields(
-        self, api_client: APIClient, fake_openai: FakeOpenAIClient
-    ) -> None:
+    def test_incomplete_profile_lists_missing_fields(self, api_client: APIClient) -> None:
         user = _make_user("sparse")
-        # Only a (short) bio + city set → instruments/genres/sound_url/country missing.
+        # Only a (short) bio + city → instruments/genres/sound_url/country missing.
         MusicianProfile.objects.create(user=user, bio="short", city="Pune")
         _auth(api_client, user)
 
@@ -60,15 +47,11 @@ class TestCoach:
 
         assert response.status_code == 200
         fields = {s["field"] for s in response.data["suggestions"]}
-        # bio too short (<30) so it's still flagged; instruments/genres/sound_url/country missing.
+        # bio is under the 30-char floor, so it is still flagged.
         assert {"bio", "instruments", "genres", "sound_url", "country"} <= fields
         assert response.data["completeness"] == 10  # only city (10) earned
-        assert response.data["tip"] == "Add a line about the projects you want to join."
-        assert len(fake_openai.complete_calls) == 1
 
-    def test_complete_profile_scores_100(
-        self, api_client: APIClient, fake_openai: FakeOpenAIClient
-    ) -> None:
+    def test_complete_profile_scores_100(self, api_client: APIClient) -> None:
         user = _make_user("full")
         profile = MusicianProfile.objects.create(
             user=user,
@@ -88,51 +71,32 @@ class TestCoach:
 
         assert response.data["completeness"] == 100
         assert response.data["suggestions"] == []
-        assert response.data["tip"] is not None
 
-    def test_no_api_key_returns_null_tip_with_suggestions(
-        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
-    ) -> None:
-        settings.OPENAI_API_KEY = ""
-        client = FakeOpenAIClient()
-        monkeypatch.setattr(services, "get_openai_client", lambda: client)
-
-        user = _make_user("nokey")
+    def test_the_response_no_longer_carries_a_tip(self, api_client: APIClient) -> None:
+        """Dropping a key is a breaking change; this fails if it silently returns."""
+        user = _make_user("notip")
         MusicianProfile.objects.create(user=user, bio="short")
         _auth(api_client, user)
 
         response = api_client.get(COACH_URL)
 
-        assert response.status_code == 200
-        assert response.data["tip"] is None
-        assert response.data["suggestions"]  # still computed
-        assert client.complete_calls == []  # LLM never called
+        assert set(response.data) == {"completeness", "suggestions"}
 
-    def test_openai_error_returns_null_tip_with_suggestions(
-        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
-    ) -> None:
-        from apps.ai.client import OpenAIUnavailableError
-
-        settings.OPENAI_API_KEY = "test-key"
-
-        class FailingClient:
-            def complete(self, prompt: str) -> str:
-                raise OpenAIUnavailableError("quota exhausted")
-
-        monkeypatch.setattr(services, "get_openai_client", lambda: FailingClient())
-        user = _make_user("err")
-        MusicianProfile.objects.create(user=user, bio="short")
+    def test_is_deterministic(self, api_client: APIClient) -> None:
+        """
+        The property the generated tip could never offer: same profile in, same
+        coaching out. Worth asserting now that nothing non-deterministic remains.
+        """
+        user = _make_user("stable")
+        MusicianProfile.objects.create(user=user, bio="short", city="Goa")
         _auth(api_client, user)
 
-        response = api_client.get(COACH_URL)
-        # Rule-based coaching survives; only the LLM tip is dropped — no 500.
-        assert response.status_code == 200
-        assert response.data["tip"] is None
-        assert response.data["suggestions"]
+        first = api_client.get(COACH_URL).data
+        second = api_client.get(COACH_URL).data
 
-    def test_viewer_without_profile_returns_400(
-        self, api_client: APIClient, fake_openai: FakeOpenAIClient
-    ) -> None:
+        assert first == second
+
+    def test_viewer_without_profile_returns_400(self, api_client: APIClient) -> None:
         _auth(api_client, _make_user("noprofile"))
         assert api_client.get(COACH_URL).status_code == 400
 

@@ -180,15 +180,6 @@ SIMPLE_JWT = {
 }
 
 # ---------------------------------------------------------------------------
-# OpenAI (Phase 2 AI — embeddings, blurbs, profile coach)
-# Empty key is allowed: the embedding task skips + logs rather than erroring,
-# so profiles still save without a key (local dev, or prod before the secret).
-# ---------------------------------------------------------------------------
-OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
-OPENAI_EMBEDDING_MODEL = env("OPENAI_EMBEDDING_MODEL", default="text-embedding-3-small")
-OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
-
-# ---------------------------------------------------------------------------
 # Search (OpenSearch)
 #
 # An empty URL is a supported state, not a misconfiguration: local dev and CI

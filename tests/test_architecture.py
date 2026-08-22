@@ -523,7 +523,7 @@ def test_the_search_service_owns_the_opensearch_sdk() -> None:
     """
     Only apps/search may import opensearchpy, and only through its client seam.
 
-    Same rule the OpenAI client had, for the same reason: an SDK imported in
+    Same rule the deleted OpenAI client had, for the same reason: an SDK imported in
     twenty places cannot be swapped, and apps/search is supposed to be the app
     whose backend can change without anyone noticing. A stray `import
     opensearchpy` in a view would quietly make that false.

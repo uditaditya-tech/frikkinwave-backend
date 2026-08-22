@@ -10,16 +10,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from django.conf import settings
-
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
     from apps.users.models import User
 
-from apps.ai.client import OpenAIUnavailableError, get_openai_client
 from apps.musicians.models import (
-    CompatibilityBlurb,
     Genre,
     Instrument,
     MusicianInstrument,
@@ -227,59 +223,6 @@ def search_profiles(
     return results
 
 
-def get_compatibility_blurb(
-    *,
-    viewer_profile: MusicianProfile,
-    other_profile: MusicianProfile,
-) -> str | None:
-    """
-    Return a cached "why you might click" blurb for the pair, generating it on a
-    cache miss via gpt-4o-mini.
-
-    The pair is canonical (ordered by id), so viewing from either side hits the
-    same row. Returns None (logged) when no OpenAI key is configured.
-    """
-    profile_a, profile_b = sorted([viewer_profile, other_profile], key=lambda p: p.id)
-
-    existing = CompatibilityBlurb.objects.filter(profile_a=profile_a, profile_b=profile_b).first()
-    if existing is not None:
-        logger.info("compatibility_blurb_cache_hit", extra={"a": str(profile_a.id)})
-        return existing.blurb
-
-    if not settings.OPENAI_API_KEY:
-        logger.warning("compatibility_skipped_no_api_key")
-        return None
-
-    prompt = _build_compatibility_prompt(profile_a, profile_b)
-    try:
-        blurb = get_openai_client().complete(prompt)
-    except OpenAIUnavailableError:
-        # Upstream down/quota-exhausted: caller turns None into a 503.
-        logger.warning("compatibility_skipped_openai_unavailable")
-        return None
-
-    # get_or_create guards against a concurrent request having just written it.
-    obj, _created = CompatibilityBlurb.objects.get_or_create(
-        profile_a=profile_a,
-        profile_b=profile_b,
-        defaults={"blurb": blurb},
-    )
-    logger.info("compatibility_blurb_generated", extra={"a": str(profile_a.id)})
-    return obj.blurb
-
-
-def _build_compatibility_prompt(a: MusicianProfile, b: MusicianProfile) -> str:
-    """Prompt gpt-4o-mini for a short, grounded compatibility blurb."""
-    return (
-        "Two musicians are considering jamming together. Using only the details "
-        "below, write 2-3 friendly sentences addressed to both of them as 'you', "
-        "explaining why you might click musically. Be specific about shared or "
-        "complementary instruments, genres, and location. Do not invent facts.\n\n"
-        f"Musician A:\n{build_embedding_text(a)}\n\n"
-        f"Musician B:\n{build_embedding_text(b)}\n"
-    )
-
-
 def get_public_profile(*, username: str) -> MusicianProfile | None:
     """
     Return a single public profile by its owner's username, or None if absent.
@@ -322,10 +265,13 @@ def coach_profile(*, profile: MusicianProfile) -> dict[str, Any]:
     """
     Evaluate a profile's completeness and return actionable suggestions.
 
-    Returns a deterministic completeness score (0-100) plus structured per-field
-    suggestions (always present, no cost), and an LLM `tip` with qualitative
-    advice — `None` when no OpenAI key is configured. Generated synchronously;
-    not cached (the user's own setup flow, changing between calls).
+    A deterministic completeness score (0-100) plus structured per-field
+    suggestions. There used to be an LLM `tip` alongside these; it is gone with
+    the rest of the AI work, and the response no longer carries the key.
+
+    What remains is the half that was always doing the work. The rules below are
+    specific, ordered by weight, and identical for the same input — which is
+    more than the generated tip could claim, and costs nothing to produce.
     """
     score = 0
     suggestions: list[dict[str, str]] = []
@@ -335,13 +281,11 @@ def coach_profile(*, profile: MusicianProfile) -> dict[str, Any]:
         else:
             suggestions.append({"field": field, "message": message})
 
-    tip = _generate_coach_tip(profile, suggestions)
-
     logger.info(
         "profile_coached",
-        extra={"profile_id": str(profile.id), "completeness": score, "has_tip": tip is not None},
+        extra={"profile_id": str(profile.id), "completeness": score},
     )
-    return {"completeness": score, "suggestions": suggestions, "tip": tip}
+    return {"completeness": score, "suggestions": suggestions}
 
 
 def _field_is_complete(profile: MusicianProfile, field: str) -> bool:
@@ -353,29 +297,6 @@ def _field_is_complete(profile: MusicianProfile, field: str) -> bool:
         return profile.genres.exists()
     # Remaining fields are plain CharFields — non-blank means complete.
     return bool(getattr(profile, field, "").strip())
-
-
-def _generate_coach_tip(profile: MusicianProfile, suggestions: list[dict[str, str]]) -> str | None:
-    """LLM qualitative tip, or None when no OpenAI key is configured."""
-    if not settings.OPENAI_API_KEY:
-        logger.warning("coach_tip_skipped_no_api_key")
-        return None
-
-    gaps = ", ".join(s["field"] for s in suggestions) or "none"
-    prompt = (
-        "You are a friendly coach helping a musician improve their profile on a "
-        "jam-partner network. Using only the details below, give one or two "
-        "specific, encouraging suggestions to make the profile more appealing and "
-        "discoverable. Address them as 'you'. Do not invent facts.\n\n"
-        f"Profile:\n{build_embedding_text(profile) or '(empty profile)'}\n\n"
-        f"Missing or weak fields: {gaps}\n"
-    )
-    try:
-        return get_openai_client().complete(prompt)
-    except OpenAIUnavailableError:
-        # Upstream down/quota-exhausted: omit the tip, keep the rule-based coaching.
-        logger.warning("coach_tip_skipped_openai_unavailable")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -442,32 +363,3 @@ def _enqueue_index(profile: MusicianProfile) -> None:
             "is_available": profile.is_available,
         },
     )
-
-
-# ---------------------------------------------------------------------------
-# Embedding text
-#
-# Stays here, with the data it describes: composing it needs the profile's
-# instruments and genres. Only its OUTPUT crosses to the search service.
-# ---------------------------------------------------------------------------
-
-
-def build_embedding_text(profile: MusicianProfile) -> str:
-    """
-    Compose the text that represents a profile for embedding.
-
-    Deterministic so identical profiles produce identical text (the content-skip
-    in generate_profile_embedding relies on this). Reads prefetched relations.
-    """
-    instruments = ", ".join(
-        f"{mi.instrument.name} ({mi.proficiency})" for mi in profile.musician_instruments.all()
-    )
-    genres = ", ".join(genre.name for genre in profile.genres.all())
-
-    lines = [
-        f"Bio: {profile.bio}" if profile.bio else "",
-        f"Location: {profile.city}, {profile.country}".strip(", "),
-        f"Instruments: {instruments}" if instruments else "",
-        f"Genres: {genres}" if genres else "",
-    ]
-    return "\n".join(line for line in lines if line)
