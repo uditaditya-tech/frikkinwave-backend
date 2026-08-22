@@ -34,14 +34,12 @@ inflection==0.5.1
 jiter==0.15.0
 jsonschema-specifications==2025.9.1
 jsonschema==4.26.0
-numpy==2.4.6
 openai==2.40.0
 # OpenSearch client (search backend). Pinned to 3.0.0 deliberately: it is the
 # newest 3.x that does NOT depend on opensearch-protobufs, which drags in
 # grpcio and protobuf for a REST client. Same major as the managed cluster.
 opensearch-py==3.0.0
 packaging==26.2
-pgvector==0.4.2
 # Metrics for the outbox relay. Only the client library — the relay
 # exposes a /metrics endpoint that Prometheus scrapes via a PodMonitor.
 prometheus-client==0.26.0

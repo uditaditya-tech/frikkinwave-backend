@@ -14,10 +14,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveIndex(
-            model_name="profileembedding",
-            name="profile_embedding_hnsw",
-        ),
+        # The RemoveIndex that used to lead here is gone with pgvector: 0004 no
+        # longer creates the HNSW index, so removing it by name would fail on a
+        # fresh database. Dropping the table takes its indexes with it anyway.
         migrations.DeleteModel(
             name="ProfileEmbedding",
         ),

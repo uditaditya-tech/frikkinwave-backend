@@ -1,8 +1,14 @@
 services:
   db:
-    # pgvector image = Postgres 16 + the `vector` extension (Phase 2 embeddings).
-    # Same PG 16 major as plain postgres:16, so the existing data volume is reused.
-    image: pgvector/pgvector:pg16
+    # Stock Postgres again. The pgvector image is gone with the embeddings —
+    # NOTE: swapping the image back changes the libc the server runs against, so
+    # an existing postgres_data volume will refuse to CREATE DATABASE with a
+    # collation version mismatch. Fix once:
+    #   docker compose exec -T db psql -U postgres -d postgres \
+    #     -c 'ALTER DATABASE template1 REFRESH COLLATION VERSION;'
+    # (repeat for `postgres` and `frikkinwave`), or `docker compose down -v` to
+    # recreate the volume clean, which drops local data.
+    image: postgres:16
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
