@@ -198,6 +198,25 @@ OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
 SEARCH_SIMILARITY_THRESHOLD = env.float("SEARCH_SIMILARITY_THRESHOLD", default=0.4)
 
 # ---------------------------------------------------------------------------
+# Search (OpenSearch)
+#
+# An empty URL is a supported state, not a misconfiguration: local dev and CI
+# run without a cluster and search degrades to an empty result set. Same
+# contract the empty OpenAI key had — "not configured" and "upstream down" are
+# deliberately one case, because an upstream failure must never 500 a user.
+# ---------------------------------------------------------------------------
+OPENSEARCH_URL = env("OPENSEARCH_URL", default="")
+
+# Index name. Configurable so a full rebuild can be written into a fresh index
+# and swapped in by alias, and so a test run can isolate itself from a dev index
+# sitting in the same local cluster.
+OPENSEARCH_INDEX = env("OPENSEARCH_INDEX", default="profiles")
+
+# Seconds before a cluster call is abandoned. See the comment on the client:
+# this bounds how long a request thread can be held by a slow cluster.
+OPENSEARCH_TIMEOUT = env.float("OPENSEARCH_TIMEOUT", default=3.0)
+
+# ---------------------------------------------------------------------------
 # Events (KAFKA.md)
 #
 # Kafka is the only transport. The EVENT_TRANSPORT flag is gone with stage 5 —

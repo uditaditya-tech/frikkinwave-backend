@@ -12,6 +12,35 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # Single-node OpenSearch for local search.
+  #
+  # Security plugin off deliberately: this binds to localhost, and production is
+  # a managed AWS domain with its own auth in front of it. A local TLS + demo
+  # credential setup would be ceremony that models nothing about how prod is
+  # actually configured, and would be one more thing to get wrong on a laptop.
+  opensearch:
+    image: opensearchproject/opensearch:3.7.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      # Without this the JVM sizes its heap from host RAM — gigabytes, for an
+      # index of a few hundred profiles.
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ulimits:
+      # OpenSearch refuses to start without these; the defaults are too low.
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+
 
 volumes:
   postgres_data:
+  opensearch_data:

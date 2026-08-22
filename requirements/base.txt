@@ -13,6 +13,7 @@ anyio==4.13.0
 asgiref==3.11.1
 attrs==26.1.0
 certifi==2026.5.20
+charset-normalizer==3.5.1
 # Kafka client — the only event transport (KAFKA.md). librdkafka-backed;
 # ships manylinux_2_28_aarch64 wheels, so the Graviton image needs no source build.
 confluent-kafka==2.15.0
@@ -23,6 +24,7 @@ django==6.0.5
 djangorestframework-simplejwt==5.5.1
 djangorestframework==3.17.1
 drf-spectacular==0.29.0
+events==0.5
 gunicorn==26.0.0
 h11==0.16.0
 httpcore==1.0.9
@@ -34,6 +36,10 @@ jsonschema-specifications==2025.9.1
 jsonschema==4.26.0
 numpy==2.4.6
 openai==2.40.0
+# OpenSearch client (search backend). Pinned to 3.0.0 deliberately: it is the
+# newest 3.x that does NOT depend on opensearch-protobufs, which drags in
+# grpcio and protobuf for a REST client. Same major as the managed cluster.
+opensearch-py==3.0.0
 packaging==26.2
 pgvector==0.4.2
 # Metrics for the outbox relay. Only the client library — the relay
@@ -43,15 +49,19 @@ psycopg2-binary==2.9.12
 pydantic-core==2.46.4
 pydantic==2.13.4
 pyjwt==2.13.0
+python-dateutil==2.9.0.post0
 python-json-logger==4.1.0
 pyyaml==6.0.3
 referencing==0.37.0
+requests==2.34.2
 rpds-py==2026.5.1
+six==1.17.0
 sniffio==1.3.1
 sqlparse==0.5.5
 tqdm==4.67.3
 typing-extensions==4.15.0
 typing-inspection==0.4.2
 uritemplate==4.2.0
+urllib3==2.7.0
 uuid6==2025.0.1
 whitenoise==6.12.0

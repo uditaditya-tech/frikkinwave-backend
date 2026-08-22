@@ -27,9 +27,29 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Added before anything reads it, so a bad container config surfaces in
+      # the commit that introduces the container rather than in the one that
+      # starts depending on it.
+      opensearch:
+        image: opensearchproject/opensearch:3.7.0
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+
     env:
       DJANGO_SECRET_KEY: ci-secret-key-not-used-in-production
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/frikkinwave_test
+      OPENSEARCH_URL: http://localhost:9200
       DJANGO_SETTINGS_MODULE: config.settings.local
 
     steps:
