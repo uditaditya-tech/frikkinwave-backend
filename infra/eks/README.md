@@ -210,6 +210,33 @@ kubectl exec -n frikkinwave deploy/frikkinwave-web -- python manage.py backfill_
 The general rule: restoring an old snapshot forward through migrations gives you
 the right *schema*, never the derived *data*.
 
+### Trap: a VPC OpenSearch domain needs an account-level service-linked role
+
+Hit on 2026-08-23, the first time this stack ever created the search domain.
+Twenty minutes into an apply:
+
+```
+Error: creating OpenSearch Domain (frikkinwave-prod-search):
+ValidationException: Before you can proceed, you must enable a service-linked
+role to give Amazon OpenSearch Service permissions to access your VPC.
+```
+
+A VPC-attached domain creates ENIs in the subnets, and it needs
+`AWSServiceRoleForAmazonOpenSearchService` to do it. The console creates that
+role behind the scenes on your first domain; the API does not, and neither does
+Terraform.
+
+`eks-up.sh` now creates it if absent, before `terraform init`. Deliberately **not**
+a Terraform resource: a service-linked role is account-global and unique, so
+declaring it in this disposable stack would have every `terraform destroy` delete
+a shared account resource, and every apply race to put it back.
+
+The sharp edge is that AWS creates the role *as a side effect of the call that
+rejects you* — so a blind re-run appears to fix it. That is the worst possible
+behaviour to rely on: it works only on the second attempt, and only for someone
+who already knows to make one. `terraform validate` cannot see any of this; it is
+a server-side check that only an apply reaches.
+
 ### Trap: negative DNS caching makes a good deploy look broken
 
 `app-deploy.sh` creates the Route 53 alias and then polls the public URL. The

@@ -49,6 +49,33 @@ if ! terraform -chdir="${DNS_DIR}" output -raw alert_topic_arn >/dev/null 2>&1; 
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Preflight: OpenSearch's service-linked role must exist in the ACCOUNT.
+#
+# A VPC-attached OpenSearch domain needs AWSServiceRoleForAmazonOpenSearchService
+# to create ENIs in the subnets. Terraform does not create it, and the failure it
+# produces is a 400 twenty minutes into an apply:
+#
+#   ValidationException: Before you can proceed, you must enable a service-linked
+#   role to give Amazon OpenSearch Service permissions to access your VPC.
+#
+# Paid for on 2026-08-23, the first time this stack ever built a domain.
+#
+# Not a Terraform resource on purpose. A service-linked role is ACCOUNT-GLOBAL and
+# there can only be one, so putting it in this stack would have `terraform destroy`
+# delete a shared account resource on every teardown — and the next apply race to
+# recreate it. Here it is a one-line idempotent check that costs nothing when the
+# role is already there, which after the first run it always is.
+#
+# (AWS also creates the role as a side effect of the very call that rejects you,
+# so a blind re-run "fixes" it too. That is worse than useless as a design: it
+# only works on the second try, and only for someone who knows to try twice.)
+# ---------------------------------------------------------------------------
+if ! aws iam get-role --role-name AWSServiceRoleForAmazonOpenSearchService >/dev/null 2>&1; then
+  echo "==> Creating the OpenSearch service-linked role (once per AWS account)"
+  aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com >/dev/null
+fi
+
 echo "==> terraform init"
 terraform -chdir="${TF_DIR}" init -input=false
 
