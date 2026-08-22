@@ -37,7 +37,12 @@ echo "==> Caller (already cluster-admin via bootstrap): ${CALLER_ARN}"
 # persistent stack been applied, from this machine, with the current config.
 # ---------------------------------------------------------------------------
 DNS_DIR="${SCRIPT_DIR}/../dns"
-if ! terraform -chdir="${DNS_DIR}" output -raw alert_topic_arn >/dev/null 2>&1; then
+# Checked for a VALUE, not just a zero exit code. `terraform output -raw` on a
+# state file with no resources succeeds and prints nothing, so testing the exit
+# code alone lets an emptied stack pass as applied. Same defect was live in
+# eks-down.sh until 2026-08-23.
+DNS_TOPIC="$(terraform -chdir="${DNS_DIR}" output -raw alert_topic_arn 2>/dev/null || echo '')"
+if [ -z "${DNS_TOPIC}" ]; then
   echo "==> The persistent stack is not applied (no alert_topic_arn output)."
   echo "    It owns the Route 53 zone, the ACM cert and the SNS alert topic,"
   echo "    and this stack reads all three. Run it first — safe and idempotent:"

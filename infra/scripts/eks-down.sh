@@ -3,7 +3,8 @@
 # Destroy the EKS stack. Run this whenever you stop working — the control plane
 # bills $0.10/hr whether or not anything is deployed.
 #
-# Usage:  ./infra/scripts/eks-down.sh
+# Usage:  ./infra/scripts/eks-down.sh [--yes]
+#         --yes  skip the confirmation prompt (for unattended runs)
 #
 # Why a script rather than a bare `terraform destroy`: Kubernetes controllers
 # create AWS resources that Terraform does not know about (an ALB from an
@@ -16,19 +17,57 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="${SCRIPT_DIR}/../eks"
 
-if ! terraform -chdir="${TF_DIR}" output -raw cluster_name >/dev/null 2>&1; then
+ASSUME_YES=false
+for arg in "$@"; do
+  case "${arg}" in
+    --yes|-y) ASSUME_YES=true ;;
+    *) echo "Unknown argument: ${arg}" >&2
+       echo "Usage: $0 [--yes]" >&2
+       exit 2 ;;
+  esac
+done
+
+# Read the outputs, then check they have VALUES.
+#
+# Testing the exit code alone is not enough, and that is not theoretical: after
+# a successful destroy the state file still exists with zero resources, and
+# `terraform output -raw cluster_name` SUCCEEDS returning an empty string. The
+# old guard therefore never fired on a torn-down stack, and the script sailed
+# past it to run kubectl and aws commands with empty --name and --region.
+#
+# Harmless when a human is watching the nonsense scroll by ("destroys the EKS
+# cluster '' in ."); less so now that --yes lets this run unattended.
+CLUSTER="$(terraform -chdir="${TF_DIR}" output -raw cluster_name 2>/dev/null || echo '')"
+REGION="$(terraform -chdir="${TF_DIR}" output -raw aws_region 2>/dev/null || echo '')"
+VPC_ID="$(terraform -chdir="${TF_DIR}" output -raw vpc_id 2>/dev/null || echo '')"
+
+if [ -z "${CLUSTER}" ] || [ -z "${REGION}" ]; then
   echo "==> No EKS stack found in state. Nothing to destroy."
   exit 0
 fi
 
-CLUSTER="$(terraform -chdir="${TF_DIR}" output -raw cluster_name)"
-REGION="$(terraform -chdir="${TF_DIR}" output -raw aws_region)"
-VPC_ID="$(terraform -chdir="${TF_DIR}" output -raw vpc_id 2>/dev/null || echo '')"
-
 echo "==> This destroys the EKS cluster '${CLUSTER}' in ${REGION}."
 echo "    (infra/dns — Route 53 zone + ACM cert — is NOT touched.)"
-read -r -p "    Type 'yes' to confirm: " CONFIRM
-[ "${CONFIRM}" = "yes" ] || { echo "Aborted."; exit 1; }
+
+# The prompt is the default because this is destructive and usually run by hand.
+#
+# But an unguarded `read` makes the script unusable unattended in the worst way:
+# with no TTY it hits EOF, CONFIRM stays empty, the check fails, and the script
+# exits non-zero having destroyed NOTHING — while its output looks like a
+# teardown that ran. Paid for on 2026-08-23, when exactly that happened and the
+# stack kept billing.
+#
+# So refusing to prompt without a TTY is explicit, and says which flag to pass.
+if [ "${ASSUME_YES}" = true ]; then
+  echo "    --yes given, skipping confirmation."
+elif [ -t 0 ]; then
+  read -r -p "    Type 'yes' to confirm: " CONFIRM
+  [ "${CONFIRM}" = "yes" ] || { echo "Aborted."; exit 1; }
+else
+  echo "!! No terminal to prompt on, and --yes was not given. Nothing destroyed." >&2
+  echo "   Re-run as: $0 --yes" >&2
+  exit 1
+fi
 
 # Delete controller-owned AWS resources by deleting the K8s objects that own
 # them. Best-effort: the cluster may already be unreachable.
