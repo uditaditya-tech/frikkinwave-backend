@@ -141,3 +141,62 @@ class TestSearch:
 
         assert response.status_code == 200
         assert response.data["results"] == []
+
+
+@pytest.mark.django_db
+class TestTheDocumentedShapeMatchesTheRealOne:
+    """
+    ProfileSearchResponseSerializer exists only to give drf-spectacular a shape
+    to publish; the view builds its dict by hand and never instantiates it.
+
+    That gap is the whole risk. Nothing at runtime makes the declaration and the
+    response agree, so a key added to one and not the other would ship a schema
+    that lies — and a lying schema is worse than the missing one it replaced,
+    because a generated client trusts it.
+    """
+
+    def test_the_response_has_exactly_the_documented_top_level_keys(
+        self, api_client: APIClient, stub_search: StubSearch
+    ) -> None:
+        from apps.musicians.serializers import ProfileSearchResponseSerializer
+
+        stub_search.hits = [(_profile("a").id, 1.5)]
+
+        response = api_client.get(SEARCH_URL, {"q": "x"})
+
+        declared = set(ProfileSearchResponseSerializer().fields)
+        assert set(response.data) == declared, (
+            f"The endpoint returns {sorted(response.data)} but the schema "
+            f"advertises {sorted(declared)}."
+        )
+
+    def test_each_result_has_exactly_the_documented_fields(
+        self, api_client: APIClient, stub_search: StubSearch
+    ) -> None:
+        from apps.musicians.serializers import ProfileSearchResultSerializer
+
+        stub_search.hits = [(_profile("a").id, 1.5)]
+
+        response = api_client.get(SEARCH_URL, {"q": "x"})
+
+        declared = set(ProfileSearchResultSerializer().fields)
+        assert set(response.data["results"][0]) == declared
+
+    def test_the_documented_limits_are_the_ones_enforced(
+        self, api_client: APIClient, stub_search: StubSearch
+    ) -> None:
+        """
+        The schema quotes SEARCH_MAX_LIMIT and SEARCH_QUERY_MAX_LEN in its
+        parameter descriptions. If the constants move and the behaviour follows,
+        the prose silently stops being true — so assert the behaviour against
+        the same constants the description interpolates.
+        """
+        from apps.musicians.views import SEARCH_MAX_LIMIT, SEARCH_QUERY_MAX_LEN
+
+        api_client.get(SEARCH_URL, {"q": "x", "limit": str(SEARCH_MAX_LIMIT + 500)})
+        assert stub_search.calls[-1]["limit"] == SEARCH_MAX_LIMIT
+
+        over = api_client.get(SEARCH_URL, {"q": "a" * (SEARCH_QUERY_MAX_LEN + 1)})
+        assert over.status_code == 400
+        at_limit = api_client.get(SEARCH_URL, {"q": "a" * SEARCH_QUERY_MAX_LEN})
+        assert at_limit.status_code == 200

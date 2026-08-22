@@ -107,6 +107,29 @@ class ProfileSearchResultSerializer(MusicianProfileReadSerializer):
         return getattr(obj, "score", None)
 
 
+class ProfileSearchResponseSerializer(serializers.Serializer[Any]):
+    """
+    The search endpoint's envelope — `{"query": ..., "results": [...]}`.
+
+    Declared for the SCHEMA, not for serialization: the view builds that dict
+    itself and this is never instantiated. It exists because drf-spectacular
+    cannot infer a response shape from a plain APIView, so `/api/musicians/
+    search/` appeared in the published schema as a path with no documented body
+    at all — a generated client got the endpoint and nothing it returns.
+
+    Keep it in step with what the view actually returns. Nothing enforces the
+    agreement at runtime, which is the cost of documenting a hand-built dict.
+    """
+
+    query = serializers.CharField(
+        help_text="The query string as received, echoed back.",
+    )
+    results = ProfileSearchResultSerializer(
+        many=True,
+        help_text="Profiles ranked best-match first. Empty if search is unavailable.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Write serializers (create / update input)
 # ---------------------------------------------------------------------------

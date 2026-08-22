@@ -8,6 +8,7 @@ No business logic here.
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -23,6 +24,7 @@ from apps.musicians.serializers import (
     MusicianProfileDetailSerializer,
     MusicianProfileReadSerializer,
     MusicianProfileWriteSerializer,
+    ProfileSearchResponseSerializer,
     ProfileSearchResultSerializer,
 )
 from apps.musicians.services import (
@@ -161,6 +163,47 @@ class ProfileSearchView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        summary="Full-text search over musician profiles",
+        parameters=[
+            OpenApiParameter(
+                name="q",
+                type=str,
+                required=True,
+                description=(
+                    f"Search text. Required; blank or whitespace-only is a 400, as is "
+                    f"anything longer than {SEARCH_QUERY_MAX_LEN} characters. Treated "
+                    f"as text, never as query syntax — operators and reserved "
+                    f"characters are matched literally rather than parsed."
+                ),
+            ),
+            OpenApiParameter(
+                name="limit",
+                type=int,
+                description=(
+                    f"Maximum results (default {SEARCH_DEFAULT_LIMIT}, max "
+                    f"{SEARCH_MAX_LIMIT}). Out-of-range values are clamped and "
+                    f"unparseable ones fall back to the default — never a 400."
+                ),
+            ),
+            OpenApiParameter(
+                name="available",
+                type=bool,
+                description=(
+                    "Pass `true` to return only profiles marked available. Any other "
+                    "value is treated as false."
+                ),
+            ),
+        ],
+        responses={
+            200: ProfileSearchResponseSerializer,
+            400: OpenApiResponse(
+                description=(
+                    '`q` was missing, blank, or over the length limit. Body is `{"detail": "..."}`.'
+                ),
+            ),
+        },
+    )
     def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         query = request.query_params.get("q", "").strip()
         if not query:
