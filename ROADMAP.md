@@ -67,9 +67,9 @@ Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery w
 ---
 
 ## Phase 2R — Search without the AI
-**Status: ✅ Complete and DEPLOYED (2026-08-23)** — live at
+**Status: ✅ Complete, DEPLOYED and VERIFIED (2026-08-23)** — ran live at
 https://api.frikkinwave.com (image `83968cd`), verified end to end on the real
-cluster.
+cluster, then torn down the same day. $0/hr.
 
 Phase 2 was replaced rather than extended. The embeddings were doing retrieval,
 and BM25 does retrieval without a model, a key, a per-request cost or a vector
