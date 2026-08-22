@@ -6,7 +6,7 @@ A global, profile-centric social network for musicians and live-shows industry p
 
 **The problem:** Finding jam partners, bandmates, session musicians, gigs, venues, and auditions is fragmented across WhatsApp groups, Instagram DMs, and word-of-mouth. No single platform is built specifically for this.
 
-**The product:** Musicians build profiles. Others discover them by instrument, genre, city. The jam partner finder is the Phase 1 anchor. AI-powered semantic matching is the Phase 2 centerpiece.
+**The product:** Musicians build profiles. Others discover them by instrument, genre, city, or by searching in their own words. The jam partner finder is the Phase 1 anchor.
 
 **The portfolio goal:** Real deployment on frikkinwave.com signals genuine problem-solving intent — not just a demo project.
 
@@ -18,9 +18,9 @@ A global, profile-centric social network for musicians and live-shows industry p
 |---|---|---|
 | Framework | Django 6.x + DRF | Three-layer architecture fits naturally; battle-tested |
 | Auth | simplejwt + blacklist app | Refresh token rotation with blacklisting |
-| Database | PostgreSQL + pgvector | One store for relational data AND embeddings |
+| Database | PostgreSQL 16 | The source of truth for everything. |
 | Async work | Transactional outbox → Kafka (Strimzi) | The only transport. Events commit with the state change; a relay produces them; consumer groups handle them. See `KAFKA.md` |
-| AI | OpenAI text-embedding-3-small + gpt-4o-mini | Cheapest capable models; swap-able behind a service interface |
+| Search | AWS OpenSearch (BM25) | Full-text over profiles, in a store `apps/search` owns outright. Derived data — rebuilt from Postgres, never restored. |
 | API contract | drf-spectacular → OpenAPI schema | Contract-first; schema exposed at /api/schema/ |
 | Deployment | AWS EKS (Kubernetes) + Helm | Same Docker image; per-service Deployments as apps are extracted |
 | CI | GitHub Actions | Lint + type-check + migrate + pytest on every push |

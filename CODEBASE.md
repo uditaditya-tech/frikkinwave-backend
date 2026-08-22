@@ -38,25 +38,25 @@ frikkinwave-backend/
 │   │   └── tests/
 │   │       └── test_outbox.py     # 10 tests: atomicity, rollback, relay, parking, registry, idempotency
 │   │
-│   ├── ai/                        # PLATFORM package — not a Django app, no models
-│   │   └── client.py              # OpenAIClient (embed + complete) + get_openai_client()
-│   │                              #   Neutral home: musicians (blurbs/coach) and search (embeddings)
-│   │                              #   both need it, so neither can own it.
-│
 │   ├── notifications/             # EXTRACTED SERVICE — own consumer group, own Deployment
 │   │   ├── renderers.py           # topic -> (subject, body) from primitives only
 │   │   ├── services.py            # deliver(); the only service layer touching no model
 │   │   ├── consumers.py           # KAFKA subscriptions: 8 topics -> services.deliver(); imports no other app
 │   │   └── tests/                 # incl. a test asserting it imports no other app
 │
-│   ├── search/                    # EXTRACTED SERVICE — semantic search + embedding index
-│   │   ├── models.py              # ProfileEmbedding: profile_id is a bare UUID (NO FK), is_available replica
-│   │   ├── services.py            # search() -> [(profile_id, similarity)] — ids, never ORM objects
+│   ├── search/                    # EXTRACTED SERVICE — full-text search over OpenSearch
+│   │   ├── client.py              # THE ONLY module importing opensearchpy; SearchUnavailableError seam
+│   │   ├── mapping.py             # index body, field boosts, document + query builders
+│   │   ├── models.py              # EMPTY — this app owns an index, not a table
+│   │   ├── services.py            # search() -> [(profile_id, score)] — ids, never ORM objects
+│   │   │                          #   reads degrade to []; writes raise so the consumer retries
+│   │   ├── testing.py             # FakeSearchClient — the app owns the double for its own seam
 │   │   ├── consumers.py           # KAFKA subscriptions: profile.updated -> index_profile
 │   │   ├── migrations/
-│   │   │   ├── 0001_initial.py    # VectorExtension (owned here) + ProfileEmbedding + HNSW
-│   │   │   └── 0002_*.py          # copies the existing vectors out of musicians before that table is dropped
-│   │   └── tests/
+│   │   │   ├── 0001_initial.py    # ProfileEmbedding (edited post-hoc to drop the pgvector import)
+│   │   │   ├── 0002_*.py          # copied vectors out of musicians; no-op on a fresh DB
+│   │   │   └── 0003_*.py          # drops the table AND the vector extension — irreversible
+│   │   └── tests/                 # spy-level wiring + ~20 real-cluster tests (skip without a cluster)
 │
 │   ├── users/                     # Auth — custom User model + JWT auth endpoints
 │   │   ├── admin.py
@@ -81,32 +81,28 @@ frikkinwave-backend/
 │   │   │   ├── 0001_initial.py    # MusicianProfile
 │   │   │   ├── 0002_*.py          # Instrument, Genre, MusicianInstrument, M2M fields
 │   │   │   ├── 0003_*.py          # MusicianProfile.sound_url
-│   │   │   ├── 0004_profileembedding.py  # VectorExtension + ProfileEmbedding (moved to search in 0008)
-│   │   │   ├── 0005_compatibilityblurb.py # CompatibilityBlurb (cached per profile pair)
-│   │   │   └── 0008_*.py          # drops ProfileEmbedding — depends on search/0002 so the copy runs first
-│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile, CompatibilityBlurb
-│   │   ├── serializers.py         # Read + Write + Detail (adds review rating) + ProfileSearchResultSerializer (adds similarity)
-│   │   ├── services.py            # profiles, compatibility blurb, coach_profile, build_embedding_text;
+│   │   │   ├── 0004_profileembedding.py  # edited post-hoc to drop the pgvector import
+│   │   │   ├── 0005_compatibilityblurb.py # CompatibilityBlurb (dropped in 0009)
+│   │   │   ├── 0008_*.py          # drops ProfileEmbedding — depends on search/0002 so the copy runs first
+│   │   │   └── 0009_*.py          # drops CompatibilityBlurb with the AI
+│   │   ├── models.py              # Instrument, Genre, MusicianInstrument, MusicianProfile
+│   │   ├── serializers.py         # Read + Write + Detail (adds review rating) + ProfileSearchResultSerializer (adds BM25 score)
+│   │   ├── services.py            # profiles, coach_profile (rules only), build_search_payload;
 │   │   │                          #   search_profiles() delegates to apps.search and hydrates the ids it returns
-│   │   ├── urls.py                # /search/, /compatibility/<username>/, /profiles/, /profile/, /profile/coach/, /profile/me/
-│   │   ├── views.py               # ProfileList/Public/Create/Me/Search/Compatibility/Coach views (+ ProfileCursorPagination)
-│   │   ├── evals/                 # Phase 2.8 matching evals
-│   │   │   ├── golden.py          # Golden profiles + labeled retrieval cases + blurb pairs
-│   │   │   ├── metrics.py         # recall@k, precision@k, MRR, blurb_is_grounded (pure)
-│   │   │   └── runner.py          # run_matching_eval() — seed→embed→search→blurbs→metrics (rolled back)
+│   │   ├── urls.py                # /search/, /profiles/, /profile/, /profile/coach/, /profile/me/
+│   │   ├── views.py               # ProfileList/Public/Create/Me/Search/Coach views (+ ProfileCursorPagination)
 │   │   ├── management/
 │   │   │   └── commands/
-│   │   │       ├── seed_music_data.py   # Seeds 44 instruments + 31 genres
-│   │   │       └── eval_matching.py     # Real eval (needs OPENAI_API_KEY) → JSON report
+│   │   │       ├── seed_music_data.py    # Seeds 44 instruments + 31 genres
+│   │   │       └── reindex_profiles.py   # Rebuild the index from Postgres; --prune sweeps orphans
 │   │   └── tests/
 │   │       ├── __init__.py
 │   │       ├── conftest.py        # instrument, genre, profile fixtures
 │   │       ├── test_profile.py    # 26 tests: create, retrieve, update, list + filter, public view
 │   │       ├── test_embedding_text.py  # 4 tests: vector round-trip, 1-per-profile, dim check, cosine kNN ordering
-│   │       ├── test_embedding_text.py  # 7 tests: build-text, save→embed, re-embed, content-skip, guards (OpenAI mocked)
-│   │       ├── test_search.py     # 7 tests: ranking, limit, available filter, no-embedding exclusion, 400s, no-key (OpenAI mocked)
-│   │       ├── test_compatibility.py  # 8 tests: generate+cache, reverse-pair cache, self/404/no-profile/401/503 (LLM mocked)
-│   │       ├── test_coach.py      # 5 tests: missing-field suggestions, score 100, no-key null tip, no-profile 400, 401 (LLM mocked)
+│   │       ├── test_reindex.py    # 10 tests: rebuild, payload parity with the event path, prune, version-conflict regression
+│   │       ├── test_search.py     # 9 tests: hydration order, score passthrough, missing-profile skip, limit/filter, 400s, degradation
+│   │       ├── test_coach.py      # 6 tests: suggestions, score 100, no `tip` key, determinism, 400, 401
 │   │       └── test_evals.py      # 7 tests: metric math + end-to-end harness w/ deterministic fake embedder + rollback
 │   │
 │   ├── connections/               # Contact requests between users (send → accept/decline → reveal)
@@ -337,14 +333,13 @@ Production base URL: **https://api.frikkinwave.com** (EKS + ALB + RDS, `ap-south
 | GET | `/api/auth/me/` | Bearer | Current user identity (id, email, username, date_joined) |
 | GET | `/api/musicians/instruments/` | None | Full instrument catalogue (for profile-editor pickers) |
 | GET | `/api/musicians/genres/` | None | Full genre catalogue (for profile-editor pickers) |
-| GET | `/api/musicians/search/` | None | Semantic search (`?q=` NL query, `?limit=`, `?available=true`) — cosine kNN, ranked w/ similarity; drops results below `SEARCH_SIMILARITY_THRESHOLD` (default 0.4) |
+| GET | `/api/musicians/search/` | None | Full-text search (`?q=`, `?limit=`, `?available=true`) — BM25 over OpenSearch, ranked best-match first with a `score`. An ordering signal only, not a 0..1 confidence. Returns `[]` if the cluster is unavailable. |
 | GET | `/api/musicians/profiles/` | None | List/filter profiles (cursor-paginated); filters incl. `?open_to_session=true` |
 | GET | `/api/musicians/profiles/<username>/` | None | Public single profile by username (incl. `rating` `{average_rating, count}`) |
-| GET | `/api/musicians/compatibility/<username>/` | Bearer | Cached gpt-4o-mini "why you might click" blurb between you and `<username>` |
 | POST | `/api/musicians/profile/` | Bearer | Create musician profile (response incl. `rating`) |
 | GET | `/api/musicians/profile/me/` | Bearer | Retrieve own profile (incl. `rating`) |
 | PATCH | `/api/musicians/profile/me/` | Bearer | Partial update own profile (incl. `rating`) |
-| GET | `/api/musicians/profile/coach/` | Bearer | Profile completeness score + field suggestions + LLM tip |
+| GET | `/api/musicians/profile/coach/` | Bearer | Profile completeness score + field suggestions (rule-based, deterministic). The LLM `tip` key was removed with the AI. |
 | POST | `/api/connections/requests/` | Bearer | Send a contact request (by recipient username) |
 | GET | `/api/connections/requests/` | Bearer | List own requests (`?box=incoming\|outgoing`) |
 | GET | `/api/connections/requests/<id>/` | Bearer | Retrieve a request you are party to |

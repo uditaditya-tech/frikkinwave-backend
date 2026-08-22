@@ -36,7 +36,7 @@ One-to-one with `User`. The public-facing profile.
 |---|---|---|
 | `id` | UUIDField (PK) | UUIDv7 |
 | `user` | OneToOneField → `AUTH_USER_MODEL` | Cascade delete |
-| `bio` | TextField | Free-form. Blank allowed. Fed into embedding (Phase 2). |
+| `bio` | TextField | Free-form. Blank allowed. Indexed for search (`english` analyzer — the only field that is stemmed). |
 | `city` | CharField(100) | Free-text for Phase 1; normalise later if geo-search demands it. |
 | `country` | CharField(100) | Free-text for Phase 1. |
 | `is_available` | BooleanField | Default True. Toggles visibility in jam finder. |
@@ -48,8 +48,9 @@ One-to-one with `User`. The public-facing profile.
 | `created_at` | DateTimeField | `auto_now_add` |
 | `updated_at` | DateTimeField | `auto_now` |
 
-> Session-work fields added in migration `0006`. They are **not** part of
-> `build_embedding_text`, so toggling them doesn't trigger re-embedding.
+> Session-work fields added in migration `0006`. They are **not** in the search
+> payload, so they are not matchable by free-text query — filter on them instead
+> (`?open_to_session=true`).
 
 > **Rating rollup (migration `0007`).** `rating_avg` / `rating_count` are owned by this
 > model but written *only* by `apps.reviews` via
@@ -57,7 +58,7 @@ One-to-one with `User`. The public-facing profile.
 > `reviews.propagate_profile_rating` task. This app has **no dependency on reviews** —
 > rendering a profile is a pure local read. Eventually consistent; recomputed from source
 > (idempotent), with `manage.py backfill_profile_ratings` as the reconciliation path.
-> Also excluded from `build_embedding_text`.
+> Also excluded from the search payload — ranking is relevance, not popularity.
 
 ---
 
@@ -111,61 +112,48 @@ Flow: send → accept/decline → contact email revealed to both parties once ac
 
 ---
 
-### `search.ProfileEmbedding` (Phase 2 — 2.3 ✅, moved to `search` on extraction)
+### The search index — *not a Django model*
 
-One-to-one with `MusicianProfile`. Stores the pgvector embedding.
-**App:** `apps/musicians` | **Migration:** `0004_profileembedding`
-(enables the `vector` extension via `VectorExtension()` as its first op.)
+`apps/search` has **no models at all** since the move to OpenSearch (2026-08-23).
+It used to own `search.ProfileEmbedding`, a pgvector table with a deliberately
+bare-UUID `profile_id`; that table and the `vector` extension were dropped in
+`search/0003`, and `musicians.CompatibilityBlurb` went with the AI in
+`musicians/0009`. Neither is recoverable — the vectors and blurbs cost real API
+calls and nothing regenerates them.
+
+What replaced it is a document per profile in an OpenSearch index, defined in
+`apps/search/mapping.py` rather than in a migration:
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | UUIDField (PK) | UUIDv7 |
-| `profile` | OneToOneField → MusicianProfile | Cascade delete. `related_name="embedding"`. |
-| `embedding` | VectorField(1536) | text-embedding-3-small output (1536 dims). `EMBEDDING_DIMENSIONS` const. |
-| `embedding_text` | TextField | The raw text that was embedded (for debugging / re-embedding) |
-| `generated_at` | DateTimeField | `auto_now` — when the embedding was last computed |
+| *(document id)* | — | The profile's UUID. Makes indexing an upsert, which at-least-once Kafka delivery requires. |
+| `bio` | text (`english`) | Stemmed, so "record" matches "recording". |
+| `instruments` | text | Names, not ids — the search service must never resolve an id against a musicians table. Boosted ×3. |
+| `genres` | text | Boosted ×2. |
+| `city` | text + `.keyword` | Boosted ×2. Keyword sub-field for exact filtering without a reindex. |
+| `country` | text + `.keyword` | |
+| `is_available` | boolean | **Replica** of the field on `MusicianProfile`, eventually consistent. |
+| `indexed_at` | date | Watermark. Not searchable content — a rebuild prunes against it. |
 
-HNSW index `search_embedding_hnsw` on `embedding` with `vector_cosine_ops`
-(m=16, ef_construction=64) — cosine because text-embedding-3-small vectors are
-normalised.
+`dynamic: strict`, so an unknown key is rejected rather than silently creating a
+field whose inferred type cannot then be changed without a full reindex.
 
-**Two things about this table are deliberate and easy to "fix" wrongly:**
+**Three things here are deliberate and easy to "fix" wrongly:**
 
-- **`profile_id` is a bare UUID, not a ForeignKey.** A FK is a promise that both
-  rows live in the same database, which is exactly the coupling that makes an
-  extraction impossible to finish. The cost is no cascade delete: a stale row can
-  outlive its profile, so `search_profiles` skips unmatched hits and removal is
-  an explicit call to `search.services.remove_profile` (no profile-deletion
-  endpoint exists yet — the function is tested and waiting for one).
-- **`is_available` is a REPLICA** of the field on `MusicianProfile`, and is
-  eventually consistent. It lives here because the availability filter has to run
-  inside the same query as the nearest-neighbour scan — filter afterwards and a
-  caller asking for 20 results silently gets 9.
+- **`is_available` is replicated** because the availability filter has to run
+  inside the same query as the scoring pass. Filter afterwards and a caller
+  asking for 20 results silently gets 9.
+- **The fields are separate, not one blended string.** The embedding era needed a
+  single input, and blending is what diluted short queries. Keeping them apart is
+  what lets an instrument match outrank a passing mention in a bio.
+- **Nothing cascades into this store.** There is no FK and no delete endpoint, so
+  a deleted profile's document is removed by `reindex_profiles --prune` sweeping
+  the watermark — not by an event. `remove_profile()` is tested and uncalled.
 
 **Populated by:** `create_profile` / `update_profile` publish `profile.updated`
-to the outbox with the *composed text* and availability flag; the search service
-consumes it and upserts this row. Skips the OpenAI call when `embedding_text` is
-unchanged or no API key is set, so toggling availability costs nothing.
-
----
-
-### `musicians.CompatibilityBlurb` (Phase 2 — 2.6 ✅)
-
-Cached LLM-generated "Why you might click" text for a pair of profiles.
-**App:** `apps/musicians` | **Migration:** `0005_compatibilityblurb`
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | UUIDField (PK) | UUIDv7 |
-| `profile_a` | ForeignKey → MusicianProfile | `related_name="compat_blurbs_as_a"` |
-| `profile_b` | ForeignKey → MusicianProfile | `related_name="compat_blurbs_as_b"` |
-| `blurb` | TextField | gpt-4o-mini generated text |
-| `generated_at` | DateTimeField | `auto_now` |
-
-Unique constraint on `(profile_a, profile_b)`. **Canonical unordered pair:**
-`get_compatibility_blurb` orders the two profiles by id before lookup, so
-`(A,B)` and `(B,A)` share one row. Generated synchronously on cache miss via
-`GET /api/musicians/compatibility/<username>/`; returns None (→ 503) with no key.
+to the outbox with the facts above; the `search` consumer group indexes them.
+`reindex_profiles` writes the same payload directly, bypassing the event path,
+because reconciliation has to work when the event path is what you cannot trust.
 
 ---
 

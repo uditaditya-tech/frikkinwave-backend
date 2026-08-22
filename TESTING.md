@@ -4,15 +4,37 @@ Written 2026-08-21 against commits `9f0ac79`..`dee3465`, with every load number
 measured on the live `frikkinwave-prod` cluster the same day. Numbers here are
 **measured, not estimated** — anything inferred says so.
 
+> **Updated 2026-08-23** for the OpenSearch migration (ROADMAP Phase 2R). The
+> capacity numbers below are unchanged and still describe the last live cluster;
+> that cluster ran pgvector and OpenAI, neither of which exists now, and nothing
+> has been deployed since. **Treat every load figure here as historical until the
+> stack is rebuilt and re-measured.** The suite counts are current.
+
 ---
 
 ## 1. Where the suite stands
 
-**387 tests in 35 files, green in ~4.5s.**
+**409 tests in 33 files, green in ~5.5s** with a local OpenSearch container —
+**389 with 20 skipped** without one.
+
+Those 20 are the only tests in the repo that need a live dependency. `local.py`
+blanks `OPENSEARCH_URL` under pytest so the rest of the suite never touches a
+cluster (otherwise every profile-save test would make an HTTP call), and the
+search tests opt in through `OPENSEARCH_TEST_URL`. Skipping is a local
+convenience and would be a silent hole in CI, so `tests/test_architecture.py`
+asserts the workflow sets it.
 
 The speed is not an accident: `EVENT_RELAY_INLINE=True` under pytest delivers events
 to in-process subscribers instead of a broker, so the whole event pipeline is
-exercised without Kafka. That is what keeps CI keyless and network-free.
+exercised without Kafka.
+
+Search is the one place that pattern was **deliberately not** repeated. Its tests
+run in two tiers: a spy client proves the wiring (a filter is asked for, a limit
+is passed, an unreachable cluster degrades), and ~20 tests run against a real
+cluster for everything that is a claim about OpenSearch rather than about our
+code — that the analyzer stems, that the boosts order results as the mapping
+says, that `dynamic: strict` rejects an unknown field. A fake could be made to
+pass all of those and would prove nothing.
 
 | area | files | what they cover |
 |---|---|---|
@@ -27,6 +49,11 @@ exercised without Kafka. That is what keeps CI keyless and network-free.
   and "every failure path commits its offset" are all tested.
 - **Idempotency** at four independent sites (`relay_pending`, search indexing,
   rating propagation, re-follow).
+- **The two failure modes that report success.** Both were found by running
+  things by hand, not by tests, and both now have regression tests: a
+  `delete_by_query` version conflict aborting the index sweep mid-batch, and
+  `reindex_profiles` printing "Indexed 42 profiles." over a cluster it was never
+  configured to reach.
 - **Architectural rules as tests, not discipline** — a runtime cross-app model
   import or an unsubscribed topic fails the build.
 - **N+1 avoidance in practice.** All eight list services use

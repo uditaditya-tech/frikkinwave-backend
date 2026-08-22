@@ -16,7 +16,13 @@ See `TESTING.md` for the coverage audit, the remaining test gaps, and the **meas
 
 **Two services are extracted and live**: `apps/notifications` and `apps/search`. Each has its own
 queue, its own Deployment, no cross-app model imports, and self-contained event payloads. They still
-share the image and the database — the *contract* is cut, the packaging is not. The groundwork
+share the image — the *contract* is cut, the packaging is not.
+
+`apps/search` no longer shares the database either: since the move to OpenSearch it owns a store
+nothing else can reach, and has **no Django models at all**. That was not the plan — the plan was a
+separate Postgres one day — but replacing the backend turned out to be the thing that finished the
+extraction, and it worked precisely because the boundary was already `search(query=...) -> [(id,
+score)]`. A complete backend replacement changed neither the contract nor a single caller. The groundwork
 underneath them (transactional outbox in `apps/events`, the `UserRef` DTO boundary, the denormalized
 rating rollup, the guardrail tests in `tests/test_architecture.py`) is all in place.
 
@@ -137,7 +143,7 @@ uv venv --python 3.13
 source .venv/bin/activate
 uv pip install -r requirements/dev.txt   # base.txt + tests/lint/types
 cp .env.example .env        # fill in DJANGO_SECRET_KEY
-docker compose up -d        # starts Postgres (pgvector). No Redis — see below.
+docker compose up -d        # Postgres + OpenSearch. No Redis — see below.
 python manage.py migrate
 python manage.py runserver
 ```
@@ -158,23 +164,38 @@ pytest apps/users/              # specific app
 pytest -k "test_login"          # specific test
 ```
 
-### Running the matching evals (Phase 2.8)
-
-Quality measurement against the real model — **needs a real key, makes live API
-calls, costs a little**. Not in CI (the deterministic harness test covers wiring
-there). Seeds a golden set, embeds + searches + blurbs, prints a JSON report,
-and rolls the DB back so nothing persists:
+**Search tests need a cluster, and skip without one.** `local.py` blanks
+`OPENSEARCH_URL` under pytest so the suite never depends on a live cluster —
+otherwise every profile-save test in the repo would make an HTTP call. The tests
+that genuinely exercise OpenSearch opt in via a separate variable:
 
 ```bash
-OPENAI_API_KEY=sk-... python manage.py eval_matching
-# → {"retrieval": {"cases": 7, "recall@1": ..., "recall@3": ..., "mrr": ...},
-#    "blurbs": {"pairs": 2, "grounding_rate": ...}}
+docker compose up -d opensearch
+OPENSEARCH_TEST_URL=http://localhost:9200 pytest
 ```
 
-Golden dataset + metrics live in `apps/musicians/evals/`. The CI test in
-`apps/musicians/tests/test_evals.py` runs the same `run_matching_eval()` with a deterministic
-fake embedder (token-overlap vectors) so retrieval ranking is meaningful without
-a key.
+Without it those ~20 tests **skip**, which is fine locally and would be a silent
+hole in CI — so `tests/test_architecture.py` asserts the CI workflow sets it.
+
+### Rebuilding the search index
+
+The index is derived data and holds no source of truth, so it is rebuilt from
+Postgres rather than restored:
+
+```bash
+python manage.py reindex_profiles --prune
+```
+
+`--prune` removes documents whose profile no longer exists. It only runs after a
+complete pass — a rebuild that fails partway skips it rather than deleting every
+profile it had not reached yet. The chart runs this as a **post-upgrade hook** on
+every deploy; see the OpenSearch section under Known gotchas for why that is not
+optional.
+
+*(The Phase 2.8 matching evals — recall@k, MRR, blurb grounding — were deleted
+with the embeddings they measured. There is no equivalent relevance harness for
+BM25 yet, and the field boosts are reasoned rather than measured; see ROADMAP
+Phase 2R.)*
 
 ---
 
@@ -235,19 +256,24 @@ Manual run: `pre-commit run --all-files`
   - **Notifications and search are extracted services — keep their payloads self-contained.** They import no other app and no models; producers publish the facts the handler needs, never an id to re-read. **Check nullability of every field you move into a payload** — building it in the producer runs it in the request path, so a field that used to crash harmlessly in a retry now 500s the user (exactly what `engagement.proposed_date` did).
   - **Every new topic needs a `KafkaTopic` AND a `.dlt` topic in `infra/helm/kafka/values.yaml`.** `authorization: simple` denies anything ungranted, so a missing entry is a denied produce — and a missing DLT turns a dead-letter into a stalled partition.
   - **In tests** the `db` fixture's outer transaction never commits, so wrap the action in `with django_capture_on_commit_callbacks(execute=True):` or call `relay_pending()` directly.
-- **pgvector (Phase 2, done in 2.3):** RDS Postgres 16 supports it, but the `vector` extension must be enabled (`CREATE EXTENSION vector`) **before** any `VectorField` migration — `makemigrations` does NOT add this, so hand-edit the migration to put pgvector's `VectorExtension()` as the **first** operation (see `apps/musicians/migrations/0004_profileembedding.py`). The RDS master user can run it. `pgvector` is in requirements; docker-compose + CI both use the `pgvector/pgvector:pg16` image.
-  - **`HnswIndex` needs `django.contrib.postgres`** in `INSTALLED_APPS` (already added) — without it `manage.py check` fails `postgres.E005`.
-  - **Async-on-write vs sync-on-read:** embeddings (2.4) are generated by the `search` consumer group on profile *save* (a write event → background). Compatibility blurbs (2.6) are generated *synchronously* in the request on a cache miss, because the caller needs the text in the response and there's no write to react to — then cached in `CompatibilityBlurb` (canonical unordered pair). Don't reflexively make on-demand reads asynchronous.
-  - **OpenAI access (2.4+):** all calls go through `apps/ai/client.py` (`OpenAIClient.embed` + `.complete`, cached `get_openai_client()`) — never `import openai` elsewhere. The client converts any `openai.OpenAIError` into a domain `OpenAIUnavailableError` so services degrade **without** importing the SDK's exception types: search → `[]`, compatibility → `None` (→ 503), coach → null `tip` (rules still returned). Treat "no key" and "API down/quota-exhausted" identically — an upstream failure must never 500 a user request. Tests patch `get_openai_client` to inject a fake, so CI needs **no key and makes no network calls**. `OPENAI_API_KEY` defaults to `""`; the embedding task **skips + logs** when it's empty (profiles still save). The embedding pipeline also **skips the OpenAI call when `embedding_text` is unchanged** (so toggling `is_available` costs nothing) — `build_embedding_text` must stay deterministic for that dedupe to hold.
-  - **Search similarity floor (`SEARCH_SIMILARITY_THRESHOLD`, default 0.4):** `search_profiles` drops results scoring below it (similarity = 1 − cosine distance). **0.8 is unusable** for `text-embedding-3-small` — measured prod scores: strong matches ~0.72–0.78, moderate ~0.45–0.55, noise <0.3 (a near-verbatim bio query topped out ~0.55, because `build_embedding_text` blends bio+instruments+genres+city, diluting short queries). The eval runner passes `similarity_threshold=0.0` so recall measures ranking, not the gate. Don't raise the default toward 0.8 without re-measuring against the live model — it silently returns `[]`.
-  - **Local collation mismatch after the image swap — now in the OTHER direction.** compose has gone back to `postgres:16` (pgvector is removed), so an existing `postgres_data` volume written by `pgvector/pgvector:pg16` is now the mismatched one. Postgres refuses to `CREATE DATABASE` (incl. the `test_*` DB), erroring `template database "template1" has a collation version mismatch`. Same fix, still once: `docker compose exec -T db psql -U postgres -d postgres -c 'ALTER DATABASE template1 REFRESH COLLATION VERSION;'` (repeat for `postgres` and `frikkinwave`). CI is unaffected — it builds a fresh DB every run. Alternatively `docker compose down -v` to recreate the volume clean (drops local data).
+- **Search is OpenSearch, and the index is DERIVED — it has no snapshot.** RDS restores itself from a snapshot on every rebuild; the search domain does not, because everything in it is rebuilt from Postgres. So a fresh stack comes up with a **healthy, empty cluster**: search returns `[]`, every probe stays green, and nothing anywhere reports a fault. The chart's post-upgrade `reindex_profiles` Job is what closes that window — don't disable it, and don't move it to a pre-upgrade hook (it indexes through the new image's payload builder against the migrated schema).
+  - **The SDK is imported in exactly one module.** `apps/search/client.py` wraps `opensearch-py` and converts every `OpenSearchException` into a domain `SearchUnavailableError`, so nothing else knows what library is underneath — the same shape `apps/events/kafka.py` uses. A test fails the build on an `import opensearchpy` anywhere else.
+  - **An empty `OPENSEARCH_URL` is a supported state, not a misconfiguration.** It is how local dev and CI run with no cluster: "not configured" and "cluster unreachable" are deliberately one case, and both degrade to `[]`. **The one exception is `reindex_profiles`**, which raises instead — a deploy hook that no-ops silently would print "Indexed 42 profiles." over an index it never wrote to.
+  - **Reads degrade, writes retry.** `search()` swallows `SearchUnavailableError` and returns `[]`, because an upstream failure must never 500 a user. `index_profile()` lets it propagate, because it runs in a Kafka consumer where raising means bounded retry then the DLT — swallowing there would commit the offset and lose the update silently.
+  - **The score is BM25, not a similarity.** Unbounded, and meaningful only for ordering *within one result set*. Never compare it against a constant. This is why `SEARCH_SIMILARITY_THRESHOLD` was deleted rather than retuned: it defaulted to 0.4, and a measured strong BM25 match scores ~0.4 too, so a surviving floor would have looked entirely plausible while cutting good results.
+  - **Deletions are reconciled, not evented.** There is no delete endpoint anywhere in this project, so profiles leave through Django admin, a cascade from a deleted user, or the demo seeder's `--reset` — none of which publish anything, and the index has no FK to cascade through. `reindex_profiles --prune` sweeps them using an `indexed_at` watermark. `remove_profile()` exists and is tested but has **no caller**; wire it to a `profile.deleted` event if a delete endpoint is ever added.
+  - **`delete_by_query` must use `conflicts="proceed"`.** It searches, then deletes each hit by the version it saw — and the rebuild rewrites every document immediately beforehand, so conflicts are routine. The default (`abort`) fails the whole sweep partway through. Skipping is also correct: a document whose version moved was just written, which is exactly what a stale-document sweep must not delete.
+  - **The mapping is `dynamic: strict`.** A typo'd payload key is rejected rather than silently creating a field with an inferred type that then cannot be changed without a full reindex. `index_profile` calls `ensure_index` on **every** event for the same reason — if the index ever goes missing, OpenSearch would auto-create it with guessed mappings on the next write.
+  - **Keep the client major and the engine major aligned.** `opensearch-py` is pinned to **3.0.0** deliberately: it is the newest 3.x that does *not* depend on `opensearch-protobufs`, which drags `grpcio` and `protobuf` into every pod for a REST client. A test ties it to `opensearch_engine_version` in Terraform.
+  - **Local collation mismatch after the image swap — now in the OTHER direction.** compose has gone back to `postgres:16` (pgvector is removed), so an existing `postgres_data` volume written by `pgvector/pgvector:pg16` is now the mismatched one. Postgres refuses to `CREATE DATABASE` (incl. the `test_*` DB), erroring `template database "template1" has a collation version mismatch`. Fix once: `docker compose exec -T db psql -U postgres -d postgres -c 'ALTER DATABASE template1 REFRESH COLLATION VERSION;'` (repeat for `postgres` and `frikkinwave`). CI is unaffected — it builds a fresh DB every run. Alternatively `docker compose down -v` to recreate the volume clean (drops local data).
+- **The AI is gone (2026-08-23).** No OpenAI, no embeddings, no pgvector, no `apps/ai`. Removed with it: the compatibility blurb endpoint and its table, the coach's LLM `tip` (the completeness score and suggestions stay — they were always the half doing the work), and the Phase 2.8 eval harness. Historical prose in migrations and docstrings still mentions OpenAI where it explains *why* something exists; that is accurate history, not a live dependency.
 
 ---
 
 ## Infrastructure (AWS) — see `infra/README.md`
 
 - **Two Terraform stacks.** `infra/dns/` is PERSISTENT — **never `terraform destroy` it**. It holds everything that must outlive a teardown: the Route 53 zone + ACM cert (destroying them breaks the GoDaddy NS delegation), the budget alarm (which matters most *after* teardown, when orphaned resources bill), and the SNS alert topic (an email subscription needs a confirmation click, so a topic that died each session would need re-confirming each session). `infra/eks/` is the disposable app stack (VPC, EKS, RDS, ECR, load balancer controller, Alertmanager's IRSA role); destroy/apply freely. It discovers the zone, cert and topic via `data` sources — **apply the persistent stack first**, which `eks-up.sh` now checks before doing anything.
-- **DEPLOYMENT STATE: TORN DOWN as of 2026-08-21 — $0/hr.** Verified against AWS rather than the script's own report: no clusters, RDS, load balancers, volumes, instances or NAT gateways. Data is preserved in `frikkinwave-prod-final-2780390a`, which the next `eks-up.sh` restores automatically — **three** manual snapshots now exist and only the newest is ever used, so prune the older two. **The persistent stack survived intact**: the SNS topic with its subscription still *confirmed* (no email re-click on the next rebuild), the Route 53 zone, the ACM cert and the budget alarm. Last live config, for when it returns: web x2, relay and 4 consumer Deployments on 3 ARM64 nodes across ap-south-1a/1b/1c behind an ALB, plus Strimzi 1.1.0 running Kafka 4.2.1 (KRaft, 3 brokers, RF 3 / ISR 2, 26 topics). Verify before assuming anything: `aws eks list-clusters --region ap-south-1`. Bring it back with `terraform -chdir=infra/dns apply` (idempotent, usually a no-op) then `./infra/scripts/eks-up.sh && ./infra/scripts/app-deploy.sh` (~20 min, ~$0.26/hr). *(Update this bullet when the state changes — it is the first thing read each session, so a stale value here is worse than no value.)*
+- **DEPLOYMENT STATE: TORN DOWN as of 2026-08-21 — $0/hr.** Verified against AWS rather than the script's own report: no clusters, RDS, load balancers, volumes, instances or NAT gateways. Data is preserved in `frikkinwave-prod-final-2780390a`, which the next `eks-up.sh` restores automatically — **three** manual snapshots now exist and only the newest is ever used, so prune the older two. **The persistent stack survived intact**: the SNS topic with its subscription still *confirmed* (no email re-click on the next rebuild), the Route 53 zone, the ACM cert and the budget alarm. Last live config, for when it returns: web x2, relay and 4 consumer Deployments on 3 ARM64 nodes across ap-south-1a/1b/1c behind an ALB, plus Strimzi 1.1.0 running Kafka 4.2.1 (KRaft, 3 brokers, RF 3 / ISR 2, 26 topics). Verify before assuming anything: `aws eks list-clusters --region ap-south-1`. Bring it back with `terraform -chdir=infra/dns apply` (idempotent, usually a no-op) then `./infra/scripts/eks-up.sh && ./infra/scripts/app-deploy.sh`. **This has not been run since the OpenSearch migration** — expect the first rebuild to be slower (~35 min: a domain takes 15-20 min to create, and as long again to delete on the way down) and to cost ~$0.30/hr rather than ~$0.26. The domain restores no data; `app-deploy.sh`'s post-upgrade Job rebuilds the index from Postgres. *(Update this bullet when the state changes — it is the first thing read each session, so a stale value here is worse than no value.)*
   - **On a rebuild the kubeconfig is stale, and you cannot fix it up front.** Each stack gets a new API endpoint while the *context name stays identical*, so the dead endpoint looks correct. `aws eks update-kubeconfig` cannot run before the cluster exists, so the honest sequence is: run `eks-up.sh`, let it fail at `terraform_data.wait_for_kafka_credentials` with `no such host` naming the **previous** endpoint, then `aws eks update-kubeconfig --name frikkinwave-prod --region ap-south-1` and re-run — it converges. Only the `local-exec` provisioners read the kubeconfig; the kubernetes/helm providers mint a token via `aws eks get-token` and are unaffected. Hit again on the 2026-08-21 rebuild.
   - **Two things survive `terraform destroy` and accumulate silently.** RDS keeps a manual snapshot per teardown and only the newest is ever restored (seven had piled up by 2026-08-20; six were deleted). And EKS creates `/aws/eks/<cluster>/cluster` with **no expiry** — the cluster goes, the logs stay, and every rebuild adds to the same group. `eks.tf` now declares that log group with 7-day retention *before* the cluster so EKS reuses it instead of making its own; don't remove that `depends_on`, it is what makes the retention apply.
   - **Any controller that recreates PVCs must be uninstalled BEFORE the PVC sweep in `eks-down.sh`.** True of Strimzi and, since Phase 3, of the Prometheus Operator — it owns Prometheus's PVC through a StatefulSet volumeClaimTemplate, so deleting the PVC while it lives just recreates it and the volume outlives `terraform destroy`. Caught by the script's own orphan check, which is why that check exits non-zero and names the resource.
@@ -284,7 +310,8 @@ Critical ones:
 - `DJANGO_SECRET_KEY` — required in all environments
 - `DATABASE_URL` — postgres connection string
 - `DJANGO_SETTINGS_MODULE` — set to `config.settings.local` for dev, `config.settings.production` for prod
-- `SEARCH_SIMILARITY_THRESHOLD` — semantic-search relevance floor (default `0.4`, `0` disables). Tunable via the chart's `config` map (`helm upgrade --reset-then-reuse-values --set config.SEARCH_SIMILARITY_THRESHOLD=N`), no image rebuild. **This only takes effect because the chart stamps `checksum/config` on the pod templates** — `envFrom` values are injected at container start, so a ConfigMap change alone updates nothing in a running pod and `helm upgrade` still reports success. Don't remove that annotation.
+- `OPENSEARCH_URL` — the search cluster, credentials embedded (`https://user:pass@host:443`), assembled in Terraform and delivered through the Kubernetes Secret so the generated password never travels through Helm values. **Empty is valid** and means search degrades to `[]`; it is blanked under pytest.
+- `OPENSEARCH_INDEX` / `OPENSEARCH_TIMEOUT` — non-secret, so they live in the chart's `config` map and are tunable with `helm upgrade --reset-then-reuse-values --set config.OPENSEARCH_TIMEOUT=N`, no image rebuild. **This only takes effect because the chart stamps `checksum/config` on the pod templates** — `envFrom` values are injected at container start, so a ConfigMap change alone updates nothing in a running pod and `helm upgrade` still reports success. Don't remove that annotation. Keep the timeout short: search runs synchronously in the request path, so a slow cluster behind a generous timeout becomes a worker-exhaustion problem rather than a search one.
 - `KAFKA_BOOTSTRAP_SERVERS` / `KAFKA_SSL_*` — the broker and the mTLS client certificate. Read by the relay and the consumer Deployments only; web pods get none.
 - `EVENT_RELAY_INLINE` — **False in production.** True under pytest (set in `config/settings/local.py`), where `_dispatch` delivers to in-process subscribers instead of a broker. Never enable it in a deployed config: it would put a synchronous Kafka produce in the request path.
 - `EVENT_RELAY_INTERVAL` — seconds the relay loop sleeps when idle (default `1.0`). The upper bound on event latency; a full batch skips the sleep so a backlog drains at speed.

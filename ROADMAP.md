@@ -43,8 +43,14 @@ Shipped: live at https://api.frikkinwave.com (EKS + ALB + RDS, ap-south-1)
 ---
 
 ## Phase 2 — AI-powered matching
-**Status: ✅ Complete**
+**Status: ✅ Complete — then SUPERSEDED (2026-08-23). See Phase 2R below.**
 Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery worker + ElastiCache + pgvector, ap-south-1)
+
+> Everything in this table was built, deployed and run against the real models in
+> production. It is left marked complete because it was, and because the ticks
+> record what was learned — the measured similarity floor, the async-on-write vs
+> sync-on-read split, the degradation contract. **None of it is running now.**
+> Phase 2R replaced the retrieval half with OpenSearch and deleted the rest.
 
 | Sub-step | Status |
 |---|---|
@@ -57,6 +63,40 @@ Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery w
 | 2.7 Profile coach: completeness score + field suggestions (rules) + LLM tip on profile setup | ✅ |
 | 2.8 Evals: retrieval quality (recall@k, MRR) + blurb grounding — metrics + golden set + `eval_matching` command + deterministic CI harness | ✅ |
 | 2.9 Infra: ElastiCache Redis + Celery worker task def + `OPENAI_API_KEY` secret — **deployed & verified live in prod** (real end-to-end semantic search via OpenAI). CD decision: **staying manual** (recorded in infra/README). `terraform destroy` takes a final RDS snapshot by default. | ✅ |
+
+---
+
+## Phase 2R — Search without the AI
+**Status: ✅ Complete (2026-08-23)** — code and infrastructure done; **not yet deployed**,
+the stack has been torn down since 2026-08-21.
+
+Phase 2 was replaced rather than extended. The embeddings were doing retrieval,
+and BM25 does retrieval without a model, a key, a per-request cost or a vector
+column. The blurbs and the coach tip went with them because they were the rest of
+the same dependency, not because they were failing.
+
+| Sub-step | Status |
+|---|---|
+| 2R.1 OpenSearch client seam (`apps/search/client.py`), one module importing the SDK, domain `SearchUnavailableError` | ✅ |
+| 2R.2 Search swapped to OpenSearch: structured fields instead of one blended string, BM25 `score` replaces `similarity`, `SEARCH_SIMILARITY_THRESHOLD` deleted | ✅ |
+| 2R.3 `ProfileEmbedding`, the `vector` extension and pgvector dropped; historical migrations rewritten to stand alone | ✅ |
+| 2R.4 `apps/ai`, the compatibility endpoint + table, and the coach's LLM `tip` removed; `openai` and 13 orphaned transitives dropped from the image | ✅ |
+| 2R.5 `reindex_profiles` + `--prune` (watermark sweep), which is also how deletions leave the index | ✅ |
+| 2R.6 Terraform: managed OpenSearch domain, VPC-only, FGAC; `OPENAI_API_KEY` removed from the stack | ✅ |
+| 2R.7 Rebuild wired in as a post-upgrade Helm hook — the index takes no snapshot, so a fresh stack would otherwise serve an empty search behind green probes | ✅ |
+| 2R.8 Docs sync | ✅ |
+
+**Known gaps, honestly:**
+- **Nothing has been deployed.** The domain has never been created; `terraform validate`
+  passes but the first apply is the real test.
+- **No relevance harness.** The Phase 2.8 evals measured recall@k and MRR over
+  embedding retrieval and were deleted with them. The field boosts in
+  `apps/search/mapping.py` are reasoned, **not measured** — there is no query log
+  to tune against yet.
+- **Deletions are eventually consistent.** There is no delete endpoint in the
+  project at all, so profiles leave via admin/cascade/seeder and only leave the
+  index when a rebuild runs. `remove_profile()` is tested and uncalled, waiting
+  for a `profile.deleted` event that has nothing to publish it.
 
 ---
 
@@ -260,6 +300,7 @@ That is the outbox earning its place.
 |---|---|---|
 | Backend API | AWS EKS (Kubernetes) | ✅ Live (ap-south-1, HTTPS) — web ×2, relay, + 4 Kafka consumer groups |
 | Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, reachable only from the cluster SG) |
+| Search | AWS OpenSearch 3.7 | ⬜ Declared in Terraform, never applied — VPC-only, FGAC, index rebuilt on deploy |
 | Event backbone | Strimzi Kafka on EKS | ✅ Live (3 brokers, KRaft, RF 3 / ISR 2, TLS + mTLS + ACLs) — see `KAFKA.md` |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |

@@ -209,8 +209,10 @@ grows the backlog without bound. That is the number to design against.
 measure first-to-last `published_at`. That topic is the safe choice on a live
 system — its handler `prune_feed` is a `DELETE` filtered on two UUIDs, so random
 ids match nothing and it writes nothing, it is **not** in the notifications topic
-list (no failing emails, no dead letters), and it makes no OpenAI calls.
-`profile.updated` would bill you per event.
+list (no failing emails, no dead letters), and it writes to nothing else.
+`profile.updated` would rewrite a real search document per event. (It used to
+bill you per event too, back when that handler called OpenAI — that cost is gone
+with the embeddings, but the topic is still the wrong one to load-test with.)
 
 *If ~87/sec is ever not enough, batch the flush:* produce the whole batch, flush
 once, then mark all published. Still correct — nothing is marked published before

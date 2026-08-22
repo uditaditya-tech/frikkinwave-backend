@@ -5,7 +5,7 @@ Two Terraform stacks and one Helm chart. Terraform owns AWS; Helm owns the app.
 ```
 infra/
 ├── dns/        PERSISTENT — Route 53 zone + ACM cert. Never destroy.
-├── eks/        DISPOSABLE — VPC, EKS, RDS, ECR, load balancer controller.
+├── eks/        DISPOSABLE — VPC, EKS, RDS, OpenSearch, ECR, load balancer controller.
 ├── helm/       Two charts: the app (web, relay, consumer groups, migrations,
 │            ingress) and the Kafka cluster (Strimzi CRs, topics, KafkaUser).
 └── scripts/    eks-up.sh · app-deploy.sh · eks-down.sh
@@ -63,7 +63,10 @@ dig +short NS api.frikkinwave.com @8.8.8.8
 ./infra/scripts/eks-up.sh
 ```
 
-~15 min. Cluster, RDS (restored from a snapshot), ECR, load balancer controller.
+~30 min. Cluster, RDS (restored from a snapshot), OpenSearch (created empty —
+it holds only derived data and takes no snapshot), ECR, load balancer controller.
+The search domain is the long pole, at 15-20 min on its own, and again on the
+way down.
 Needs `infra/eks/terraform.tfvars` — copy `terraform.tfvars.example` and set
 `django_secret_key`.
 
@@ -82,7 +85,8 @@ Back to $0. Deletes the Kubernetes objects that own AWS resources *before*
 destroying, then re-queries AWS and exits non-zero if anything survived — a bare
 `terraform destroy` leaves the ALB and any EBS volumes behind, still billing.
 
-**Cost while running: ~$0.20/hr.** Idle: $0, aside from the DNS stack.
+**Cost while running: ~$0.24/hr** (the OpenSearch domain adds ~$0.04 to the
+previous ~$0.20). Idle: $0, aside from the DNS stack.
 
 ---
 

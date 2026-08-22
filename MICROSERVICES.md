@@ -37,14 +37,14 @@ distributed-systems cost and none of the benefit.
 flowchart LR
     C[Clients] --> ALB[ALB + ACM/HTTPS]
     ALB --> WEB["EKS — web pods<br/>gunicorn / Django"]
-    WEB --> PG[("RDS Postgres 16<br/>+ pgvector")]
+    WEB --> PG[("RDS Postgres 16")]
     WEB -- "publish() in-transaction" --> OB[("outbox table<br/>in Postgres")]
     OB --> RLY["EKS — relay pod<br/>relay_outbox --loop"]
     RLY --> K{{"Kafka (Strimzi)<br/>TLS + mTLS + ACLs"}}
     K --> CG["EKS — 4 consumer groups<br/>notifications / search / social / reviews"]
     CG --> PG
-    CG --> OAI[OpenAI API]
-    WEB --> OAI
+    CG --> OS[("AWS OpenSearch<br/>profile index")]
+    WEB --> OS
 
     subgraph MONO["One image, one codebase, one DB"]
       WEB
@@ -119,7 +119,7 @@ flowchart TB
 
     IDN --> IDNDB[("users db")]
     PRF --> PRFDB[("profiles db")]
-    SRCH --> VEC[("vector store")]
+    SRCH --> SIDX[("search index")]
     MKT --> MKTDB[("marketplace db")]
     SOC --> SOCDB[("graph db")]
     SOC --> FEED[("feed store<br/>Redis / DynamoDB")]
@@ -152,7 +152,7 @@ flowchart LR
 |---|---|---|---|---|
 | **Identity** | users, auth, contact info | foundational, read-heavy | `getUser`, `getUserByUsername` | `user.created`, `user.renamed` |
 | **Profiles** | profiles, instruments, genres | read-heavy, cacheable | `getProfile` | `profile.updated` |
-| **Search / Matching** | embeddings, blurbs | compute/IO-heavy, spiky | `search`, `compatibility` | — |
+| **Search** | full-text retrieval | IO-heavy, spiky | `search` | — |
 | **Marketplace** | listings, bands, engagements, venues | transactional | `getEngagementParties` | `listing.posted`, `band.created`, `engagement.completed` |
 | **Social / Feed** | follow graph, activity log, feed inbox | **write-amplified, hottest reads** | `getFeed`, `getFollowers` | `follow.created`, `follow.removed` |
 | **Reviews** | reviews, rating aggregates | moderate | `getRatingSummary` | `review.created` |
@@ -281,7 +281,7 @@ mechanically in `tests/test_architecture.py`:
 | Every published topic has a subscriber, and every group has a Deployment | a typo'd topic, or a group nobody runs, is completely silent |
 | `UserRef` is frozen and JSON-serializable | it must survive a network hop unchanged |
 
-Tooling (management commands, the eval harness) is exempt: it is reconciliation/seeding, never
+Tooling (management commands, the index rebuild) is exempt: it is reconciliation/seeding, never
 on a request path.
 
 ## 7. The feed is the hard part
@@ -352,7 +352,7 @@ needs, so the consumer touches no models at all. What shipped:
   re-reading: the email describes the state at event time, not whatever the row
   looks like whenever the consumer gets to it.
 - A dedicated `notifications` consumer group with its own Deployment, so a wedged
-  mail provider cannot starve embedding generation or feed fan-out.
+  mail provider cannot starve search indexing or feed fan-out.
 - A guardrail test tying declared subscriptions to the chart's Deployments. A
   group nobody runs is **silent** — never runs, never errors, no signal anywhere.
   (This began life as the Celery queue-routing test and guards the identical
@@ -387,8 +387,24 @@ hydrates from its own store in the order given.
 Shipped: `apps/search` owning the embedding table with a bare-UUID `profile_id`
 (no FK), `is_available` replicated so the filter runs inside the kNN query, its
 own queue and Deployment, and a migration that copies the existing vectors
-before the old table is dropped. `apps/ai/client.py` moved out of musicians,
-since two domains now need it.
+before the old table is dropped.
+
+**Then the extraction finished itself, from an unexpected direction (2026-08-23).**
+Search moved off pgvector to a managed OpenSearch domain, so it no longer shares
+the database with anything — it has no Django models at all now. The step this
+document treats as the hard part of a split, giving a service its own store,
+happened as a side effect of replacing a backend.
+
+The reason it was a side effect rather than a project is the whole argument of
+this document. The contract was already `search(query=...) -> [(id, score)]`, so
+a complete backend replacement — different store, different query language,
+different scoring model, different failure modes — changed **neither the
+contract nor a single caller**. What did change was internal: the payload became
+structured fields instead of one blended string, because BM25 wants what an
+embedding did not.
+
+What is still shared: the image, and the Kafka cluster. The packaging is the
+last thing left, and it is the least interesting.
 
 **Still shared, and the honest limit of stage A:** one database and one image.
 The FK is gone and the query boundary is real, so moving to a separate store is
@@ -412,7 +428,7 @@ data with all that implies. Worth deciding deliberately.
 |---|---|---|
 | **Deploy unit** | 1 image, 5 Deployments | ~6–8 services, each its own image + pipeline |
 | **Orchestration** | EKS, `helm upgrade` by hand | **EKS + HPA** (CPU, p95 latency, **Kafka consumer lag**), GitOps, canary/blue-green |
-| **Data** | 1 RDS Postgres (pgvector) | **DB per service**; Aurora + read replicas; dedicated vector store; Redis clusters; DynamoDB/Cassandra feed inbox |
+| **Data** | 1 RDS Postgres + 1 OpenSearch domain | **DB per service**; Aurora + read replicas; Redis clusters; DynamoDB/Cassandra feed inbox |
 | **Async** | Kafka (Strimzi, 3 brokers) + outbox relay; 4 consumer groups | Same model, more groups; per-service clusters or MSK if operating Strimzi stops being worth it |
 | **Inter-module comms** | in-process calls, one ACID txn | RPC for queries, events for propagation, **eventual consistency** |
 | **Edge** | ALB → gunicorn | **CDN + WAF + gateway** → Ingress; optional service mesh (mTLS, retries, circuit breaking) |
@@ -433,8 +449,9 @@ three. Every RPC seam needs, explicitly:
 - **Timeout + bounded retries with jittered backoff** (retries without jitter cause
   synchronized retry storms)
 - **Circuit breaker** — stop hammering a service that is already down
-- **A defined degradation.** This project already has the template: OpenAI failures degrade
-  to `search → []`, `compatibility → 503`, `coach → null tip`, never a 500. **Copy that
+- **A defined degradation.** This project already has the template: a search-cluster failure
+  degrades to `search → []`, never a 500 — and the write path deliberately does the
+  opposite, raising so the consumer retries and dead-letters. **Copy that
   contract to every service call.** Decide up front: if Reviews is down, does a profile
   render with no rating, or fail? (Answer: render without it.)
 - **Idempotency keys** on writes, so a retried request cannot double-apply
@@ -468,7 +485,7 @@ three. Every RPC seam needs, explicitly:
 | Event transport | ~~Celery/Redis vs Kafka~~ — **decided: Kafka**, 2026-08-19. **Complete**: Celery and Redis removed. | See `KAFKA.md`. Replaced Celery *and* Redis-as-broker: every Celery task here was an event consumer, so nothing was left for a job queue to do. The outbox is unaffected — Kafka does not solve dual-write. Bought for replay and multi-consumer-per-topic, which the old central registry structurally could not express; **not** because durability was lacking, since the outbox already covered that. |
 | RPC transport | gRPC vs HTTP+JSON | gRPC for typed contracts and speed; HTTP is simpler and debuggable |
 | Feed store | Redis sorted sets vs DynamoDB | Redis is faster and simpler; DynamoDB is durable and cheaper at very large inbox volume |
-| Vector store | keep pgvector vs dedicated (Pinecone/Qdrant/OpenSearch) | pgvector + HNSW scales further than people assume — measure before moving |
+| Search store | managed OpenSearch vs self-hosted (ECK) vs a dedicated vector store | Moved off pgvector 2026-08-23. Managed, because this stack already runs two stateful operators and a third is not where the interesting problems are. |
 | Celebrity threshold | follower count that flips to fan-out-on-read | Must be measured, not guessed |
 
 ---
