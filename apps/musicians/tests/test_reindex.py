@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.utils import timezone
 
 from apps.musicians.models import Genre, Instrument, MusicianProfile
@@ -94,6 +95,22 @@ class TestRebuildWiring:
         # immediately before this sweep scans them, so "abort" would fail the
         # command as a matter of routine.
         assert fake_search.delete_queries[-1]["conflicts"] == "proceed"
+
+
+@pytest.mark.django_db
+class TestRefusesToLieAboutSuccess:
+    def test_no_cluster_configured_is_an_error_not_a_no_op(self, settings: Any) -> None:
+        """
+        Everywhere else an empty OPENSEARCH_URL means "degrade quietly". Here it
+        means the deploy hook is about to report a successful rebuild of an index
+        it never wrote to — which is the invisible failure the hook exists to
+        prevent, reproduced by the hook itself.
+        """
+        settings.OPENSEARCH_URL = ""
+        _profile("a", bio="x")
+
+        with pytest.raises(CommandError, match="OPENSEARCH_URL is empty"):
+            _run()
 
 
 @pytest.mark.django_db

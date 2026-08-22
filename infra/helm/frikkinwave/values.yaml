@@ -14,7 +14,8 @@ image:
 
 # The Secret is created by Terraform (infra/eks/secrets.tf), not by this chart —
 # the RDS password is generated there and must not travel through helm values.
-# Supplies DJANGO_SECRET_KEY, DATABASE_URL, OPENAI_API_KEY.
+# Supplies DJANGO_SECRET_KEY, DATABASE_URL, OPENSEARCH_URL — all three carry
+# generated credentials, which is exactly why they are not in this file.
 existingSecret: frikkinwave-prod-secrets
 
 # Non-secret configuration. Rendered into a ConfigMap and consumed with envFrom.
@@ -25,8 +26,15 @@ config:
   ALLOWED_HOSTS: api.frikkinwave.com
   CORS_ALLOWED_ORIGINS: https://frikkinwave.com,https://www.frikkinwave.com
   CSRF_TRUSTED_ORIGINS: https://api.frikkinwave.com,https://frikkinwave.com
-  # Semantic-search relevance floor. 0.8 is unusable for text-embedding-3-small.
-  SEARCH_SIMILARITY_THRESHOLD: "0.4"
+  # Search index name. Here rather than left to the settings default so a
+  # rebuild can be written into a fresh index and swapped by changing one value,
+  # without an image build.
+  OPENSEARCH_INDEX: profiles
+  # Seconds before a cluster call is abandoned. Deliberately short: search runs
+  # synchronously in the request path, so a slow cluster behind a generous
+  # timeout stops being a search problem and becomes a worker-exhaustion one —
+  # the pod stops serving every other endpoint too.
+  OPENSEARCH_TIMEOUT: "3.0"
   KAFKA_BOOTSTRAP_SERVERS: frikkinwave-kafka-bootstrap.kafka.svc.cluster.local:9093
   # mTLS: SSL, not SASL_SSL. There is no SASL mechanism, no username and no
   # password — the client certificate below IS the identity, and Kafka authorizes
@@ -140,6 +148,31 @@ migrations:
   backoffLimit: 1
   activeDeadlineSeconds: 600
   # Keep finished Jobs for a day, then let the TTL controller remove them.
+  ttlSecondsAfterFinished: 86400
+
+# ---------------------------------------------------------------------------
+# Rebuild the search index after every deploy.
+#
+# The index is derived data in a store that takes no snapshot, so a rebuilt
+# stack comes up with a HEALTHY, EMPTY cluster: search returns nothing, every
+# probe stays green, and nothing anywhere reports a fault. That is why this is a
+# deploy step and not a runbook entry — the failure is invisible precisely when
+# you would need to remember.
+#
+# A post-upgrade hook, unlike migrations. It has to run AFTER the new pods are
+# live, because it indexes using the new image's payload shape and the migrated
+# schema; running it first would rebuild the index in the old shape.
+# ---------------------------------------------------------------------------
+reindex:
+  enabled: true
+  # Delete documents whose profile is gone. Safe here: the command only prunes
+  # after a complete pass, so a partial rebuild skips it rather than emptying
+  # the index.
+  prune: true
+  # No retry. A second full rebuild after a failure is unlikely to behave
+  # differently, and the useful outcome is a failed deploy with logs.
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
   ttlSecondsAfterFinished: 86400
 
 # Outbox lag — the one signal that says the event system stopped working.

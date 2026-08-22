@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from apps.musicians.models import MusicianProfile
@@ -53,6 +54,22 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **opts: Any) -> None:
         prune: bool = opts["prune"]
         batch_size: int = opts["batch_size"]
+
+        # An empty URL is a SUPPORTED state everywhere else: the request path
+        # treats "no cluster" and "cluster down" alike and degrades to empty
+        # results, and index_profile quietly no-ops. That is right for a user
+        # request and wrong here.
+        #
+        # This command exists solely to write to the cluster, and it runs as a
+        # deploy hook. Without this check a missing OPENSEARCH_URL would print
+        # "Indexed 42 profiles.", exit 0, and hand back a green deploy over an
+        # index that was never written — the exact invisible failure the hook
+        # was added to prevent.
+        if not settings.OPENSEARCH_URL:
+            raise CommandError(
+                "OPENSEARCH_URL is empty — there is no cluster to rebuild into. "
+                "Refusing to report success over an index nothing was written to."
+            )
 
         # Taken BEFORE the first write. Anything still carrying a stamp older
         # than this at the end is something the rebuild never saw.

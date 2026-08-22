@@ -1,0 +1,64 @@
+{{- if .Values.reindex.enabled }}
+# ---------------------------------------------------------------------------
+# Search index rebuild — the step that keeps a deploy from silently serving an
+# empty search.
+#
+# RDS restores itself from a snapshot; the search domain does not, because
+# everything in it is derived from Postgres. So a freshly built stack has a
+# healthy cluster with no documents in it, and search returns zero results while
+# every health check passes. Nothing reports that. This Job is what closes it.
+#
+# A POST-upgrade hook, deliberately, where migrations are a pre-upgrade one.
+# It indexes through the new image's payload builder against the migrated
+# schema, so it has to run after both — rebuilding first would fill the index
+# using the code being replaced.
+#
+# It is allowed to fail the release. A deploy whose search index never rebuilt
+# is a deploy that looks fine and is not, and that is worth a red status.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Revision-suffixed like the migration Job, so a failed run's logs survive
+  # instead of being overwritten by the next deploy.
+  name: {{ include "frikkinwave.fullname" . }}-reindex-{{ .Release.Revision }}
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.reindex.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.reindex.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.reindex.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "frikkinwave.labels" . | nindent 8 }}
+        app.kubernetes.io/component: reindex
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: reindex
+          image: {{ include "frikkinwave.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - manage.py
+            - reindex_profiles
+            {{- if .Values.reindex.prune }}
+            - --prune
+            {{- end }}
+          envFrom:
+            {{- include "frikkinwave.envFrom" . | nindent 12 }}
+          env:
+            {{- include "frikkinwave.podIpEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+{{- end }}

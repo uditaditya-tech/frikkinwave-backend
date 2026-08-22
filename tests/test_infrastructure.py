@@ -46,6 +46,11 @@ def _values() -> dict:
     return yaml.safe_load(KAFKA_VALUES.read_text())
 
 
+def _app_values() -> dict:
+    """The app chart's values.yaml, parsed."""
+    return yaml.safe_load((APP_CHART / "values.yaml").read_text())
+
+
 def _terraform() -> str:
     """Every .tf file in the EKS stack, concatenated."""
     return "\n".join(p.read_text() for p in sorted(EKS_DIR.glob("*.tf")))
@@ -761,10 +766,30 @@ class TestOpenSearchDomain:
             "Terraform builds an OpenSearch URL but never puts it in the app Secret."
         )
 
-        chart_values = (REPO_ROOT / "infra" / "helm" / "frikkinwave" / "values.yaml").read_text()
-        assert "opensearch" not in chart_values.lower() or "password" not in chart_values.lower(), (
-            "The chart values mention an OpenSearch password. Credentials belong "
-            "in the Terraform-owned Secret, not in Helm values."
+        # Checked against the PARSED values, not the file text — the file
+        # mentions OPENSEARCH_URL in a comment explaining where it comes from,
+        # which is documentation rather than a leak.
+        #
+        # The rule is general: no value anywhere in the chart may carry an
+        # embedded credential, whichever URL it belongs to.
+        def _leaks(node: object, path: str = "") -> list[str]:
+            if isinstance(node, dict):
+                return [
+                    leak for key, value in node.items() for leak in _leaks(value, f"{path}.{key}")
+                ]
+            if isinstance(node, list):
+                return [leak for i, v in enumerate(node) for leak in _leaks(v, f"{path}[{i}]")]
+            if isinstance(node, str) and re.search(r"://[^/\s]+:[^/\s]+@", node):
+                return [path.lstrip(".")]
+            return []
+
+        leaks = _leaks(_app_values())
+        assert not leaks, (
+            "These chart values embed credentials in a URL: "
+            + ", ".join(leaks)
+            + ". Credential-bearing URLs are assembled in Terraform and handed "
+            "over through the Secret; helm values travel into the release "
+            "manifest and into shell history."
         )
 
     def test_no_openai_plumbing_survives(self) -> None:
@@ -786,3 +811,63 @@ class TestOpenSearchDomain:
         assert not found, (
             "The EKS stack still provisions OpenAI plumbing that no code reads: " + ", ".join(found)
         )
+
+
+class TestSearchIndexRebuild:
+    """
+    The deploy step that stands between a rebuilt stack and an empty search.
+
+    Everything about this is ordering, and the ordering is invisible if it
+    breaks: a rebuild that runs too early fills the index using the code being
+    replaced, and one that does not run at all leaves search returning nothing
+    behind entirely green health checks.
+    """
+
+    def test_the_chart_rebuilds_the_index(self) -> None:
+        job = APP_CHART / "templates" / "job-reindex.yaml"
+        assert job.exists(), (
+            "No reindex Job in the chart. The search domain takes no snapshot, so "
+            "without this a rebuilt stack serves an empty index and nothing reports it."
+        )
+        assert "reindex_profiles" in job.read_text()
+
+    def test_the_rebuild_runs_after_the_new_code_is_live(self) -> None:
+        """
+        post-upgrade, where migrations are pre-upgrade. The rebuild indexes
+        through the new image's payload builder against the migrated schema, so
+        running it earlier would rebuild the index in the shape being replaced.
+        """
+        body = (APP_CHART / "templates" / "job-reindex.yaml").read_text()
+        assert "post-install,post-upgrade" in body, (
+            "The reindex Job is not a post-upgrade hook, so it can run before the "
+            "new image and the migrated schema are in place."
+        )
+
+        migrate = (APP_CHART / "templates" / "job-migrate.yaml").read_text()
+        assert "pre-install,pre-upgrade" in migrate, (
+            "Migrations are no longer a pre-upgrade hook, which breaks the "
+            "ordering the rebuild depends on."
+        )
+
+    def test_the_chart_configures_the_search_client(self) -> None:
+        config = _app_values()["config"]
+        assert "OPENSEARCH_INDEX" in config
+        # OPENSEARCH_URL carries credentials and comes from the Terraform-owned
+        # Secret. Finding it here would mean it travelled through helm values.
+        assert "OPENSEARCH_URL" not in config, (
+            "OPENSEARCH_URL is in the ConfigMap. It contains the master password "
+            "and belongs in the Terraform-owned Secret."
+        )
+
+    def test_no_dead_ai_configuration_survives(self) -> None:
+        """
+        SEARCH_SIMILARITY_THRESHOLD is the dangerous one. It was a 0..1 cosine
+        floor defaulting to 0.4, and a strong BM25 match scores about 0.4 too —
+        so a stale key would look entirely plausible while cutting good results,
+        if anything still read it.
+        """
+        rendered = (APP_CHART / "values.yaml").read_text()
+        for dead in ("SEARCH_SIMILARITY_THRESHOLD", "OPENAI_API_KEY"):
+            assert dead not in rendered, (
+                f"The chart still carries {dead}, which no code reads any more."
+            )

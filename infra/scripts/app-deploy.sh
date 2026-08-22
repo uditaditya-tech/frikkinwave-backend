@@ -102,6 +102,12 @@ docker push "${REPO_URL}:${TAG}"
 # --wait blocks until the Deployments report ready. Combined with the chart's
 # pre-upgrade migration Job, a failure here means the previous version is still
 # serving rather than a half-rolled-out release.
+#
+# The chart also runs a POST-upgrade Job that rebuilds the search index, and
+# Helm waits for hooks whether or not --wait is given. That is the step which
+# keeps a rebuilt stack from serving an empty search behind green health checks:
+# the OpenSearch domain takes no snapshot, so it always comes back empty and
+# nothing else would ever notice.
 # ---------------------------------------------------------------------------
 echo "==> helm upgrade --install ${RELEASE}"
 helm upgrade --install "${RELEASE}" "${CHART_DIR}" \
