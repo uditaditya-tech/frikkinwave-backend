@@ -1,187 +1,143 @@
 """
-Semantic search endpoint tests (Phase 2.5).
+Search endpoint tests.
 
-The OpenAI client is mocked: the fake returns a fixed query vector (closest to
-profile A), so ranking is deterministic without any network call or API key.
+The search service is stubbed at the seam: these assert on what the *endpoint*
+does with ids and scores — hydration, ordering, the response shape, the
+degradation contract. Whether OpenSearch returns good ids for a given query is
+apps/search/tests/test_relevance.py's job, against a real cluster.
+
+Stubbing the service rather than `search_profiles` itself is deliberate: it
+leaves the hydration path — the id → profile lookup and the missing-profile
+branch — genuinely under test.
 """
 
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
 import pytest
-from pytest_django.fixtures import SettingsWrapper
 from rest_framework.test import APIClient
 
 from apps.musicians.models import MusicianProfile
-from apps.search import services
-from apps.search.models import EMBEDDING_DIMENSIONS, ProfileEmbedding
+from apps.search import services as search_services
 from apps.users.models import User
 
 SEARCH_URL = "/api/musicians/search/"
 
 
-def _unit_vector(hot_index: int, second: int | None = None) -> list[float]:
-    vec = [0.0] * EMBEDDING_DIMENSIONS
-    vec[hot_index] = 1.0
-    if second is not None:
-        vec[second] = 0.1
-    return vec
-
-
-def _profile_with_embedding(
-    suffix: str, hot_index: int, *, available: bool = True
-) -> MusicianProfile:
+def _profile(suffix: str, *, available: bool = True) -> MusicianProfile:
     user = User.objects.create_user(
         email=f"{suffix}@example.com", username=f"user-{suffix}", password="StrongPass123!"
     )
-    profile = MusicianProfile.objects.create(user=user, bio=f"bio {suffix}", is_available=available)
-    # is_available is set on BOTH: the profile owns it for display, and the
-    # search row carries a replica because the filter has to run inside the
-    # vector query. Keeping them in sync here mirrors what the event does.
-    ProfileEmbedding.objects.create(
-        profile_id=profile.id,
-        embedding=_unit_vector(hot_index),
-        embedding_text=f"text {suffix}",
-        is_available=available,
-    )
-    return profile
+    return MusicianProfile.objects.create(user=user, bio=f"bio {suffix}", is_available=available)
 
 
-class FakeOpenAIClient:
-    def __init__(self, vector: list[float]) -> None:
-        self.vector = vector
-        self.calls: list[str] = []
+class StubSearch:
+    """Stands in for apps.search.services.search: returns canned hits, records calls."""
 
-    def embed(self, text: str) -> list[float]:
-        self.calls.append(text)
-        return self.vector
+    def __init__(self) -> None:
+        self.hits: list[tuple[uuid.UUID, float]] = []
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(
+        self, *, query: str, limit: int = 20, available_only: bool = False
+    ) -> list[tuple[uuid.UUID, float]]:
+        self.calls.append({"query": query, "limit": limit, "available_only": available_only})
+        return self.hits[:limit]
 
 
 @pytest.fixture
-def query_closest_to_a(
-    monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
-) -> FakeOpenAIClient:
-    settings.OPENAI_API_KEY = "test-key"
-    # Disable the similarity floor so these tests assert on raw ranking/counts;
-    # the floor itself is covered by test_drops_below_similarity_threshold.
-    settings.SEARCH_SIMILARITY_THRESHOLD = 0.0
-    # Mostly index 0 (profile A), a touch of index 1 (profile B).
-    client = FakeOpenAIClient(_unit_vector(0, second=1))
-    monkeypatch.setattr(services, "get_openai_client", lambda: client)
-    return client
+def stub_search(monkeypatch: pytest.MonkeyPatch) -> StubSearch:
+    """
+    Patch the attribute on the search services module.
+
+    search_profiles imports that module inside the function body and looks the
+    name up at call time, so replacing the attribute here is what the caller
+    actually resolves.
+    """
+    stub = StubSearch()
+    monkeypatch.setattr(search_services, "search", stub)
+    return stub
 
 
 @pytest.mark.django_db
 class TestSearch:
-    def test_ranks_by_similarity(
-        self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient
+    def test_returns_profiles_in_the_order_search_ranked_them(
+        self, api_client: APIClient, stub_search: StubSearch
     ) -> None:
-        a = _profile_with_embedding("a", 0)
-        b = _profile_with_embedding("b", 1)
-        c = _profile_with_embedding("c", 2)
+        a, b, c = _profile("a"), _profile("b"), _profile("c")
+        stub_search.hits = [(b.id, 4.2), (a.id, 2.0), (c.id, 0.5)]
 
         response = api_client.get(SEARCH_URL, {"q": "jazz drummer"})
 
         assert response.status_code == 200
         assert response.data["query"] == "jazz drummer"
-        results = response.data["results"]
-        ids = [r["id"] for r in results]
-        assert ids == [str(a.id), str(b.id), str(c.id)]  # A nearest, C farthest
-        # Each result carries a similarity score, descending.
-        sims = [r["similarity"] for r in results]
-        assert sims[0] > sims[1] > sims[2]
-        assert query_closest_to_a.calls == ["jazz drummer"]
+        ids = [r["id"] for r in response.data["results"]]
+        assert ids == [str(b.id), str(a.id), str(c.id)]
 
-    def test_drops_below_similarity_threshold(
-        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
+    def test_each_result_carries_its_score(
+        self, api_client: APIClient, stub_search: StubSearch
     ) -> None:
-        # Query ~= profile A (similarity ~0.995); B (~0.10) and C (0.0) are weak.
-        settings.OPENAI_API_KEY = "test-key"
-        settings.SEARCH_SIMILARITY_THRESHOLD = 0.8
-        client = FakeOpenAIClient(_unit_vector(0, second=1))
-        monkeypatch.setattr(services, "get_openai_client", lambda: client)
-
-        a = _profile_with_embedding("a", 0)
-        _profile_with_embedding("b", 1)  # below floor → dropped
-        _profile_with_embedding("c", 2)  # below floor → dropped
-
-        response = api_client.get(SEARCH_URL, {"q": "jazz drummer"})
-
-        assert response.status_code == 200
-        results = response.data["results"]
-        assert [r["id"] for r in results] == [str(a.id)]
-        assert results[0]["similarity"] >= 0.8
-
-    def test_limit_caps_results(
-        self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient
-    ) -> None:
-        for i in range(5):
-            _profile_with_embedding(f"p{i}", i)
-        response = api_client.get(SEARCH_URL, {"q": "anything", "limit": "2"})
-        assert response.status_code == 200
-        assert len(response.data["results"]) == 2
-
-    def test_available_filter(
-        self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient
-    ) -> None:
-        _profile_with_embedding("avail", 0, available=True)
-        _profile_with_embedding("busy", 1, available=False)
-
-        response = api_client.get(SEARCH_URL, {"q": "x", "available": "true"})
-        usernames = [r["username"] for r in response.data["results"]]
-        assert usernames == ["user-avail"]
-
-    def test_excludes_profiles_without_embedding(
-        self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient
-    ) -> None:
-        _profile_with_embedding("has", 0)
-        # A profile with no embedding row.
-        bare_user = User.objects.create_user(
-            email="bare@example.com", username="user-bare", password="StrongPass123!"
-        )
-        MusicianProfile.objects.create(user=bare_user, bio="no embedding")
+        a = _profile("a")
+        stub_search.hits = [(a.id, 4.25)]
 
         response = api_client.get(SEARCH_URL, {"q": "x"})
-        usernames = [r["username"] for r in response.data["results"]]
-        assert usernames == ["user-has"]
 
-    def test_blank_query_returns_400(
-        self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient
+        assert response.data["results"][0]["score"] == 4.25
+
+    def test_a_hit_whose_profile_is_gone_is_skipped(
+        self, api_client: APIClient, stub_search: StubSearch
     ) -> None:
+        """
+        A real state, not an impossible one: the index is a separate store with
+        nothing cascading into it, so it can outlive a profile.
+        """
+        alive = _profile("alive")
+        stub_search.hits = [(uuid.uuid4(), 9.0), (alive.id, 1.0)]
+
+        response = api_client.get(SEARCH_URL, {"q": "x"})
+
+        assert [r["id"] for r in response.data["results"]] == [str(alive.id)]
+
+    def test_limit_reaches_the_service_and_is_capped(
+        self, api_client: APIClient, stub_search: StubSearch
+    ) -> None:
+        api_client.get(SEARCH_URL, {"q": "x", "limit": "2"})
+        assert stub_search.calls[-1]["limit"] == 2
+
+        api_client.get(SEARCH_URL, {"q": "x", "limit": "999"})
+        assert stub_search.calls[-1]["limit"] == 50  # clamped, not rejected
+
+        api_client.get(SEARCH_URL, {"q": "x", "limit": "abc"})
+        assert stub_search.calls[-1]["limit"] == 20  # garbage falls back to the default
+
+    def test_available_flag_reaches_the_service(
+        self, api_client: APIClient, stub_search: StubSearch
+    ) -> None:
+        api_client.get(SEARCH_URL, {"q": "x", "available": "true"})
+        assert stub_search.calls[-1]["available_only"] is True
+
+        api_client.get(SEARCH_URL, {"q": "x"})
+        assert stub_search.calls[-1]["available_only"] is False
+
+    def test_blank_query_returns_400(self, api_client: APIClient) -> None:
         assert api_client.get(SEARCH_URL, {"q": "   "}).status_code == 400
         assert api_client.get(SEARCH_URL).status_code == 400
 
-    def test_unauthenticated_allowed(
-        self, api_client: APIClient, query_closest_to_a: FakeOpenAIClient
-    ) -> None:
-        _profile_with_embedding("a", 0)
+    def test_unauthenticated_allowed(self, api_client: APIClient, stub_search: StubSearch) -> None:
+        stub_search.hits = [(_profile("a").id, 1.0)]
         assert api_client.get(SEARCH_URL, {"q": "x"}).status_code == 200
 
-    def test_openai_error_returns_empty(
-        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
-    ) -> None:
-        from apps.ai.client import OpenAIUnavailableError
-
-        settings.OPENAI_API_KEY = "test-key"
-
-        class FailingClient:
-            def embed(self, text: str) -> list[float]:
-                raise OpenAIUnavailableError("quota exhausted")
-
-        monkeypatch.setattr(services, "get_openai_client", lambda: FailingClient())
-        _profile_with_embedding("a", 0)
+    def test_no_cluster_returns_empty_not_an_error(self, api_client: APIClient) -> None:
+        """
+        Nothing is stubbed here: settings blank OPENSEARCH_URL under pytest, so
+        this runs the real degradation path end to end. An upstream failure must
+        never 500 a user request.
+        """
+        _profile("a")
 
         response = api_client.get(SEARCH_URL, {"q": "x"})
-        # Degrades to empty results, not a 500.
+
         assert response.status_code == 200
         assert response.data["results"] == []
-
-    def test_no_api_key_returns_empty(
-        self, api_client: APIClient, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
-    ) -> None:
-        settings.OPENAI_API_KEY = ""
-        client = FakeOpenAIClient(_unit_vector(0))
-        monkeypatch.setattr(services, "get_openai_client", lambda: client)
-        _profile_with_embedding("a", 0)
-
-        response = api_client.get(SEARCH_URL, {"q": "x"})
-        assert response.status_code == 200
-        assert response.data["results"] == []
-        assert client.calls == []  # never embedded — short-circuited on no key

@@ -93,17 +93,18 @@ class MusicianProfileDetailSerializer(MusicianProfileReadSerializer):
 
 
 class ProfileSearchResultSerializer(MusicianProfileReadSerializer):
-    """A discovery-feed profile plus its semantic-search similarity score."""
+    """A discovery-feed profile plus its search relevance score."""
 
-    similarity = serializers.SerializerMethodField()
+    score = serializers.SerializerMethodField()
 
     class Meta(MusicianProfileReadSerializer.Meta):
-        fields = [*MusicianProfileReadSerializer.Meta.fields, "similarity"]
+        fields = [*MusicianProfileReadSerializer.Meta.fields, "score"]
 
-    def get_similarity(self, obj: MusicianProfile) -> float | None:
-        # Set by search_profiles from the search service's score (0..1). The
-        # cosine-distance arithmetic now lives in the search app, not here.
-        return getattr(obj, "similarity", None)
+    def get_score(self, obj: MusicianProfile) -> float | None:
+        # Set by search_profiles from the search service. BM25 relevance, not a
+        # 0..1 similarity: it orders one result set and means nothing compared
+        # against another query's scores or against a constant.
+        return getattr(obj, "score", None)
 
 
 # ---------------------------------------------------------------------------

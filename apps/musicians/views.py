@@ -152,10 +152,11 @@ class ProfileSearchView(APIView):
     """
     GET /api/musicians/search/?q=<text>&limit=N&available=true
 
-    Semantic search over profile embeddings (cosine kNN). Public.
+    Full-text search over profiles. Public.
     `q` is required; `limit` defaults to 20 (max 50); `available=true` restricts
-    to profiles open to jamming. Results are ranked most-similar first, each with
-    a `similarity` score. Returns an empty list if AI search is unavailable.
+    to profiles open to jamming. Results are ranked best-match first, each with a
+    BM25 `score` — an ordering signal only, not a 0..1 confidence. Returns an
+    empty list if search is unavailable.
     """
 
     authentication_classes = [JWTAuthentication]

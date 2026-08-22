@@ -1,50 +1,34 @@
 """
-Embedding pipeline tests — the musicians -> search seam.
+Indexing pipeline tests — the musicians → search seam.
 
-A fake OpenAI client is injected via monkeypatch, so no network and no API key.
-The pipeline runs profile save -> outbox publish -> relay -> search task ->
-index, which is the whole point of these: the two apps are only connected by an
-event, and this is what proves the connection still works.
+The two apps are connected by nothing but an event, and this is what proves the
+connection still works: profile save → outbox publish → inline relay → consumer
+→ service. API-level tests wrap the request in
+`django_capture_on_commit_callbacks` because the publish happens on commit.
 
-A fake OpenAI client is injected via monkeypatch — no network, no API key. The
-pipeline runs profile save → on_commit → inline relay → consumer → service → store, so
-API-level tests wrap the request in django_capture_on_commit_callbacks.
+These use the spy client rather than a cluster. What is under test is the seam —
+that the producer publishes the facts the consumer needs, under the keys the
+consumer reads. Whether OpenSearch then ranks them well is test_relevance.py's
+problem, and keeping the two apart means a broken payload gives a clear failure
+here instead of a confusing empty result set there.
 """
+
+from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
 
 import pytest
-from pytest_django.fixtures import SettingsWrapper
 from rest_framework.test import APIClient
 
-from apps.musicians.models import MusicianProfile
-from apps.search import services
-from apps.search.models import EMBEDDING_DIMENSIONS, ProfileEmbedding
+from apps.musicians.models import Genre, Instrument, MusicianProfile
+from apps.search import consumers
+from apps.search.tests.conftest import FakeSearchClient
 from apps.users.models import User
 
 PASSWORD = "StrongPass123!"
 PROFILE_URL = "/api/musicians/profile/"
 PROFILE_ME_URL = "/api/musicians/profile/me/"
-
-
-class FakeOpenAIClient:
-    """Records embed() calls and returns a fixed-size vector."""
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def embed(self, text: str) -> list[float]:
-        self.calls.append(text)
-        return [0.01] * EMBEDDING_DIMENSIONS
-
-
-@pytest.fixture
-def fake_openai(monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper) -> FakeOpenAIClient:
-    settings.OPENAI_API_KEY = "test-key"  # non-empty so the no-key guard passes
-    client = FakeOpenAIClient()
-    monkeypatch.setattr(services, "get_openai_client", lambda: client)
-    return client
 
 
 def _auth(api_client: APIClient, user: User) -> APIClient:
@@ -53,18 +37,13 @@ def _auth(api_client: APIClient, user: User) -> APIClient:
     return api_client
 
 
-# ---------------------------------------------------------------------------
-# Pipeline via the API (on_commit → task → service)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.django_db
-class TestEmbeddingPipeline:
-    def test_create_profile_generates_embedding(
+class TestIndexingPipeline:
+    def test_creating_a_profile_indexes_it(
         self,
         api_client: APIClient,
         user: User,
-        fake_openai: FakeOpenAIClient,
+        fake_search: FakeSearchClient,
         django_capture_on_commit_callbacks: Callable[..., Any],
     ) -> None:
         _auth(api_client, user)
@@ -72,19 +51,47 @@ class TestEmbeddingPipeline:
             response = api_client.post(PROFILE_URL, {"bio": "Drummer for hire", "city": "Pune"})
 
         assert response.status_code == 201
-        assert len(fake_openai.calls) == 1
         profile = MusicianProfile.objects.get(user=user)
-        # No reverse accessor any more — there is no ForeignKey. Look it up by
-        # id, which is exactly what a separate service would have to do.
-        row = ProfileEmbedding.objects.get(profile_id=profile.id)
-        assert row.embedding_text == fake_openai.calls[0]
-        assert len(row.embedding.tolist()) == EMBEDDING_DIMENSIONS
+        document = fake_search.indexed[str(profile.id)]
+        assert document["bio"] == "Drummer for hire"
+        assert document["city"] == "Pune"
 
-    def test_updating_bio_reembeds(
+    def test_the_payload_carries_instruments_and_genres_by_name(
         self,
         api_client: APIClient,
         user: User,
-        fake_openai: FakeOpenAIClient,
+        instrument: Instrument,
+        genre: Genre,
+        fake_search: FakeSearchClient,
+        django_capture_on_commit_callbacks: Callable[..., Any],
+    ) -> None:
+        """
+        Names, not ids. The search service must never have to resolve an id
+        against a musicians table to find out what it means — that lookup is
+        exactly the coupling the extraction removed.
+        """
+        _auth(api_client, user)
+        with django_capture_on_commit_callbacks(execute=True):
+            api_client.post(
+                PROFILE_URL,
+                {
+                    "bio": "Session player",
+                    "instruments": [{"instrument": str(instrument.id), "proficiency": "advanced"}],
+                    "genres": [str(genre.id)],
+                },
+                format="json",
+            )
+
+        profile = MusicianProfile.objects.get(user=user)
+        document = fake_search.indexed[str(profile.id)]
+        assert document["instruments"] == ["Electric Guitar"]
+        assert document["genres"] == ["Jazz"]
+
+    def test_updating_a_bio_reindexes(
+        self,
+        api_client: APIClient,
+        user: User,
+        fake_search: FakeSearchClient,
         django_capture_on_commit_callbacks: Callable[..., Any],
     ) -> None:
         _auth(api_client, user)
@@ -93,68 +100,58 @@ class TestEmbeddingPipeline:
         with django_capture_on_commit_callbacks(execute=True):
             api_client.patch(PROFILE_ME_URL, {"bio": "totally new bio"})
 
-        assert len(fake_openai.calls) == 2  # re-embedded on bio change
-        assert "totally new bio" in fake_openai.calls[1]
+        profile = MusicianProfile.objects.get(user=user)
+        assert fake_search.indexed[str(profile.id)]["bio"] == "totally new bio"
 
-    def test_updating_only_availability_does_not_reembed(
+    def test_toggling_availability_reindexes(
         self,
         api_client: APIClient,
         user: User,
-        fake_openai: FakeOpenAIClient,
+        fake_search: FakeSearchClient,
         django_capture_on_commit_callbacks: Callable[..., Any],
     ) -> None:
+        """
+        It has to: is_available is a filter field in the index, so a stale copy
+        keeps offering a musician who has said they are busy.
+
+        This used to be the case the pipeline deliberately skipped, because
+        re-embedding unchanged text cost an OpenAI call. Indexing has no such
+        cost, so the skip — and the stored copy of the previous text it needed —
+        are both gone.
+        """
         _auth(api_client, user)
         with django_capture_on_commit_callbacks(execute=True):
             api_client.post(PROFILE_URL, {"bio": "steady", "city": "Pune"})
         with django_capture_on_commit_callbacks(execute=True):
             api_client.patch(PROFILE_ME_URL, {"is_available": False})
 
-        # The task ran again, but embedding text is unchanged → no OpenAI call.
-        assert len(fake_openai.calls) == 1
+        profile = MusicianProfile.objects.get(user=user)
+        assert fake_search.indexed[str(profile.id)]["is_available"] is False
 
 
-# ---------------------------------------------------------------------------
-# Service-level guards
-# ---------------------------------------------------------------------------
+class TestConsumerContract:
+    """
+    The handler reads the payload strictly. A missing key is a producer that
+    changed shape, and the useful outcome is a loud failure that reaches the
+    dead-letter topic — not a blank document that makes the profile unfindable
+    while reporting success.
+    """
 
+    def test_a_missing_key_raises(self, fake_search: FakeSearchClient) -> None:
+        with pytest.raises(KeyError):
+            consumers.index_profile(
+                profile_id="00000000-0000-0000-0000-000000000000",
+                bio="no instruments key here",
+            )
 
-@pytest.mark.django_db
-class TestEmbeddingGuards:
-    def test_empty_text_is_skipped(self, fake_openai: FakeOpenAIClient) -> None:
-        """
-        Replaces the old "missing profile is a no-op" guard. That case is gone:
-        the service never looks a profile up, so it cannot find it missing. What
-        can still arrive is an empty payload, and embedding "" is worthless.
-        """
-        services.index_profile(
+    def test_a_complete_payload_indexes(self, fake_search: FakeSearchClient) -> None:
+        consumers.index_profile(
             profile_id="00000000-0000-0000-0000-000000000000",
-            embedding_text="",
+            bio="b",
+            instruments=["Guitar"],
+            genres=["Rock"],
+            city="Goa",
+            country="India",
             is_available=True,
         )
-        assert fake_openai.calls == []
-
-    def test_no_api_key_skips(
-        self, profile: MusicianProfile, monkeypatch: pytest.MonkeyPatch, settings: SettingsWrapper
-    ) -> None:
-        settings.OPENAI_API_KEY = ""
-        client = FakeOpenAIClient()
-        monkeypatch.setattr(services, "get_openai_client", lambda: client)
-
-        services.index_profile(
-            profile_id=str(profile.id), embedding_text="some text", is_available=True
-        )
-        assert client.calls == []
-        assert not ProfileEmbedding.objects.filter(profile_id=profile.id).exists()
-
-    def test_reembed_keeps_single_row(
-        self, profile: MusicianProfile, fake_openai: FakeOpenAIClient
-    ) -> None:
-        services.index_profile(
-            profile_id=str(profile.id), embedding_text="first text", is_available=True
-        )
-        services.index_profile(
-            profile_id=str(profile.id), embedding_text="second text", is_available=True
-        )
-
-        assert ProfileEmbedding.objects.filter(profile_id=profile.id).count() == 1
-        assert len(fake_openai.calls) == 2
+        assert "00000000-0000-0000-0000-000000000000" in fake_search.indexed

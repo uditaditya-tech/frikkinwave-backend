@@ -13,7 +13,7 @@ of every app — no cross-app model writes):
 
   - **Real pipelines, run in-process.** The outbox relay is forced **inline** for
     this process (`EVENT_RELAY_INLINE`) so feed fan-out, follow-backfill, and
-    profile embeddings all complete before the command exits (verifiable
+    profile indexing all complete before the command exits (verifiable
     immediately) instead of flooding the prod broker with ~1k events. The
     deployed relay and consumers are separate processes and are unaffected.
 

@@ -114,6 +114,25 @@ class SearchClient:
         logger.info("search_index_created", extra={"index": self._index})
         return True
 
+    def delete_index(self) -> bool:
+        """
+        Drop the whole index. Returns False if it was not there.
+
+        Used to tear down a test's index and, later, to discard a half-built
+        one after a failed rebuild. Never called by the request path.
+        """
+        from opensearchpy.exceptions import NotFoundError
+
+        try:
+            with _translated("index delete"):
+                self._client.indices.delete(index=self._index)
+        except SearchUnavailableError as exc:
+            if isinstance(exc.__cause__, NotFoundError):
+                return False
+            raise
+        logger.info("search_index_deleted", extra={"index": self._index})
+        return True
+
     def index_document(self, *, doc_id: str, document: dict[str, Any]) -> None:
         """
         Upsert one document under `doc_id`.

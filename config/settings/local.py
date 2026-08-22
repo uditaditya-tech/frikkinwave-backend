@@ -21,6 +21,17 @@ DEBUG = True
 if os.environ.get("PYTEST_VERSION") is not None:
     EVENT_RELAY_INLINE = True
 
+    # And blank the search cluster, for the same reason OPENAI_API_KEY was
+    # empty under test: saving a profile publishes an event that the inline
+    # relay delivers straight to the search consumer, so a configured URL would
+    # put a live HTTP call inside every profile-save test in the suite. One
+    # cluster hiccup would then fail tests that have nothing to do with search.
+    #
+    # The tests that genuinely need a cluster opt in explicitly, via the
+    # `opensearch` fixture reading OPENSEARCH_TEST_URL — see
+    # apps/search/tests/conftest.py.
+    OPENSEARCH_URL = ""
+
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
 
 # Allow all origins in local dev

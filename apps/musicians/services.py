@@ -67,7 +67,7 @@ def create_profile(*, user: User, data: dict[str, Any]) -> MusicianProfile:
     _set_instruments(profile, data.get("instruments", []))
     _set_genres(profile, data.get("genres", []))
 
-    _enqueue_embedding(profile)
+    _enqueue_index(profile)
 
     logger.info("profile_created", extra={"profile_id": str(profile.id), "user_id": str(user.pk)})
     return profile
@@ -103,7 +103,7 @@ def update_profile(*, profile: MusicianProfile, data: dict[str, Any]) -> Musicia
     if "genres" in data:
         _set_genres(profile, data["genres"])
 
-    _enqueue_embedding(profile)
+    _enqueue_index(profile)
 
     logger.info("profile_updated", extra={"profile_id": str(profile.id)})
     return profile
@@ -180,18 +180,20 @@ def search_profiles(
     query: str,
     limit: int = 20,
     available_only: bool = False,
-    similarity_threshold: float | None = None,
 ) -> list[MusicianProfile]:
     """
-    Semantic search, most similar first.
+    Full-text search, best match first.
 
-    The vector work belongs to the search service now: it returns ids and
-    scores, and this hydrates them from the profile tables it owns. That split
-    is the whole point — an ORM instance cannot cross a service boundary, so the
-    contract had to become ids before the deploy can.
+    The matching belongs to the search service: it returns ids and scores, and
+    this hydrates them from the profile tables it owns. That split is the whole
+    point — an ORM instance cannot cross a service boundary — and it is what let
+    the backend change from pgvector to OpenSearch without this function's
+    contract moving at all.
 
-    Each returned profile carries a `similarity` attribute (0..1). Returns []
-    when AI is unavailable, so search degrades rather than erroring.
+    Each returned profile carries a `score` attribute. It is a BM25 relevance
+    score: use it to order results, never to threshold them, because its scale
+    depends on the query. Returns [] when search is unavailable, so the feed
+    degrades rather than erroring.
     """
     from apps.search import services as search_services
 
@@ -199,7 +201,6 @@ def search_profiles(
         query=query,
         limit=limit,
         available_only=available_only,
-        similarity_threshold=similarity_threshold,
     )
     if not hits:
         return []
@@ -213,7 +214,7 @@ def search_profiles(
     by_id = {profile.id: profile for profile in profiles}
 
     results: list[MusicianProfile] = []
-    for profile_id, similarity in hits:
+    for profile_id, score in hits:
         profile = by_id.get(profile_id)
         if profile is None:
             # The index outlived the profile. Without a FK there is no cascade
@@ -221,7 +222,7 @@ def search_profiles(
             # skip it and let the pruning path catch up.
             logger.warning("search_hit_missing_profile", extra={"profile_id": str(profile_id)})
             continue
-        profile.similarity = similarity  # type: ignore[attr-defined]
+        profile.score = score  # type: ignore[attr-defined]
         results.append(profile)
     return results
 
@@ -405,12 +406,24 @@ def _set_genres(profile: MusicianProfile, genres: list[Genre]) -> None:
     profile.genres.set(genres)
 
 
-def _enqueue_embedding(profile: MusicianProfile) -> None:
+def _enqueue_index(profile: MusicianProfile) -> None:
     """
     Tell the search service this profile changed, and hand it everything needed
-    to re-index — the composed text and the availability flag, never an id to
-    read back. The consumer is a separate service; it must not touch these
-    tables.
+    to index — the facts themselves, never an id to read back. The consumer is a
+    separate service; it must not touch these tables.
+
+    The facts go across as separate fields rather than one composed string. That
+    is what the move to a text index bought: the consumer can weight an
+    instrument match above a passing mention in a bio, which is impossible once
+    everything has been blended into a single blob for an embedding.
+
+    Every field here is non-nullable at the model level — `bio` is a TextField
+    and `city`/`country` are CharFields, all `blank=True`, so they are `""` and
+    never `None`; the two relations yield lists, empty at worst. That check is
+    the point, not a formality: building the payload runs in the request path,
+    so a `None` sneaking in would 500 the user's own save rather than failing
+    harmlessly in a background retry — which is exactly how
+    `engagement.proposed_date` broke.
 
     Written to the transactional outbox inside the caller's transaction, so the
     event and the profile row commit together.
@@ -421,7 +434,11 @@ def _enqueue_embedding(profile: MusicianProfile) -> None:
         topic="profile.updated",
         payload={
             "profile_id": str(profile.id),
-            "embedding_text": build_embedding_text(profile),
+            "bio": profile.bio,
+            "instruments": [mi.instrument.name for mi in profile.musician_instruments.all()],
+            "genres": [genre.name for genre in profile.genres.all()],
+            "city": profile.city,
+            "country": profile.country,
             "is_available": profile.is_available,
         },
     )

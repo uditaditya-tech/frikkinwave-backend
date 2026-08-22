@@ -11,7 +11,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
-APPS_DIR = pathlib.Path(__file__).resolve().parent.parent / "apps"
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+APPS_DIR = REPO_ROOT / "apps"
 
 
 def _app_modules() -> list[tuple[str, pathlib.Path]]:
@@ -493,4 +494,57 @@ def test_every_list_endpoint_paginates() -> None:
 
     assert not offenders, (
         "These GET handlers fetch a collection without paginating it: " + ", ".join(offenders)
+    )
+
+
+def test_the_search_integration_tests_actually_run_in_ci() -> None:
+    """
+    The real-cluster search tests skip themselves when OPENSEARCH_TEST_URL is
+    unset, so `pytest` works on a laptop with no container. That convenience is
+    also the failure mode: drop the variable from CI and fourteen tests stop
+    running while the suite still reports green.
+
+    So the variable is asserted here rather than trusted. If the search tests
+    are ever meant to stop running in CI, delete them — do not quietly unset
+    the thing that makes them run.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+    assert "OPENSEARCH_TEST_URL:" in workflow, (
+        "CI does not set OPENSEARCH_TEST_URL, so every test using the "
+        "`opensearch` fixture will skip instead of running."
+    )
+    assert "opensearchproject/opensearch" in workflow, (
+        "CI sets OPENSEARCH_TEST_URL but starts no OpenSearch service container for it to point at."
+    )
+
+
+def test_the_search_service_owns_the_opensearch_sdk() -> None:
+    """
+    Only apps/search may import opensearchpy, and only through its client seam.
+
+    Same rule the OpenAI client had, for the same reason: an SDK imported in
+    twenty places cannot be swapped, and apps/search is supposed to be the app
+    whose backend can change without anyone noticing. A stray `import
+    opensearchpy` in a view would quietly make that false.
+    """
+    allowed = APPS_DIR / "search" / "client.py"
+    offenders = []
+    for _app, path in _app_modules():
+        if path == allowed:
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            if any(n.split(".")[0] == "opensearchpy" for n in names):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+
+    assert not offenders, (
+        "The OpenSearch SDK must only be imported by apps/search/client.py, "
+        "which converts its errors into SearchUnavailableError. Found in: "
+        + ", ".join(sorted(set(offenders)))
     )

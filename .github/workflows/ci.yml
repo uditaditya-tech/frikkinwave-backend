@@ -49,7 +49,11 @@ jobs:
     env:
       DJANGO_SECRET_KEY: ci-secret-key-not-used-in-production
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/frikkinwave_test
-      OPENSEARCH_URL: http://localhost:9200
+      # NOT OPENSEARCH_URL: settings blank that under pytest so the suite never
+      # depends on a live cluster. The search integration tests read this
+      # variable and skip without it; tests/test_infrastructure.py asserts it is
+      # set here, so they cannot silently stop running in CI.
+      OPENSEARCH_TEST_URL: http://localhost:9200
       DJANGO_SETTINGS_MODULE: config.settings.local
 
     steps:

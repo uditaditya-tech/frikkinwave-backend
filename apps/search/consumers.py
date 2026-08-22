@@ -8,9 +8,6 @@ search listens to**, and no producer, and no shared file, knows about it.
 Adding a second consumer of `profile.updated` is now a matter of another service
 declaring its own subscription under its own group id — no change to the producer
 and nothing to coordinate.
-
-The handlers are the same `services` calls the Celery tasks used to make. None of
-the business logic moved; only the thing that invokes it.
 """
 
 from __future__ import annotations
@@ -22,11 +19,24 @@ from apps.search import services
 
 
 def index_profile(**payload: Any) -> None:
-    """Embed and store a profile's text (see services.index_profile)."""
+    """
+    Index a profile from the facts the producer published.
+
+    Every key is read strictly rather than with a default. A payload missing one
+    is a *bug* — a producer that changed shape, or an event written before this
+    handler did — and the useful outcome there is a raised KeyError, which the
+    consumer turns into a bounded retry and then a dead letter. Defaulting the
+    missing fields instead would index a blank document, quietly making that
+    profile unfindable while reporting success.
+    """
     services.index_profile(
         profile_id=payload["profile_id"],
-        embedding_text=payload["embedding_text"],
-        is_available=payload.get("is_available", True),
+        bio=payload["bio"],
+        instruments=payload["instruments"],
+        genres=payload["genres"],
+        city=payload["city"],
+        country=payload["country"],
+        is_available=payload["is_available"],
     )
 
 
