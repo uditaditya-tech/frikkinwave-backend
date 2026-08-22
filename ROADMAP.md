@@ -67,8 +67,9 @@ Shipped: deployed & verified live at https://api.frikkinwave.com (web + Celery w
 ---
 
 ## Phase 2R — Search without the AI
-**Status: ✅ Complete (2026-08-23)** — code and infrastructure done; **not yet deployed**,
-the stack has been torn down since 2026-08-21.
+**Status: ✅ Complete and DEPLOYED (2026-08-23)** — live at
+https://api.frikkinwave.com (image `83968cd`), verified end to end on the real
+cluster.
 
 Phase 2 was replaced rather than extended. The embeddings were doing retrieval,
 and BM25 does retrieval without a model, a key, a per-request cost or a vector
@@ -86,9 +87,26 @@ the same dependency, not because they were failing.
 | 2R.7 Rebuild wired in as a post-upgrade Helm hook — the index takes no snapshot, so a fresh stack would otherwise serve an empty search behind green probes | ✅ |
 | 2R.8 Docs sync | ✅ |
 
+| 2R.9 Deployed and verified live — plus two fixes only a real apply could surface | ✅ |
+
+**What the first apply cost, since `terraform validate` could not see either:**
+- **A VPC OpenSearch domain needs an account-level service-linked role.** Terraform
+  does not create it; the apply died on a 400 twenty minutes in. `eks-up.sh` now
+  creates it. AWS provisions the role as a side effect of the call that rejects
+  you, so a blind re-run "works" — which is the worst thing to depend on.
+- **One timeout cannot serve both a request-path read and a consumer write.** A
+  cold TLS connection to the VPC endpoint exceeded the 3s budget twice and
+  indexed on attempt 3 of 3, one timeout short of a dead letter and a silently
+  stale profile. Writes now use `OPENSEARCH_WRITE_TIMEOUT` (20s). Unreachable
+  locally, where every connection is warm and on localhost.
+
+**Verified on the live system:** 42 index documents matching 42 profiles (41
+available / 1 not), BM25 ranking over HTTPS, the availability filter proven
+excluding on a query the unavailable profile matches, a full round trip through
+outbox → relay → Kafka → consumer → index in ~4s, and a rebuild over an already
+populated index pruning 0.
+
 **Known gaps, honestly:**
-- **Nothing has been deployed.** The domain has never been created; `terraform validate`
-  passes but the first apply is the real test.
 - **No relevance harness.** The Phase 2.8 evals measured recall@k and MRR over
   embedding retrieval and were deleted with them. The field boosts in
   `apps/search/mapping.py` are reasoned, **not measured** — there is no query log
@@ -300,7 +318,7 @@ That is the outbox earning its place.
 |---|---|---|
 | Backend API | AWS EKS (Kubernetes) | ✅ Live (ap-south-1, HTTPS) — web ×2, relay, + 4 Kafka consumer groups |
 | Database | AWS RDS (Postgres 16) | ✅ Live (ap-south-1, reachable only from the cluster SG) |
-| Search | AWS OpenSearch 3.7 | ⬜ Declared in Terraform, never applied — VPC-only, FGAC, index rebuilt on deploy |
+| Search | AWS OpenSearch 3.7 | ✅ Live (ap-south-1, VPC-only + FGAC, reachable only from the cluster SG; index rebuilt on every deploy) |
 | Event backbone | Strimzi Kafka on EKS | ✅ Live (3 brokers, KRaft, RF 3 / ISR 2, TLS + mTLS + ACLs) — see `KAFKA.md` |
 | Container registry | AWS ECR | ✅ Live (ap-south-1) |
 | DNS | api.frikkinwave.com → ALB | ✅ Live (Route 53 subdomain + ACM HTTPS) |
