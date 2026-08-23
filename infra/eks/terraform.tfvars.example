@@ -5,11 +5,33 @@
 # Required. The Django SECRET_KEY the pods run with.
 django_secret_key = "replace-me"
 
-# Optional. Empty disables the AI features (search returns [], compatibility
-# 503s, coach returns a null tip) rather than erroring.
-openai_api_key = ""
+# ---------------------------------------------------------------------------
+# Everything below is optional — the defaults in variables.tf are the ones
+# this project actually runs with. Uncomment only to deviate.
+# ---------------------------------------------------------------------------
 
-# Optional. Restore the database from a specific snapshot on create. The default
-# in variables.tf is the final snapshot from the ECS teardown, which carries the
-# demo dataset. Set to "" for a fresh, empty database.
-# db_snapshot_identifier = "frikkinwave-prod-final-528299d1"
+# Restore the database from a SPECIFIC snapshot instead of the newest one.
+#
+# Normally leave this alone: rds.tf discovers the most recent snapshot for the
+# instance, which is whatever the last teardown preserved. Pin it only to go
+# back to a deliberately older point in time.
+#
+# It is ignored once the instance exists (lifecycle.ignore_changes), because
+# changing it on a live database would destroy and recreate it rather than
+# re-restore it.
+#
+# db_snapshot_identifier = "frikkinwave-prod-final-xxxxxxxx"
+
+# Start from an EMPTY database instead of restoring. Also what a brand-new AWS
+# account needs on its first apply, where no snapshot exists yet and the lookup
+# would otherwise fail.
+#
+# db_restore_from_latest_snapshot = false
+
+# Search domain sizing. t3.small.search is the cheapest instance that supports
+# encryption at rest, which fine-grained access control requires. The index
+# holds a few hundred small documents and is rebuilt from Postgres on every
+# deploy, so there is nothing here to outgrow quickly.
+#
+# opensearch_instance_type = "t3.small.search"
+# opensearch_volume_size   = 10

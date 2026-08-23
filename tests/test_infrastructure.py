@@ -871,3 +871,26 @@ class TestSearchIndexRebuild:
             assert dead not in rendered, (
                 f"The chart still carries {dead}, which no code reads any more."
             )
+
+
+def test_the_tfvars_example_only_names_variables_that_exist() -> None:
+    """
+    Every variable the example file sets must be declared in variables.tf.
+
+    This is the file people copy to create their own tfvars, so a stale entry
+    does not just sit there being wrong — it propagates. `openai_api_key`
+    outlived its variable by several commits here, and the result was a
+    `terraform validate` warning on every single run for anyone who had copied
+    it, complaining about a value the configuration no longer accepts.
+
+    Checks commented-out lines too. A commented example is still instruction.
+    """
+    example = (EKS_DIR / "terraform.tfvars.example").read_text()
+    declared = set(re.findall(r'variable\s+"([^"]+)"', (EKS_DIR / "variables.tf").read_text()))
+    named = set(re.findall(r"^#?\s*([a-z_]+)\s*=", example, re.MULTILINE))
+
+    unknown = sorted(named - declared)
+    assert not unknown, (
+        "terraform.tfvars.example sets variables that variables.tf does not "
+        f"declare: {unknown}. Anyone copying it gets a validate warning."
+    )
