@@ -1,0 +1,25 @@
+# Dependabot — GitHub Actions only.
+#
+# This exists mainly because of `astral-sh/setup-uv`. Every other action in
+# ci.yml floats on a major tag and picks up patches on its own; setup-uv stopped
+# publishing major/minor tags at v8 as a supply-chain measure, so it is pinned to
+# an exact version and will silently rot until someone edits it by hand.
+# Dependabot is what keeps that pin current.
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    # "/" is correct even though the workflows live in .github/workflows —
+    # for this ecosystem the directory is the repo root, not the workflow dir.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # One PR for all actions rather than one each: this repo has three, and
+    # three separate PRs each burning a full CI run is noise, not signal.
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    open-pull-requests-limit: 5
