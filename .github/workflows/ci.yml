@@ -56,15 +56,19 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings.local
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        # Pinned to an EXACT version on purpose — do not "tidy" this to @v10.
+        # setup-uv stopped publishing floating major/minor tags at v8 as a
+        # supply-chain measure, so @v8 and up simply do not resolve; the last
+        # floating tag is @v7. Bumping means editing the full version here.
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           # Without this the cache key is computed from a glob that matches
           # nothing, so it never invalidates and never actually caches — the
