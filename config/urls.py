@@ -2,8 +2,8 @@ from django.conf import settings
 from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.schema.views import GatedSchemaView, GatedSwaggerView
 from apps.users.views import ThrottledTokenObtainPairView, ThrottledTokenRefreshView
 
 
@@ -37,7 +37,9 @@ urlpatterns = [
     path("api/social/", include("apps.social.urls")),
     # Reviews — ratings + reviews (gated on completed engagements)
     path("api/reviews/", include("apps.reviews.urls")),
-    # OpenAPI schema + docs (local / staging only — gated in production via SPECTACULAR_SETTINGS)
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    # OpenAPI schema + docs. Public only where SCHEMA_IS_PUBLIC is set (local,
+    # CI); staff-only in production. The gate is in apps/schema/views.py, not in
+    # SPECTACULAR_SETTINGS — see that module for why.
+    path("api/schema/", GatedSchemaView.as_view(), name="schema"),
+    path("api/docs/", GatedSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 ]

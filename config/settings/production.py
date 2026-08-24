@@ -52,6 +52,14 @@ SECURE_HSTS_PRELOAD = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
+# The OpenAPI schema and Swagger UI are staff-only here. Overridable, because
+# there are legitimate reasons to publish a public API document — but the
+# default has to be closed, and it was not: drf-spectacular serves both with
+# AllowAny out of the box, and SERVE_INCLUDE_SCHEMA (which was set) only
+# controls whether the schema endpoint appears *inside* the schema. The two look
+# related and are not.
+SCHEMA_IS_PUBLIC = env.bool("DJANGO_SCHEMA_IS_PUBLIC", default=False)
+
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
 

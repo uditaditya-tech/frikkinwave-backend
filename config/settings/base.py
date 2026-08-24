@@ -34,6 +34,15 @@ ALLOWED_HOSTS: list[str] = []
 # path, so it follows this wherever it points.
 ADMIN_PATH = env("DJANGO_ADMIN_PATH", default="admin/")
 
+# Whether /api/schema/ and /api/docs/ answer anonymous callers.
+#
+# True here because local dev and CI want them open — the setup instructions in
+# CLAUDE.md tell you to open /api/docs/ to check the server is alive.
+# production.py sets it False, which makes both staff-only: the schema lists
+# every path, parameter and response shape in the project, which is a map of the
+# attack surface rather than something to hand out.
+SCHEMA_IS_PUBLIC = env.bool("DJANGO_SCHEMA_IS_PUBLIC", default=True)
+
 # ---------------------------------------------------------------------------
 # Application definition
 # ---------------------------------------------------------------------------
