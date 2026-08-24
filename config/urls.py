@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
@@ -13,8 +14,9 @@ def health_check(request):  # type: ignore[no-untyped-def]
 urlpatterns = [
     # Internal health check — exempt from SECURE_SSL_REDIRECT in production
     path("api/health/", health_check, name="health-check"),
-    # Admin
-    path("admin/", admin.site.urls),
+    # Admin — path is configurable via DJANGO_ADMIN_PATH; login is rate limited
+    # by apps.users.middleware.AdminLoginThrottleMiddleware.
+    path(settings.ADMIN_PATH, admin.site.urls),
     # Auth — specific paths before the simplejwt catch-alls
     path("api/auth/", include("apps.users.urls")),
     path("api/auth/token/", ThrottledTokenObtainPairView.as_view(), name="token-obtain-pair"),

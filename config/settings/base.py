@@ -24,6 +24,16 @@ SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = False
 ALLOWED_HOSTS: list[str] = []
 
+# Where the Django admin is mounted. Trailing slash required — it is passed
+# straight to `path()`.
+#
+# Defence in depth, NOT the control: moving the admin off the default path only
+# costs a scanner one guess, and AdminLoginThrottleMiddleware is what actually
+# bounds guessing. It defaults to "admin/" so nothing changes unless the
+# variable is set. The throttle reverses `admin:login` rather than hardcoding a
+# path, so it follows this wherever it points.
+ADMIN_PATH = env("DJANGO_ADMIN_PATH", default="admin/")
+
 # ---------------------------------------------------------------------------
 # Application definition
 # ---------------------------------------------------------------------------
@@ -66,6 +76,10 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    # Above SessionMiddleware on purpose: a throttled admin login POST is
+    # refused before the session and user lookups it would otherwise cost,
+    # so a brute-force attempt cannot drive database load by being rejected.
+    "apps.users.middleware.AdminLoginThrottleMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -187,6 +201,11 @@ REST_FRAMEWORK = {
         # A session refreshes every 15 minutes (ACCESS_TOKEN_LIFETIME), so a
         # user with several devices and tabs is still far inside this.
         "auth_refresh": "60/hour",
+        # Tighter than user login: there are a handful of staff accounts, never
+        # a burst of legitimate admin sign-ins, and the prize is larger.
+        # Applied by AdminLoginThrottleMiddleware, not by a DRF view — /admin/
+        # is a session-auth Django view that DRF's throttles never see.
+        "admin_login": "5/min",
     },
 }
 
