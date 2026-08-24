@@ -164,6 +164,55 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Rates for `ScopedRateThrottle`, applied per view via `throttle_scope`.
+    #
+    # There is deliberately NO `DEFAULT_THROTTLE_CLASSES`: every throttled
+    # request costs a cache read and write, and the cache is the database (see
+    # CACHES below). A global default would put those on the profile feed and
+    # search — the two highest-volume endpoints — to meter scraping, which is
+    # not the threat being addressed here. Only the credential endpoints are
+    # scoped, and they are low-volume by nature.
+    #
+    # All three scopes key on the client IP, because the caller is anonymous at
+    # exactly the moment that matters. NUM_PROXIES in production.py is what
+    # makes that IP the real one rather than the load balancer's.
+    "DEFAULT_THROTTLE_RATES": {
+        # Generous enough to survive a fat-fingered password and a retry;
+        # useless for credential stuffing, which needs thousands of attempts.
+        "auth_login": "10/min",
+        # Account creation is a rare act for a real person and a bulk one for
+        # an abuser. Per hour, not per minute, so a shared NAT does not lock a
+        # whole office out after three signups.
+        "auth_register": "10/hour",
+        # A session refreshes every 15 minutes (ACCESS_TOKEN_LIFETIME), so a
+        # user with several devices and tabs is still far inside this.
+        "auth_refresh": "60/hour",
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Cache
+#
+# Exists for ONE purpose: somewhere for throttle counters to live that every pod
+# can see. Redis went away with Celery (KAFKA.md stage 5) and is not coming back
+# for this, so the store is the database.
+#
+# The default — LocMemCache — would be actively misleading here. It is
+# per-process, and production runs 2 pods x 3 gunicorn workers, so a "10/min"
+# login limit would really be six independent counters permitting up to 60/min,
+# and which one a request hit would depend on the load balancer. A throttle that
+# looks configured and is not is worse than no throttle, because nobody
+# re-checks it.
+#
+# The table is created by a migration (`users/0002_throttle_cache_table`) rather
+# than by `createcachetable`, so it exists in test databases and on a fresh
+# deploy without a separate step anyone has to remember.
+# ---------------------------------------------------------------------------
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "throttle_cache",
+    }
 }
 
 # ---------------------------------------------------------------------------

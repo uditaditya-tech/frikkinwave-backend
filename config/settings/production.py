@@ -31,6 +31,19 @@ if _pod_ip:
 # Trust that header so request.is_secure() is True for real HTTPS traffic —
 # without this, SECURE_SSL_REDIRECT would loop forever behind the load balancer.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# How many proxies sit between the client and Django. Load-bearing for
+# throttling, which keys on the caller's IP.
+#
+# DRF reads X-Forwarded-For to find that IP. Left unset, it trusts the FIRST
+# entry in the header — which the client writes, so anyone could send a fresh
+# X-Forwarded-For per request and never be throttled at all. Set to 1, it takes
+# the LAST entry instead: the address the ALB itself observed and appended,
+# which a client cannot forge.
+#
+# The value is the number of proxies, so it must change if another one (a CDN,
+# a WAF) is ever put in front of the load balancer.
+NUM_PROXIES = 1
 SECURE_SSL_REDIRECT = True
 SECURE_REDIRECT_EXEMPT = [r"^api/health/$"]  # ALB + kubelet health checks
 SECURE_HSTS_SECONDS = 31536000

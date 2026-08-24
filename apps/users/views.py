@@ -13,10 +13,12 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.schema.serializers import DetailSerializer
 from apps.users.serializers import RegisterSerializer, TokenPairSerializer, UserReadSerializer
@@ -58,9 +60,16 @@ class RegisterView(APIView):
 
     authentication_classes = [JWTAuthentication]
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_register"
 
     @extend_schema(
-        request=RegisterSerializer, responses={201: TokenPairSerializer, 400: DetailSerializer}
+        request=RegisterSerializer,
+        responses={
+            201: TokenPairSerializer,
+            400: DetailSerializer,
+            429: DetailSerializer,
+        },
     )
     def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = RegisterSerializer(data=request.data)
@@ -110,3 +119,42 @@ class LogoutView(APIView):
             )
         logger.info("user_logged_out", extra={"user_id": str(request.user.pk)})
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Throttled token views
+#
+# simplejwt ships these views ready to route, and `config/urls.py` used to point
+# straight at them — which left the single most attackable endpoint on the
+# service, the one that turns guesses into credentials, with no rate limit.
+#
+# Subclassing is the only way to attach a throttle: `throttle_classes` is a
+# class attribute, so it cannot be set from the URLconf. The subclasses add
+# nothing else; all token behaviour stays simplejwt's.
+# ---------------------------------------------------------------------------
+
+
+class ThrottledTokenObtainPairView(TokenObtainPairView):
+    """
+    POST /api/auth/token/ — obtain a JWT pair, rate limited per client IP.
+
+    The `auth_login` scope is the credential-stuffing defence. It counts every
+    attempt, successful or not: counting only failures would let an attacker
+    with one valid account probe indefinitely.
+    """
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
+
+
+class ThrottledTokenRefreshView(TokenRefreshView):
+    """
+    POST /api/auth/token/refresh/ — exchange a refresh token, rate limited.
+
+    A looser scope than login: refresh is a normal thing a client does on a
+    timer, and this exists to bound a token-guessing loop rather than to shape
+    ordinary traffic.
+    """
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_refresh"
