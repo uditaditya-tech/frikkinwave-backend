@@ -301,8 +301,8 @@ frikkinwave-backend/
 ├── .env.example                   # Committed template for all env vars.
 ├── .gitignore
 ├── .pre-commit-config.yaml        # Hooks: whitespace, yaml, detect-private-key, ruff
-├── docker-compose.yml             # Postgres 16 (pgvector) for local dev. No Redis: Celery
-│                                  # was its only consumer and both are gone
+├── docker-compose.yml             # Stock Postgres 16 + OpenSearch for local dev. No Redis:
+│                                  # Celery was its only consumer and both are gone
 ├── Dockerfile                     # Multi-stage prod image (uv venv → slim runtime, gunicorn, non-root)
 ├── .dockerignore                  # Keeps build context lean; excludes .env, tests, .venv, docs
 ├── manage.py                      # Defaults to config.settings.local
@@ -474,7 +474,7 @@ No cross-app model imports — use `TYPE_CHECKING` guard for type hints only.
 ## Running locally
 
 ```bash
-docker compose up -d                     # Postgres 16 (pgvector)
+docker compose up -d                     # Postgres 16 + OpenSearch
 source .venv/bin/activate
 python manage.py migrate
 python manage.py seed_music_data         # 44 instruments + 31 genres
