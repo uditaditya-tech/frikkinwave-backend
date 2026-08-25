@@ -320,6 +320,18 @@ EVENT_RELAY_HEARTBEAT_FILE = env("EVENT_RELAY_HEARTBEAT_FILE", default="/tmp/rel
 #: nudge. A full batch skips the sleep entirely so a backlog drains at speed.
 EVENT_RELAY_INTERVAL = env.float("EVENT_RELAY_INTERVAL", default=1.0)
 
+#: How long a PUBLISHED outbox row is kept before `purge_outbox` deletes it.
+#:
+#: The outbox is a queue, not a ledger: once the relay has produced an event,
+#: Kafka is the durable record and the row has done its whole job. Kept forever
+#: the table grows without bound, and its payload carries recipient email
+#: addresses — so this is a data-retention setting as much as a storage one.
+#:
+#: Seven days is long enough to still have the row while investigating something
+#: that happened last week, and short enough that "forever" is not the answer.
+#: UNPUBLISHED rows are never purged at any age — see `purge_published`.
+EVENT_OUTBOX_RETENTION_DAYS = env.int("EVENT_OUTBOX_RETENTION_DAYS", default=7)
+
 #: Port the relay serves Prometheus metrics on, in `--loop` mode only.
 #:
 #: The relay is the highest-consequence pod here — one replica, and if it is

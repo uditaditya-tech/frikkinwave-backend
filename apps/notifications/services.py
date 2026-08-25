@@ -52,4 +52,9 @@ def deliver(*, kind: str, recipient_email: str, **context: Any) -> None:
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[recipient_email],
     )
-    logger.info("notification_sent", extra={"kind": kind, "to": recipient_email})
+    # Deliberately NOT the recipient address. This is the one app that never
+    # sees a user id — it receives primitives, which is what makes it
+    # extractable — so there is no non-identifying handle to log instead, and
+    # the kind alone is what the delivery question actually needs. Matches
+    # `notification_skipped_no_recipient` above, which already logs only kind.
+    logger.info("notification_sent", extra={"kind": kind})

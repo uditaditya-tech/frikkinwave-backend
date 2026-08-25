@@ -197,6 +197,39 @@ def outbox_lag_snapshot() -> OutboxLag:
     return OutboxLag(pending=pending.count(), exhausted=exhausted, oldest_age_seconds=age)
 
 
+def purge_published(*, older_than: timedelta) -> int:
+    """
+    Delete events that were published longer than `older_than` ago.
+
+    The outbox is a queue, not a ledger. Once the relay has produced an event to
+    Kafka the row has done its whole job, and Kafka is the durable record from
+    that point on. Kept forever instead, the table grows without bound — and its
+    `payload` holds recipient email addresses by design, since extracted
+    services need self-contained payloads, so "forever" is a retention decision
+    nobody made rather than one anybody chose.
+
+    **Only rows with a `published_at` are eligible, and that is the safety
+    property this function exists to hold.** An unpublished row is either still
+    waiting or has exhausted MAX_ATTEMPTS, and in both cases it is the only
+    surviving copy of that event: nothing has reached Kafka, so deleting it
+    destroys the event outright, and for an exhausted one it also destroys the
+    `last_error` explaining why. Age alone must never be enough to delete a row.
+
+    Returns how many were removed.
+    """
+    cutoff = timezone.now() - older_than
+    deleted, _ = OutboxEvent.objects.filter(
+        published_at__isnull=False,
+        published_at__lt=cutoff,
+    ).delete()
+
+    logger.info(
+        "outbox_purged",
+        extra={"deleted": deleted, "older_than_seconds": older_than.total_seconds()},
+    )
+    return deleted
+
+
 def _dispatch(*, topic: str, payload: dict[str, Any]) -> None:
     """
     Produce the event to its Kafka topic.

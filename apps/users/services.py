@@ -22,7 +22,10 @@ def register_user(*, email: str, username: str, password: str) -> User:
     before calling this function.
     """
     user = User.objects.create_user(email=email, username=username, password=password)
-    logger.info("user_registered", extra={"user_id": str(user.id), "email": user.email})
+    # No email address here on purpose. `user_id` identifies the record for
+    # support and debugging, and application logs ship to CloudWatch, where
+    # retention is longer and the audience wider than the database's.
+    logger.info("user_registered", extra={"user_id": str(user.id)})
     return user
 
 

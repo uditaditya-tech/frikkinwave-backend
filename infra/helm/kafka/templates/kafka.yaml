@@ -116,6 +116,9 @@ spec:
       offsets.topic.replication.factor: {{ .Values.durability.replicationFactor }}
       transaction.state.log.replication.factor: {{ .Values.durability.replicationFactor }}
       transaction.state.log.min.isr: {{ .Values.durability.minInsyncReplicas }}
+      # Explicit rather than relying on Kafka's own default — event payloads
+      # carry email addresses, so retention is a data decision. See values.yaml.
+      log.retention.hours: {{ .Values.retention.hours }}
 {{- if .Values.metrics.enabled }}
   # Consumer lag. Strimzi runs this as its own Deployment and it is the ONLY
   # source of kafka_consumergroup_lag here.

@@ -1,0 +1,72 @@
+{{- if .Values.purgeOutbox.enabled }}
+# ---------------------------------------------------------------------------
+# Outbox retention.
+#
+# The outbox is a queue, not a ledger. Once the relay has produced an event,
+# Kafka is the durable record and the row has done its whole job — but nothing
+# deleted them, so the table grew without bound and held recipient email
+# addresses in `payload` for as long as it lived. This is the policy that says
+# how long "as long as it lived" is.
+#
+# A CronJob rather than work folded into the relay: retention is not part of
+# delivery, it is trivially runnable on demand, and a failure here should be
+# visible on its own rather than as a blip in the relay's logs.
+#
+# It only ever deletes rows with a `published_at`. Pending and exhausted events
+# have none, and the table is the only place they exist — see the command's
+# docstring. That means this is also safe to run beside the relay, which reads
+# exactly the rows this leaves alone.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "frikkinwave.fullname" . }}-purge-outbox
+  labels:
+    {{- include "frikkinwave.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.purgeOutbox.schedule | quote }}
+  # UTC everywhere else in this stack; saying so stops the schedule meaning
+  # something different if the node timezone ever changes.
+  timeZone: "Etc/UTC"
+  # Forbid, not Allow: a run that is somehow still going should not be joined by
+  # the next one issuing overlapping deletes against the same rows.
+  concurrencyPolicy: Forbid
+  # A missed run is not an incident — the next one deletes the same rows plus a
+  # day's worth. No catch-up, and keep only a little history.
+  successfulJobsHistoryLimit: {{ .Values.purgeOutbox.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.purgeOutbox.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ .Values.purgeOutbox.startingDeadlineSeconds }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.purgeOutbox.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.purgeOutbox.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.purgeOutbox.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            {{- include "frikkinwave.labels" . | nindent 12 }}
+            app.kubernetes.io/component: purge-outbox
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: purge-outbox
+              image: {{ include "frikkinwave.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - python
+                - manage.py
+                - purge_outbox
+                - --older-than-days
+                - {{ .Values.purgeOutbox.retentionDays | quote }}
+              envFrom:
+                {{- include "frikkinwave.envFrom" . | nindent 16 }}
+              env:
+                {{- include "frikkinwave.podIpEnv" . | nindent 16 }}
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+{{- end }}

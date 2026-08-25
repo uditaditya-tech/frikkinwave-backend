@@ -169,6 +169,32 @@ migrations:
 # live, because it indexes using the new image's payload shape and the migrated
 # schema; running it first would rebuild the index in the old shape.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Outbox retention (see templates/cronjob-purge-outbox.yaml).
+#
+# Published rows only — pending and exhausted events are never deleted at any
+# age, because the table is the only place they exist.
+# ---------------------------------------------------------------------------
+purgeOutbox:
+  enabled: true
+  # 03:20 UTC — off the hour, so it does not land with every other cron on the
+  # cluster, and well away from a working-hours deploy.
+  schedule: "20 3 * * *"
+  # Must stay consistent with EVENT_OUTBOX_RETENTION_DAYS; passed explicitly on
+  # the command line so the chart states the policy rather than inheriting a
+  # default from the image.
+  retentionDays: 7
+  # One retry. Unlike the reindex, a transient database blip is a plausible
+  # cause here and a second attempt costs nothing.
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # A missed window is not worth catching up on — the next run deletes the same
+  # rows plus another day's.
+  startingDeadlineSeconds: 300
+
 reindex:
   enabled: true
   # Delete documents whose profile is gone. Safe here: the command only prunes

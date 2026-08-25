@@ -152,6 +152,21 @@ durability:
   replicationFactor: 3
   minInsyncReplicas: 2
 
+# ---------------------------------------------------------------------------
+# Retention.
+#
+# Declared rather than inherited. Kafka's default is already 7 days, so this
+# changes nothing today — the point is that it was a default nobody wrote down,
+# and event payloads carry recipient email addresses. How long personal data
+# lives should be a decision in a file, not a property of whichever Kafka
+# version happens to be running.
+#
+# Matches EVENT_OUTBOX_RETENTION_DAYS, so a payload has the same lifetime on
+# both sides of the relay.
+# ---------------------------------------------------------------------------
+retention:
+  hours: 168
+
 topology:
   # HARD across nodes: two brokers on one node means one node failure takes out
   # two of three replicas, and min.insync.replicas 2 can no longer be met —

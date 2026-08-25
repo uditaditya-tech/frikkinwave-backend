@@ -894,3 +894,44 @@ def test_the_tfvars_example_only_names_variables_that_exist() -> None:
         "terraform.tfvars.example sets variables that variables.tf does not "
         f"declare: {unknown}. Anyone copying it gets a validate warning."
     )
+
+
+class TestOutboxRetention:
+    """
+    The retention window is stated in three places and must mean one thing.
+
+    Django holds the default, the app chart passes it to the CronJob explicitly,
+    and the Kafka chart sets the broker's. A payload lives on both sides of the
+    relay, so a mismatch means personal data outliving the policy on whichever
+    side was forgotten — silently, because nothing at runtime compares them.
+    """
+
+    def test_the_cronjob_purges_on_the_same_window_django_defaults_to(self) -> None:
+        from django.conf import settings
+
+        chart_days = _app_values()["purgeOutbox"]["retentionDays"]
+        assert chart_days == settings.EVENT_OUTBOX_RETENTION_DAYS, (
+            "purgeOutbox.retentionDays and EVENT_OUTBOX_RETENTION_DAYS disagree, so the "
+            "deployed policy is not the one the code documents."
+        )
+
+    def test_kafka_keeps_payloads_for_the_same_period(self) -> None:
+        from django.conf import settings
+
+        hours = _values()["retention"]["hours"]
+        assert hours == settings.EVENT_OUTBOX_RETENTION_DAYS * 24, (
+            "Kafka retention and the outbox window disagree — the same payload would "
+            "have two different lifetimes depending on which side of the relay it is on."
+        )
+
+    def test_the_broker_actually_declares_retention(self) -> None:
+        """
+        Kafka's own default is already 7 days, so omitting this changes nothing
+        today — and that is exactly why it would go unnoticed if it were dropped.
+        A retention policy inherited from a version default is not a policy.
+        """
+        assert "log.retention.hours" in KAFKA_TEMPLATE.read_text()
+
+    def test_the_purge_cronjob_is_enabled(self) -> None:
+        """Shipping it disabled would leave the table growing exactly as before."""
+        assert _app_values()["purgeOutbox"]["enabled"] is True
