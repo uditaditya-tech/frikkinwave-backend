@@ -34,7 +34,7 @@ rating rollup, the guardrail tests in `tests/test_architecture.py`) is all in pl
 2. **Ask for a commit message** before every commit. Draft a suggestion; let the user edit or approve it.
 3. **Never add `Co-Authored-By: Claude`** to any commit message.
 4. **Tests with the feature** — not later. Happy path + at least one negative path per new endpoint/service.
-5. **Commit + push + watch CI** after each green sub-step.
+5. **Commit + push after each green sub-step. Watch CI only when the change can fail it.** Watch it for code, settings, dependencies, migrations, Helm or workflow changes. Don't for docs-only commits: CI runs ruff, mypy and pytest, none of which read `.md`, and the hooks that do — trailing whitespace, end-of-file — already ran in pre-commit. The push still triggers a run either way; blocking on it just adds two minutes for a result that could not have been anything but green.
 6. **Be honest about gaps** at every milestone. Don't paper over uncertainty.
 7. **One concept per teaching response** — conceptual altitude, not line-by-line dissection.
 8. **Course-correct without ceremony** — if the prior approach was wrong, say so and fix it.
