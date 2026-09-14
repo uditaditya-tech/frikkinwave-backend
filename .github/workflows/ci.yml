@@ -68,7 +68,7 @@ jobs:
         # setup-uv stopped publishing floating major/minor tags at v8 as a
         # supply-chain measure, so @v8 and up simply do not resolve; the last
         # floating tag is @v7. Bumping means editing the full version here.
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           # Without this the cache key is computed from a glob that matches
           # nothing, so it never invalidates and never actually caches — the
