@@ -36,7 +36,7 @@ packaging==26.2
 # exposes a /metrics endpoint that Prometheus scrapes via a PodMonitor.
 prometheus-client==0.26.0
 psycopg2-binary==2.9.12
-pyjwt==2.13.0
+pyjwt==2.15.0
 python-dateutil==2.9.0.post0
 python-json-logger==4.1.0
 pyyaml==6.0.3
