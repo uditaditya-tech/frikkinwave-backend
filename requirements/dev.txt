@@ -38,4 +38,4 @@ types-pyyaml==6.0.12.20260518
 # django-stubs both need it, and neither ships in the runtime image, so it
 # belongs here rather than in base.txt.
 typing-extensions==4.15.0
-virtualenv==21.4.1
+virtualenv==21.14.13
